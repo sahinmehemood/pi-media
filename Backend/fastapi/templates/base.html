@@ -262,6 +262,193 @@ html.style-neo_brutal .field:focus {
     box-shadow: 3px 3px 0 var(--primary);
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Omarchy — flat surfaces, one accent, monospace everywhere, zero decoration.
+   Scoped to html.style-omarchy so the other themes keep their look.
+   ───────────────────────────────────────────────────────────────────────── */
+html.style-omarchy {
+    --om-bar: 26px;
+}
+
+html.style-omarchy body {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    padding-top: calc(var(--om-bar) + 4.75rem) !important;
+    background-image:
+        linear-gradient(color-mix(in srgb, var(--text) 2.4%, transparent) 1px, transparent 1px),
+        linear-gradient(90deg, color-mix(in srgb, var(--text) 2.4%, transparent) 1px, transparent 1px);
+    background-size: 64px 64px;
+}
+html.style-omarchy body::before { display: none !important; }
+
+/*----- No rounded corners, no shadows, no glows anywhere */
+html.style-omarchy *,
+html.style-omarchy *::before,
+html.style-omarchy *::after {
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+}
+
+/*----- Kill gradient text and gradient fills (Tailwind utilities) */
+html.style-omarchy .bg-clip-text {
+    -webkit-text-fill-color: currentColor !important;
+    color: var(--primary) !important;
+    background-image: none !important;
+}
+html.style-omarchy [class*="bg-gradient"] { background-image: none !important; }
+
+/*----- Panels: one hairline, flat fill */
+html.style-omarchy .glass-panel,
+html.style-omarchy .surface-card,
+html.style-omarchy .settings-card {
+    background: var(--card) !important;
+    border: 1px solid var(--border) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+/*----- Nav becomes a full-width bar under the status strip */
+html.style-omarchy #navbar {
+    top: var(--om-bar);
+    left: 0;
+    transform: none;
+    width: 100%;
+    max-width: none;
+    padding: .45rem .9rem;
+    background: color-mix(in srgb, var(--bg) 94%, transparent) !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--border) !important;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+html.style-omarchy #nav-container {
+    background: transparent !important;
+    border: 1px solid var(--border) !important;
+    padding: 2px;
+    gap: 0;
+}
+html.style-omarchy .nav-link {
+    font-size: .68rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    padding: .38rem .62rem;
+}
+html.style-omarchy .nav-link:hover { background: var(--surface); color: var(--text); }
+html.style-omarchy .nav-link.pill-active { color: var(--bg) !important; }
+html.style-omarchy #active-pill { background: var(--primary); box-shadow: none !important; }
+
+/*----- Headings read like a shell prompt */
+html.style-omarchy h1 {
+    color: var(--primary);
+    font-weight: 700;
+    letter-spacing: -.01em;
+}
+html.style-omarchy h1::before {
+    content: "$ ";
+    color: var(--text-secondary);
+    opacity: .8;
+}
+html.style-omarchy h2, html.style-omarchy h3 { letter-spacing: 0; }
+
+/*----- Controls */
+html.style-omarchy .field,
+html.style-omarchy .s-input,
+html.style-omarchy input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+html.style-omarchy select,
+html.style-omarchy textarea {
+    background: #0B0A0A !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    font-family: inherit !important;
+    font-size: .8rem !important;
+}
+html.style-omarchy .field:focus,
+html.style-omarchy .s-input:focus,
+html.style-omarchy input:focus,
+html.style-omarchy select:focus,
+html.style-omarchy textarea:focus {
+    outline: 1px solid var(--primary) !important;
+    outline-offset: 0;
+    border-color: var(--primary) !important;
+}
+
+html.style-omarchy .btn-primary,
+html.style-omarchy .btn-ghost {
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    border: 1px solid var(--border) !important;
+    padding: .5rem .85rem;
+}
+html.style-omarchy .btn-primary {
+    background: var(--primary) !important;
+    color: #100F0F !important;
+    border-color: var(--primary) !important;
+}
+html.style-omarchy .btn-primary:hover { background: var(--accent) !important; border-color: var(--accent) !important; }
+html.style-omarchy .btn-ghost { background: transparent !important; color: var(--text) !important; }
+html.style-omarchy .btn-ghost:hover { background: var(--surface) !important; border-color: var(--primary) !important; }
+
+html.style-omarchy .badge {
+    background: transparent !important;
+    border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+    color: var(--primary);
+    font-size: .58rem;
+    letter-spacing: .1em;
+    padding: .14rem .45rem;
+}
+
+/*----- Tables: man-page density */
+html.style-omarchy table { font-size: .76rem; }
+html.style-omarchy thead th {
+    font-size: .6rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border) !important;
+}
+html.style-omarchy tbody tr { border-bottom: 1px solid color-mix(in srgb, var(--text) 7%, transparent); }
+html.style-omarchy tbody tr:hover { background: var(--surface); }
+
+/*----- Status strip (rendered only for this style) */
+.om-statusbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: var(--om-bar);
+    z-index: 55;
+    display: flex;
+    align-items: center;
+    gap: .9rem;
+    padding: 0 .9rem;
+    font-size: .63rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+}
+.om-sb-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    margin-right: .35rem;
+    background: #879A39;
+    box-shadow: 0 0 6px #879A39;
+    vertical-align: middle;
+}
+.om-sb-strong { color: var(--text); }
+.om-sb-accent { color: var(--primary); }
+.om-sb-spacer { flex: 1 1 auto; }
+@media (max-width: 640px) {
+    .om-statusbar { gap: .55rem; font-size: .56rem; }
+    .om-sb-hide { display: none; }
+}
+
 .tabular { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
 
 ::selection { background: color-mix(in srgb, var(--primary) 30%, transparent); color: var(--text); }
@@ -440,182 +627,6 @@ textarea:-webkit-autofill {
 }
 
 #mobile-menu { will-change: max-height, opacity; }
-
-/* ── Omarchy — flat surfaces, one accent, monospace everywhere, zero decoration ── */
-html.style-omarchy {
-    --om-bar: 26px;
-}
-
-html.style-omarchy body {
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13px;
-    line-height: 1.55;
-    padding-top: calc(var(--om-bar) + 4.75rem) !important;
-    background-image:
-        linear-gradient(color-mix(in srgb, var(--text) 2.4%, transparent) 1px, transparent 1px),
-        linear-gradient(90deg, color-mix(in srgb, var(--text) 2.4%, transparent) 1px, transparent 1px);
-    background-size: 64px 64px;
-}
-html.style-omarchy body::before { display: none !important; }
-
-html.style-omarchy *,
-html.style-omarchy *::before,
-html.style-omarchy *::after {
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    text-shadow: none !important;
-}
-
-html.style-omarchy .bg-clip-text {
-    -webkit-text-fill-color: currentColor !important;
-    color: var(--primary) !important;
-    background-image: none !important;
-}
-html.style-omarchy [class*="bg-gradient"] { background-image: none !important; }
-
-html.style-omarchy .glass-panel,
-html.style-omarchy .surface-card,
-html.style-omarchy .settings-card {
-    background: var(--card) !important;
-    border: 1px solid var(--border) !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-}
-
-html.style-omarchy #navbar {
-    top: var(--om-bar);
-    left: 0;
-    transform: none;
-    width: 100%;
-    max-width: none;
-    padding: .45rem .9rem;
-    background: color-mix(in srgb, var(--bg) 94%, transparent) !important;
-    border: 0 !important;
-    border-bottom: 1px solid var(--border) !important;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-}
-html.style-omarchy #nav-container {
-    background: transparent !important;
-    border: 1px solid var(--border) !important;
-    padding: 2px;
-    gap: 0;
-}
-html.style-omarchy .nav-link {
-    font-size: .68rem;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: .09em;
-    padding: .38rem .62rem;
-}
-html.style-omarchy .nav-link:hover { background: var(--surface); color: var(--text); }
-html.style-omarchy .nav-link.pill-active { color: var(--bg) !important; }
-html.style-omarchy #active-pill { background: var(--primary); box-shadow: none !important; }
-
-html.style-omarchy h1 {
-    color: var(--primary);
-    font-weight: 700;
-    letter-spacing: -.01em;
-}
-html.style-omarchy h1::before {
-    content: "$ ";
-    color: var(--text-secondary);
-    opacity: .8;
-}
-html.style-omarchy h2, html.style-omarchy h3 { letter-spacing: 0; }
-
-html.style-omarchy .field,
-html.style-omarchy .s-input,
-html.style-omarchy input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
-html.style-omarchy select,
-html.style-omarchy textarea {
-    background: #0B0A0A !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text) !important;
-    font-family: inherit !important;
-    font-size: .8rem !important;
-}
-html.style-omarchy .field:focus,
-html.style-omarchy .s-input:focus,
-html.style-omarchy input:focus,
-html.style-omarchy select:focus,
-html.style-omarchy textarea:focus {
-    outline: 1px solid var(--primary) !important;
-    outline-offset: 0;
-    border-color: var(--primary) !important;
-}
-
-html.style-omarchy .btn-primary,
-html.style-omarchy .btn-ghost {
-    font-size: .7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    border: 1px solid var(--border) !important;
-    padding: .5rem .85rem;
-}
-html.style-omarchy .btn-primary {
-    background: var(--primary) !important;
-    color: #100F0F !important;
-    border-color: var(--primary) !important;
-}
-html.style-omarchy .btn-primary:hover { background: var(--accent) !important; border-color: var(--accent) !important; }
-html.style-omarchy .btn-ghost { background: transparent !important; color: var(--text) !important; }
-html.style-omarchy .btn-ghost:hover { background: var(--surface) !important; border-color: var(--primary) !important; }
-
-html.style-omarchy .badge {
-    background: transparent !important;
-    border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
-    color: var(--primary);
-    font-size: .58rem;
-    letter-spacing: .1em;
-    padding: .14rem .45rem;
-}
-
-html.style-omarchy table { font-size: .76rem; }
-html.style-omarchy thead th {
-    font-size: .6rem;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border) !important;
-}
-html.style-omarchy tbody tr { border-bottom: 1px solid color-mix(in srgb, var(--text) 7%, transparent); }
-html.style-omarchy tbody tr:hover { background: var(--surface); }
-
-.om-statusbar {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    height: var(--om-bar);
-    z-index: 55;
-    display: flex;
-    align-items: center;
-    gap: .9rem;
-    padding: 0 .9rem;
-    font-size: .63rem;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-    background: var(--card);
-    border-bottom: 1px solid var(--border);
-    white-space: nowrap;
-    overflow: hidden;
-}
-.om-sb-dot {
-    display: inline-block;
-    width: 6px; height: 6px;
-    margin-right: .35rem;
-    background: #879A39;
-    box-shadow: 0 0 6px #879A39;
-    vertical-align: middle;
-}
-.om-sb-strong { color: var(--text); }
-.om-sb-accent { color: var(--primary); }
-.om-sb-spacer { flex: 1 1 auto; }
-@media (max-width: 640px) {
-    .om-statusbar { gap: .55rem; font-size: .56rem; }
-    .om-sb-hide { display: none; }
-}
 </style>
 
 <script>
@@ -819,6 +830,7 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
             <a href="/admin/requests" class="px-4 py-3 rounded-xl hover:bg-primary hover:text-background transition flex items-center gap-3 font-semibold"><i class="fa-solid fa-inbox"></i> Requests</a>
             <a href="/admin/tools" class="px-4 py-3 rounded-xl hover:bg-primary hover:text-background transition flex items-center gap-3 font-semibold"><i class="fa-solid fa-screwdriver-wrench"></i> Tools</a>
             <a href="/admin/settings" class="px-4 py-3 rounded-xl hover:bg-primary hover:text-background transition flex items-center gap-3 font-semibold"><i class="fa-solid fa-gear"></i> Settings</a>
+
         </div>
     </div>
 </nav>
