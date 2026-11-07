@@ -1787,10 +1787,18 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["session_secret"]
 
     #----- Type coercion and validation
-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
+    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
     for key in bool_keys:
         if key in payload:
             payload[key] = bool(payload[key])
+
+    int_keys = {"buffer_readahead_mb", "buffer_workers", "buffer_cache_mb", "buffer_stall_timeout", "subscription_group_id"}
+    for key in int_keys:
+        if key in payload:
+            try:
+                payload[key] = int(payload[key])
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail=f"'{key}' must be an integer.")
 
     list_str_keys = {"auth_channels", "multi_tokens", "extra_databases", "global_search_channels", "anime_channels", "manual_channels"}
     for key in list_str_keys:

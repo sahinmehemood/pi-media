@@ -563,6 +563,61 @@
         </div>
     </div>
 
+    <!-- ── Stream Buffer ──────────────────────────────────────────────────── -->
+    <div class="settings-card">
+        <h2><i class="fa-solid fa-memory"></i> Stream Buffer</h2>
+        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
+            Read-ahead depth, parallel worker count, and shared chunk cache for Telegram streaming.
+            Larger buffers absorb mobile-link jitter and cache seeks in RAM, but use more memory.
+            Changes apply to new streams immediately; no restart needed.
+        </p>
+
+        <label class="toggle-wrap">
+            <input type="checkbox" class="toggle-input" id="buffer_enabled"
+                {% if settings.buffer_enabled %}checked{% endif %}>
+            <div class="toggle-track"></div>
+            <span class="toggle-label">Buffer enabled</span>
+        </label>
+        <label class="toggle-wrap" style="margin-left:1.5rem">
+            <input type="checkbox" class="toggle-input" id="buffer_adaptive"
+                {% if settings.buffer_adaptive %}checked{% endif %}>
+            <div class="toggle-track"></div>
+            <span class="toggle-label">Adaptive depth (slower link = deeper buffer)</span>
+        </label>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-top:1rem">
+            <div>
+                <label class="s-label" for="buffer_profile">Profile</label>
+                <select id="buffer_profile" class="s-input">
+                    <option value="conservative" {% if settings.buffer_profile == 'conservative' %}selected{% endif %}>Conservative (6 MiB / 2 workers / 24 MiB cache)</option>
+                    <option value="balanced" {% if settings.buffer_profile == 'balanced' %}selected{% endif %}>Balanced (12 MiB / 3 workers / 48 MiB cache)</option>
+                    <option value="aggressive" {% if settings.buffer_profile == 'aggressive' %}selected{% endif %}>Aggressive (24 MiB / 5 workers / 96 MiB cache)</option>
+                    <option value="custom" {% if settings.buffer_profile == 'custom' %}selected{% endif %}>Custom (manual below)</option>
+                </select>
+            </div>
+            <div>
+                <label class="s-label" for="buffer_readahead_mb">Read-ahead (MiB)</label>
+                <input type="number" id="buffer_readahead_mb" class="s-input" min="2" max="128" step="1"
+                    value="{{ settings.buffer_readahead_mb }}" autocomplete="off">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_workers">Workers</label>
+                <input type="number" id="buffer_workers" class="s-input" min="1" max="8" step="1"
+                    value="{{ settings.buffer_workers }}" autocomplete="off">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_cache_mb">Cache (MiB)</label>
+                <input type="number" id="buffer_cache_mb" class="s-input" min="0" max="512" step="1"
+                    value="{{ settings.buffer_cache_mb }}" autocomplete="off">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_stall_timeout">Stall timeout (s)</label>
+                <input type="number" id="buffer_stall_timeout" class="s-input" min="15" max="600" step="1"
+                    value="{{ settings.buffer_stall_timeout }}" autocomplete="off">
+            </div>
+        </div>
+    </div>
+
     <!-- ── Manual Add Channels ─────────────────────────────────────────── -->
     <div class="settings-card">
         <h2><i class="fa-solid fa-hand-pointer"></i> Manual Add Channels</h2>
@@ -1713,6 +1768,13 @@ async function saveSettings() {
         announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
+        buffer_enabled:                document.getElementById('buffer_enabled').checked,
+        buffer_adaptive:               document.getElementById('buffer_adaptive').checked,
+        buffer_profile:                document.getElementById('buffer_profile').value,
+        buffer_readahead_mb:           parseInt(document.getElementById('buffer_readahead_mb').value || '0', 10),
+        buffer_workers:                parseInt(document.getElementById('buffer_workers').value || '0', 10),
+        buffer_cache_mb:               parseInt(document.getElementById('buffer_cache_mb').value || '0', 10),
+        buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value || '0', 10),
     };
     const dsEl = document.getElementById('default_streaming');
     if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
