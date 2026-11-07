@@ -1912,6 +1912,16 @@ function renderSettings(s) {
     document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
     togglePosterProvider();
     toggleFanartShuffle();
+
+    // Stream Buffer
+    document.getElementById('buffer_enabled').checked = !!s.buffer_enabled;
+    document.getElementById('buffer_adaptive').checked = !!s.buffer_adaptive;
+    document.getElementById('buffer_profile').value = s.buffer_profile || 'balanced';
+    document.getElementById('buffer_readahead_mb').value = s.buffer_readahead_mb ?? 12;
+    document.getElementById('buffer_workers').value = s.buffer_workers ?? 3;
+    document.getElementById('buffer_cache_mb').value = s.buffer_cache_mb ?? 48;
+    document.getElementById('buffer_stall_timeout').value = s.buffer_stall_timeout ?? 90;
+
     document.getElementById('upstream_repo').value = s.upstream_repo || '';
     document.getElementById('upstream_branch').value = s.upstream_branch || '';
     document.getElementById('subscription_group_id').value = s.subscription_group_id || 0;
