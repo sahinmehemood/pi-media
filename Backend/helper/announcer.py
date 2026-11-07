@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import create_task
 from datetime import datetime
 
@@ -6,6 +7,7 @@ from pyrogram.errors import FloodWait, MessageDeleteForbidden, MessageIdInvalid
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from Backend import db
+from Backend.helper.flood_wait import flood_handler
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
 from Backend.pyrofork.bot import StreamBot, get_streambot_url
@@ -118,7 +120,12 @@ async def _announce(info: dict) -> None:
         if sent is not None:
             await _store_announcement_msg(info.get("media_type"), info.get("tmdb_id"), chat, sent.id)
     except FloodWait as e:
-        LOGGER.warning(f"Announcement FloodWait for {e.value}s")
+        # Centralized decision: wait + penalty + retry-or-abort via FloodWaitHandler.
+        decision = await flood_handler.handle(e, -1)  # -1 = StreamBot primary client
+        if decision.abort:
+            LOGGER.error("Announcement aborted after FloodWait: %s", decision.reason)
+        else:
+            await asyncio.sleep(decision.wait_seconds)
     except Exception as e:
         LOGGER.error(f"Announcement failed for '{info.get('title')}': {e}")
 
@@ -153,7 +160,13 @@ async def delete_announcement(media_type: str, tmdb_id) -> None:
     except (MessageDeleteForbidden, MessageIdInvalid) as e:
         LOGGER.warning(f"Could not delete announcement {message_id} for {key}: {e}")
     except FloodWait as e:
-        LOGGER.warning(f"FloodWait deleting announcement for {key}: {e.value}s")
+        # Centralized decision for delete as well.
+        decision = await flood_handler.handle(e, -1)
+        if decision.abort:
+            LOGGER.warning("Announcement delete aborted after FloodWait: %s", decision.reason)
+        else:
+            await asyncio.sleep(decision.wait_seconds)
+            LOGGER.info("Deleted announcement message %s for %s after FloodWait", message_id, key)
     except Exception as e:
         LOGGER.warning(f"Failed to delete announcement message for {key}: {e}")
 

@@ -6,6 +6,7 @@ from Backend.helper.encrypt import decode_string
 from Backend.helper.pyro import is_media
 from Backend.logger import LOGGER
 from Backend.pyrofork.bot import multi_clients
+from Backend.helper.flood_wait import flood_handler
 
 ALIVE, DEAD, UNKNOWN = "alive", "dead", "unknown"
 
@@ -133,7 +134,16 @@ class DeadLinkChecker:
             try:
                 message = await client.get_messages(chat_id, msg_id)
             except FloodWait as e:
-                await asyncio.sleep(getattr(e, "value", 5) + 1)
+                cidx = -1
+                for idx, c in multi_clients.items():
+                    if c is client:
+                        cidx = idx
+                        break
+                decision = await flood_handler.handle(e, cidx)
+                if decision.abort:
+                    LOGGER.warning(f"[LinkChecker] FloodWait aborted for chat={chat_id} msg={msg_id}: {decision.reason}")
+                    continue
+                await asyncio.sleep(decision.wait_seconds)
                 continue
             except Exception:
                 continue

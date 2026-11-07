@@ -57,6 +57,14 @@ _DEFAULTS: Dict[str, Any] = {
     "stream_formatter": "default",
     "formatter_name": "",
     "formatter_description": "",
+    #----- Streaming buffer (see Backend/helper/stream_buffer.py)
+    "buffer_enabled": True,
+    "buffer_profile": "balanced",
+    "buffer_adaptive": True,
+    "buffer_readahead_mb": 12,
+    "buffer_workers": 3,
+    "buffer_cache_mb": 48,
+    "buffer_stall_timeout": 90,
     "fanart_enabled": False,
     "fanart_api_key": "",
     "fanart_shuffle": False,
@@ -259,6 +267,48 @@ class Settings:
     @property
     def stream_formatter(self) -> str:
         return str(self._d.get("stream_formatter") or "default")
+
+    #----- Streaming buffer
+    @property
+    def buffer_enabled(self) -> bool:
+        return bool(self._d.get("buffer_enabled", True))
+
+    @property
+    def buffer_adaptive(self) -> bool:
+        return bool(self._d.get("buffer_adaptive", True))
+
+    @property
+    def buffer_profile(self) -> str:
+        profile = str(self._d.get("buffer_profile") or "balanced")
+        return profile if profile in ("conservative", "balanced", "aggressive", "custom") else "balanced"
+
+    @property
+    def buffer_readahead_mb(self) -> int:
+        try:
+            return max(0, int(self._d.get("buffer_readahead_mb", 12)))
+        except (ValueError, TypeError):
+            return 12
+
+    @property
+    def buffer_workers(self) -> int:
+        try:
+            return max(1, int(self._d.get("buffer_workers", 3)))
+        except (ValueError, TypeError):
+            return 3
+
+    @property
+    def buffer_cache_mb(self) -> int:
+        try:
+            return max(0, int(self._d.get("buffer_cache_mb", 48)))
+        except (ValueError, TypeError):
+            return 48
+
+    @property
+    def buffer_stall_timeout(self) -> int:
+        try:
+            return max(15, int(self._d.get("buffer_stall_timeout", 90)))
+        except (ValueError, TypeError):
+            return 90
 
     @property
     def formatter_name(self) -> str:
@@ -508,6 +558,25 @@ class SettingsManager:
                         "payment_instructions", "payment_qr_url"}
             if any(old.get(k) != new.get(k) for k in sub_keys):
                 results["subscription"] = "settings reloaded in-memory"
+
+        #----- Streaming buffer changed: rebuild the policy and resize the cache
+        #----- in place so new streams use it without a restart.
+        buffer_keys = {
+            "buffer_enabled", "buffer_profile", "buffer_adaptive",
+            "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
+            "buffer_stall_timeout",
+        }
+        if any(old.get(k) != new.get(k) for k in buffer_keys):
+            try:
+                from Backend.helper.stream_buffer import refresh_policy
+                policy = refresh_policy()
+                results["buffer"] = (
+                    f"{policy.profile} — read-ahead {policy.readahead_mb:g} MiB, "
+                    f"{policy.workers} worker(s), cache {policy.cache_mb:g} MiB"
+                )
+            except Exception as exc:
+                LOGGER.error(f"SettingsManager reinit buffer: {exc}")
+                results["buffer"] = f"error: {exc}"
 
         #----- Admin credentials changed
         cred_keys = {"admin_username", "admin_password"}

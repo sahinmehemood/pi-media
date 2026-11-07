@@ -13,6 +13,7 @@ from pyrogram.errors import (
 )
 
 import Backend.pyrofork.bot as botmod
+from Backend.helper.flood_wait import flood_handler
 from Backend import db
 from Backend.config import Telegram
 from Backend.helper import global_search, task_manager
@@ -121,8 +122,10 @@ async def start_login(phone: str) -> dict:
         await client.disconnect()
         raise ValueError("That phone number was rejected by Telegram. Check the country code and try again.")
     except FloodWait as e:
+        # Record the flood for penalty tracking across all callers
+        await flood_handler.handle(e, -1)
         await client.disconnect()
-        raise ValueError(f"Too many attempts. Try again in {e.value} seconds.")
+        raise ValueError("Too many attempts. Try again later.")
 
     login_id = secrets.token_hex(12)
     _PENDING[login_id] = {"client": client, "phone": phone, "hash": sent.phone_code_hash, "ts": time.time()}

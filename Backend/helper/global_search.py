@@ -23,6 +23,7 @@ from Backend.helper.encrypt import encode_string
 from Backend.helper.pyro import get_readable_file_size
 from Backend.helper.split_files import parse_combined_episodes, parse_split_info, strip_part_suffix
 import Backend.pyrofork.bot as botmod
+from Backend.helper.flood_wait import flood_handler
 
 MAX_RESULTS = 50
 MAX_RESULTS_PER_CHAT = 50
@@ -446,8 +447,11 @@ async def _search_channel(
                         break
 
             except FloodWait as e:
-                LOGGER.warning(f"[USERBOT] FloodWait for {chat_title}: sleeping {e.value}s")
-                await asyncio.sleep(e.value)
+                decision = await flood_handler.handle(e, -1)
+                if decision.abort:
+                    LOGGER.warning(f"[USERBOT] FloodWait aborted for {chat_title}: {decision.reason}")
+                    break
+                await asyncio.sleep(decision.wait_seconds)
             except (ChatAdminRequired, ChannelPrivate, PeerIdInvalid, UserNotParticipant, RPCError) as e:
                 LOGGER.warning(f"[USERBOT] Cannot access channel {chat_title} ({chat_id}): {e}")
                 break
@@ -714,8 +718,11 @@ async def _run_true_global_search(
                             break
 
                 except FloodWait as e:
-                    LOGGER.warning(f"[USERBOT] FloodWait on true global: sleeping {e.value}s")
-                    await asyncio.sleep(e.value)
+                    decision = await flood_handler.handle(e, -1)
+                    if decision.abort:
+                        LOGGER.warning(f"[USERBOT] FloodWait aborted on true global: {decision.reason}")
+                        break
+                    await asyncio.sleep(decision.wait_seconds)
                 except (AuthKeyUnregistered, SessionRevoked) as e:
                     LOGGER.error(f"[USERBOT] Session invalid ({type(e).__name__}): {e}")
                     _userbot_session_dead = True

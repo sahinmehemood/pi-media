@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 from pyrogram.errors import FloodWait, ChannelPrivate, ChatAdminRequired
 
 from Backend.logger import LOGGER
+from Backend.pyrofork.bot import multi_clients
+from Backend.helper.flood_wait import flood_handler
 from Backend.helper.encrypt import encode_string, decode_string
 from Backend.helper.manual_add import stamp_caption_with_id
 from Backend.helper.metadata import caption_with_links, extract_default_id, has_raw_ref, metadata
@@ -342,18 +344,22 @@ class ScanManager:
             try:
                 messages = await client.get_messages(chat_id, batch_ids)
             except FloodWait as e:
-                LOGGER.info(f"[ScanManager] FloodWait {e.value}s — sleeping…")
-                await asyncio.sleep(e.value)
-                try:
-                    messages = await client.get_messages(chat_id, batch_ids)
-                except Exception as ex:
-                    LOGGER.error(f"[ScanManager] Retry failed at {current}: {ex}")
+                cidx = -1
+                for idx, c in multi_clients.items():
+                    if c is client:
+                        cidx = idx
+                        break
+                decision = await flood_handler.handle(e, cidx)
+                if decision.abort:
+                    LOGGER.error(f"[ScanManager] FloodWait aborted at {current}: {decision.reason}")
                     s["counters"]["errors"] += 1
                     current = upper
                     empty_streak += 1
                     s["cursors"][str(ch_key)] = current
                     s["current_id"] = current
                     continue
+                await asyncio.sleep(decision.wait_seconds)
+                messages = await client.get_messages(chat_id, batch_ids)
             except Exception as e:
                 LOGGER.error(f"[ScanManager] Batch fetch error at {current}: {e}")
                 s["counters"]["errors"] += 1
@@ -408,8 +414,16 @@ class ScanManager:
         try:
             probe = await client.send_message(chat_id, SCAN_PROBE_TEXT)
         except FloodWait as e:
-            LOGGER.info(f"[ScanManager] FloodWait {e.value}s during probe — sleeping…")
-            await asyncio.sleep(e.value)
+            cidx = -1
+            for idx, c in multi_clients.items():
+                if c is client:
+                    cidx = idx
+                    break
+            decision = await flood_handler.handle(e, cidx)
+            if decision.abort:
+                LOGGER.warning(f"[ScanManager] Probe send aborted for {chat_id}: {decision.reason}")
+                return None
+            await asyncio.sleep(decision.wait_seconds)
             try:
                 probe = await client.send_message(chat_id, SCAN_PROBE_TEXT)
             except Exception as ex:
@@ -665,7 +679,16 @@ class DbCheckManager:
                 return True
             return await self._check_one(client, decoded.get("chat_id"), decoded.get("msg_id"))
         except FloodWait as e:
-            await asyncio.sleep(e.value)
+            cidx = -1
+            for idx, c in multi_clients.items():
+                if c is client:
+                    cidx = idx
+                    break
+            decision = await flood_handler.handle(e, cidx)
+            if decision.abort:
+                LOGGER.error(f"[ScanManager] Check message aborted for {stream_hash}: {decision.reason}")
+                return None
+            await asyncio.sleep(decision.wait_seconds)
             return await self._check_message(client, stream_hash)
         except Exception:
             return None
@@ -681,7 +704,16 @@ class DbCheckManager:
                 return False
             return True
         except FloodWait as e:
-            await asyncio.sleep(e.value)
+            cidx = -1
+            for idx, c in multi_clients.items():
+                if c is client:
+                    cidx = idx
+                    break
+            decision = await flood_handler.handle(e, cidx)
+            if decision.abort:
+                LOGGER.error(f"[ScanManager] Check one aborted for chat_id={chat_id}: {decision.reason}")
+                return False
+            await asyncio.sleep(decision.wait_seconds)
             return await self._check_one(client, str(chat_id).replace("-100", ""), msg_id)
         except Exception:
             return None
