@@ -94,7 +94,7 @@ class FloodWaitHandler:
                 reason=f"unrecognized error for client {client_index}: {error}",
             )
 
-        self._flood_counts[client_index] = self._flood_counts.get(client_index, 0) + 1
+        self._record_flood(client_index)
 
         if self._flood_counts[client_index] > self.max_retries:
             return FloodWaitDecision(
@@ -106,9 +106,7 @@ class FloodWaitHandler:
                 ),
             )
 
-        # Shed a worker for this client on each consecutive flood.
-        if self._penalties.get(client_index, 0) < self.max_penalty:
-            self._penalties[client_index] = self._penalties.get(client_index, 0) + 1
+        self._shed_worker(client_index)
 
         attempt = self._flood_counts[client_index]
         jitter = 0.5 + (attempt * 0.5)
@@ -163,15 +161,23 @@ class FloodWaitHandler:
                 return idx
         return PRIMARY_CLIENT
 
+    def _record_flood(self, client_index: int) -> None:
+        """Increment the consecutive-flood count for the client."""
+        self._flood_counts[client_index] = self._flood_counts.get(client_index, 0) + 1
+
+    def _shed_worker(self, client_index: int) -> None:
+        """Shed one worker for the client if under the max penalty."""
+        if self._penalties.get(client_index, 0) < self.max_penalty:
+            self._penalties[client_index] = self._penalties.get(client_index, 0) + 1
+
     def note_flood_wait(self, client_index: int) -> None:
         """Record a flood without the full decision flow.
 
         Increments the consecutive-flood count and sheds one worker for the
         client.  Used by callers that already parsed the error themselves.
         """
-        self._flood_counts[client_index] = self._flood_counts.get(client_index, 0) + 1
-        if self._penalties.get(client_index, 0) < self.max_penalty:
-            self._penalties[client_index] = self._penalties.get(client_index, 0) + 1
+        self._record_flood(client_index)
+        self._shed_worker(client_index)
         logger.warning(
             "FloodWait penalty for client=%s -> %d",
             client_index,
