@@ -333,7 +333,7 @@ async def media_streamer(request: Request, chat_id: int, msg_id: int, token: str
     offset = start - (start % chunk_size)
     first_part_cut = start - offset
     last_part_cut = (end % chunk_size) + 1
-    part_count = math.ceil(end / chunk_size) - math.floor(offset / chunk_size)
+    part_count = max(1, math.ceil(end / chunk_size) - math.floor(offset / chunk_size))
     stream_id = secrets.token_hex(8)
     decoded_name = unquote(request.path_params.get("name", ""))
     final_title = await _lookup_title(stream_id_hash, decoded_name)
@@ -443,7 +443,11 @@ def _get_userbot_streamer() -> ByteStreamer:
     if botmod.Userbot is None:
         return None
     if _userbot_streamer is None or _userbot_streamer.client is not botmod.Userbot:
+        old = _userbot_streamer
         _userbot_streamer = ByteStreamer(botmod.Userbot, USERBOT_CLIENT_INDEX)
+        if old is not None:
+            for task in old._background_tasks:
+                task.cancel()
     return _userbot_streamer
 
 
@@ -468,7 +472,7 @@ async def global_media_streamer(request: Request, chat_id: int, msg_id: int, tok
     offset = start - (start % chunk_size)
     first_part_cut = start - offset
     last_part_cut = (end % chunk_size) + 1
-    part_count = math.ceil(end / chunk_size) - math.floor(offset / chunk_size)
+    part_count = max(1, math.ceil(end / chunk_size) - math.floor(offset / chunk_size))
     stream_id = secrets.token_hex(8)
 
     file_name, mime_type = _resolve_filename_mime(file_id)

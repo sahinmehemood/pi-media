@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from fastapi import Request
 from pyrogram import Client, raw
-from pyrogram.errors import AuthBytesInvalid
+from pyrogram.errors import AuthBytesInvalid, FloodWait
 from pyrogram.file_id import FileId
 from pyrogram.session import Auth, Session
 
@@ -36,6 +36,24 @@ ACTIVE_STREAMS: Dict[str, Dict] = {}
 RECENT_STREAMS = deque(maxlen=20)
 STALE_STREAM_IDLE = 180
 _STALE_CLEANER_STARTED = False
+
+#----- Tracked background tasks so they can be cancelled on shutdown
+_background_tasks: set = set()
+
+
+def _track_task(task: asyncio.Task) -> asyncio.Task:
+    """Register a background task so it can be cancelled on shutdown."""
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+async def shutdown_background_tasks() -> None:
+    """Cancel all tracked background tasks (called on app shutdown)."""
+    for task in list(_background_tasks):
+        task.cancel()
+    if _background_tasks:
+        await asyncio.gather(*_background_tasks, return_exceptions=True)
 
 
 async def _cleanup_stale_streams():
@@ -71,7 +89,7 @@ def _ensure_stale_cleaner():
     global _STALE_CLEANER_STARTED
     if not _STALE_CLEANER_STARTED:
         _STALE_CLEANER_STARTED = True
-        asyncio.create_task(_cleanup_stale_streams())
+        _track_task(asyncio.create_task(_cleanup_stale_streams()))
 
 
 #----- Telegram file byte streamer with prefetch, multi-client parallelism, and telemetry
@@ -85,10 +103,11 @@ class ByteStreamer:
         self.client_index = client_index
         self._file_id_cache = BoundedDict(2000)
         self._session_lock = asyncio.Lock()
+        self._background_tasks: set = set()
         if client_index >= 0:
             ByteStreamer._instances[client_index] = self
-        asyncio.create_task(self._clean_cache())
-        asyncio.create_task(self._prewarm_sessions())
+        _track_task(asyncio.create_task(self._clean_cache()))
+        _track_task(asyncio.create_task(self._prewarm_sessions()))
         _ensure_stale_cleaner()
 
     async def _prewarm_sessions(self):
@@ -286,12 +305,7 @@ class ByteStreamer:
                     client_failures[c_idx] = client_failures.get(c_idx, 0) + 1
                     await asyncio.sleep(min(0.5 * (2 ** (tries - 1)), 10.0))
 
-                except Exception as e:
-                    err_str = str(e)
-
-                    if "FILE_REFERENCE" in err_str or "file_reference" in err_str.lower():
-                        await c_refresh()
-
+                except FloodWait as e:
                     #----- Centralized FloodWait decision: parse wait, apply
                     #----- penalty, compute jitter, enforce max retries.
                     decision = await flood_handler.handle(e, c_idx)
@@ -302,6 +316,18 @@ class ByteStreamer:
                     flood_tries += 1
                     await asyncio.sleep(decision.wait_seconds)
                     # loop retries the same chunk
+
+                except Exception as e:
+                    #----- Non-FloodWait errors (network, auth, etc.): retry
+                    #----- with backoff instead of aborting the stream.
+                    err_str = str(e)
+
+                    if "FILE_REFERENCE" in err_str or "file_reference" in err_str.lower():
+                        await c_refresh()
+
+                    tries += 1
+                    client_failures[c_idx] = client_failures.get(c_idx, 0) + 1
+                    await asyncio.sleep(min(0.5 * (2 ** (tries - 1)), 10.0))
 
             BUFFER_METRICS.incr("chunks_failed")
             return seq_idx, None, "failed"
