@@ -160,7 +160,7 @@ class ByteStreamer:
 
         #----- Buffer policy resolves prefetch depth, parallelism, cache, and
         #----- stall timeout from settings + RAM budget + FloodWait penalty.
-        policy = stream_policy(userbot=client_index < 0)
+        policy = stream_policy(client_index=client_index, userbot=client_index < 0)
         cache = get_shared_cache() if (policy.enabled and policy.cache_bytes > 0) else None
         if policy.enabled:
             prefetch = policy.depth_chunks(chunk_size)

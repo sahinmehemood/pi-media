@@ -25,7 +25,7 @@ from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 
 from Backend.logger import LOGGER
-from Backend.helper.flood_wait import flood_handler
+from Backend.helper.flood_wait import flood_handler, PRIMARY_CLIENT
 
 MiB = 1024 * 1024
 
@@ -446,10 +446,12 @@ def record_stream_speed(mbps: float) -> None:
     SPEED.observe(mbps)
 
 
-def stream_policy(userbot: bool = False) -> BufferPolicy:
+def stream_policy(client_index: int = PRIMARY_CLIENT, userbot: bool = False) -> BufferPolicy:
     """Policy for one new stream: adaptive depth plus the FloodWait penalty.
 
-    The penalty comes from the central FloodWaitHandler, which tracks
+    ``client_index`` selects which client's FloodWait penalty applies, so a
+    flood on one client doesn't wrongly penalize streams on another. The
+    penalty comes from the central FloodWaitHandler, which tracks
     consecutive floods across ALL callers (streams, announcer, scan, search,
     etc.), not just this module.
     """
@@ -462,7 +464,7 @@ def stream_policy(userbot: bool = False) -> BufferPolicy:
         readahead = int(readahead * SPEED.multiplier())
     readahead = max(MIN_READAHEAD_MB * MiB, min(readahead, base.max_readahead_bytes))
 
-    workers = max(MIN_WORKERS, base.workers - flood_handler.penalty(-1))
+    workers = max(MIN_WORKERS, base.workers - flood_handler.penalty(client_index))
     if userbot:
         workers = min(workers, USERBOT_MAX_WORKERS)
 
