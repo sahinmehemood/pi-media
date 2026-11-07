@@ -236,7 +236,13 @@ class ByteStreamer:
                 except Exception as e:
                     LOGGER.warning("Skipping extra client %s (session setup failed): %s", ec_idx, e)
 
-        async def fetch_chunk_with_retries(seq_idx: int, off: int) -> Tuple[int, Optional[bytes]]:
+        async def fetch_chunk_with_retries(seq_idx: int, off: int) -> Tuple[int, Optional[bytes], str]:
+            """Fetch one chunk, returning (seq_idx, chunk_bytes, status).
+
+            status is "ok" (chunk returned), "eof" (end of file reached cleanly),
+            or "failed" (all retries exhausted — caller must surface an error,
+            never silently truncate the stream).
+            """
             slot = seq_idx % len(session_pool)
             c_idx, c_session, c_loc_box, c_refresh = session_pool[slot]
 
@@ -246,7 +252,7 @@ class ByteStreamer:
             if cache is not None and key is not None:
                 cached = cache.get(key)
                 if cached is not None:
-                    return seq_idx, cached
+                    return seq_idx, cached, "ok"
 
             tries = 0
             flood_tries = 0
@@ -263,7 +269,7 @@ class ByteStreamer:
                     chunk_bytes = getattr(r, "bytes", None) if r else None
 
                     if chunk_bytes == b"":
-                        return seq_idx, None
+                        return seq_idx, None, "eof"
 
                     #----- Success: decay the flood penalty for this client.
                     flood_handler.record_success(c_idx)
@@ -273,7 +279,7 @@ class ByteStreamer:
                     #----- end-of-file and would poison later range requests.
                     if cache is not None and key is not None and len(chunk_bytes) == chunk_size:
                         cache.put(key, chunk_bytes)
-                    return seq_idx, chunk_bytes
+                    return seq_idx, chunk_bytes, "ok"
 
                 except asyncio.TimeoutError:
                     tries += 1
@@ -291,14 +297,14 @@ class ByteStreamer:
                     decision = await flood_handler.handle(e, c_idx)
                     if decision.abort:
                         BUFFER_METRICS.incr("chunks_failed")
-                        return seq_idx, None
+                        return seq_idx, None, "failed"
 
                     flood_tries += 1
                     await asyncio.sleep(decision.wait_seconds)
                     # loop retries the same chunk
 
             BUFFER_METRICS.incr("chunks_failed")
-            return seq_idx, None
+            return seq_idx, None, "failed"
 
         async def producer():
             scheduled_tasks = {}
@@ -344,11 +350,19 @@ class ByteStreamer:
                             if completed_seq is None:
                                 continue
 
-                            seq_idx, chunk_bytes = completed.result()
+                            seq_idx, chunk_bytes, status = completed.result()
                             scheduled_tasks.pop(completed_seq, None)
 
-                            if chunk_bytes is None:
+                            if status == "eof":
+                                #----- Clean end of file: signal stream end.
                                 await q.put((None, None))
+                                return
+
+                            if status == "failed":
+                                #----- Chunk could not be retrieved after all retries.
+                                #----- Surface an error instead of silently truncating.
+                                stop_event.set()
+                                await q.put(("error", None))
                                 return
 
                             results_buffer[seq_idx] = chunk_bytes
@@ -364,7 +378,8 @@ class ByteStreamer:
                             raise
                         except Exception as e:
                             LOGGER.exception("Error processing completed fetch task: %s", e)
-                            await q.put((None, None))
+                            stop_event.set()
+                            await q.put(("error", None))
                             return
 
                     while next_to_put in results_buffer:
@@ -382,8 +397,9 @@ class ByteStreamer:
                 raise
             except Exception as e:
                 LOGGER.exception("Producer unexpected error for stream %s: %s", stream_id, e)
+                stop_event.set()
                 try:
-                    await q.put((None, None))
+                    await q.put(("error", None))
                 except Exception:
                     pass
             finally:
@@ -421,6 +437,13 @@ class ByteStreamer:
                         BUFFER_METRICS.incr("stall_timeouts")
                         LOGGER.error("Producer stall (%.0f s) for stream %s — aborting", stall_timeout, stream_id)
                         stop_event.set()
+                        stream_entry["status"] = "error"
+                        break
+
+                    if off_chunk == ("error", None):
+                        #----- Producer signalled a chunk retrieval failure.
+                        #----- Do not present an incomplete stream as complete.
+                        BUFFER_METRICS.incr("chunks_failed")
                         stream_entry["status"] = "error"
                         break
 

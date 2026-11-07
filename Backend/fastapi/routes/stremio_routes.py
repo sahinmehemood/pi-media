@@ -40,10 +40,6 @@ ADDON_NAME = "Telegram"
 ADDON_VERSION = __version__
 PAGE_SIZE = 15
 
-def _donation():
-    text = "Enjoying Telegram Stremio?\nTap to support the developer"
-    return {"name": "❤️ Support", "title": text, "description": text, "externalUrl": "https://donate.weebzonex.workers.dev"}
-
 def build_proxy_url(original_url: str) -> str | None:
     settings = SettingsManager.current()
     base = settings.http_proxy_url
@@ -1957,7 +1953,7 @@ async def get_streams(
             streams = filtered
 
     if not streams:
-        return {"streams": [_donation()]}
+        return {"streams": []}
 
     ascending = config.get("quality_sort") == "asc"
     if is_combined:
@@ -1978,7 +1974,6 @@ async def get_streams(
         if name_count[s["name"]] > 1 and SettingsManager.current().stream_formatter == "default":
             seen[s["name"]] = seen.get(s["name"], 0) + 1
             s["name"] = f"{s['name']} ({seen[s['name']]})"
-    streams.append(_donation())
     return {"streams": streams}
 
 #----- Configure/install landing page rendered as HTML for a token

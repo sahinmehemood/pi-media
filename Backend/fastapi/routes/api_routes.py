@@ -1823,6 +1823,36 @@ async def update_settings_api(payload: dict) -> dict:
     if "default_streaming" in payload and payload["default_streaming"] not in ("bots", "userbot"):
         raise HTTPException(status_code=400, detail="default_streaming must be 'bots' or 'userbot'")
 
+    #----- Streaming buffer validation (mirrors stream_buffer.py limits)
+    if "buffer_enabled" in payload:
+        payload["buffer_enabled"] = bool(payload["buffer_enabled"])
+    if "buffer_adaptive" in payload:
+        payload["buffer_adaptive"] = bool(payload["buffer_adaptive"])
+    if "buffer_profile" in payload:
+        payload["buffer_profile"] = str(payload["buffer_profile"] or "").strip().lower()
+        if payload["buffer_profile"] not in ("conservative", "balanced", "aggressive", "custom"):
+            raise HTTPException(status_code=400, detail="buffer_profile must be conservative, balanced, aggressive or custom")
+    if "buffer_readahead_mb" in payload:
+        try:
+            payload["buffer_readahead_mb"] = max(2, min(128, int(payload["buffer_readahead_mb"])))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="buffer_readahead_mb must be an integer between 2 and 128")
+    if "buffer_workers" in payload:
+        try:
+            payload["buffer_workers"] = max(1, min(8, int(payload["buffer_workers"])))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="buffer_workers must be an integer between 1 and 8")
+    if "buffer_cache_mb" in payload:
+        try:
+            payload["buffer_cache_mb"] = max(0, min(512, int(payload["buffer_cache_mb"])))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="buffer_cache_mb must be an integer between 0 and 512")
+    if "buffer_stall_timeout" in payload:
+        try:
+            payload["buffer_stall_timeout"] = max(15, min(600, int(payload["buffer_stall_timeout"])))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="buffer_stall_timeout must be an integer between 15 and 600")
+
     if "rpdb_api_key" in payload:
         payload["rpdb_api_key"] = str(payload["rpdb_api_key"] or "").strip()
 
