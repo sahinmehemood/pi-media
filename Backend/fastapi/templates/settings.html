@@ -1108,7 +1108,8 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
 
         <label class="toggle-wrap" style="margin-bottom:1rem">
             <input type="checkbox" class="toggle-input" id="buffer_enabled"
-                {% if settings.buffer_enabled %}checked{% endif %}>
+                {% if settings.buffer_enabled %}checked{% endif %}
+                onchange="toggleBufferFields()">
             <span class="toggle-track"></span>
             <span class="toggle-label">
                 <strong>Enable Buffer</strong>
@@ -1121,11 +1122,11 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
         <div class="grid-2">
             <div>
                 <label class="s-label" for="buffer_profile">Buffer Profile</label>
-                <select id="buffer_profile" class="s-input" onchange="toggleBufferCustom()">
-                    <option value="conservative" {% if settings.buffer_profile == 'conservative' %}selected{% endif %}>Conservative (2 MiB read-ahead, 2 workers)</option>
-                    <option value="balanced" {% if settings.buffer_profile == 'balanced' %}selected{% endif %}>Balanced (12 MiB read-ahead, 3 workers)</option>
-                    <option value="aggressive" {% if settings.buffer_profile == 'aggressive' %}selected{% endif %}>Aggressive (24 MiB read-ahead, 5 workers)</option>
-                    <option value="custom" {% if settings.buffer_profile == 'custom' %}selected{% endif %}>Custom (manual values below)</option>
+                <select id="buffer_profile" class="s-input" onchange="applyBufferProfile()">
+                    <option value="conservative" {% if settings.buffer_profile == 'conservative' %}selected{% endif %}>Conservative</option>
+                    <option value="balanced" {% if settings.buffer_profile == 'balanced' %}selected{% endif %}>Balanced</option>
+                    <option value="aggressive" {% if settings.buffer_profile == 'aggressive' %}selected{% endif %}>Aggressive</option>
+                    <option value="custom" {% if settings.buffer_profile == 'custom' %}selected{% endif %}>Custom</option>
                 </select>
             </div>
             <div>
@@ -1143,7 +1144,7 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
             </div>
         </div>
 
-        <div id="buffer-custom-wrap" style="{% if settings.buffer_profile != 'custom' %}display:none{% endif %}margin-top:1.25rem">
+        <div id="buffer-fields" style="{% if settings.buffer_profile != 'custom' %}display:none{% endif %}margin-top:1.25rem">
             <hr class="divider">
             <label class="s-label" style="margin-bottom:0.5rem">Custom Values</label>
             <div class="grid-2">
@@ -1184,9 +1185,8 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
             </div>
         </div>
 
-        <div style="margin-top:1rem;padding:0.9rem;border-radius:0.8rem;border:1px solid var(--border);background:color-mix(in srgb,var(--bg) 70%,transparent);font-size:0.78rem;color:var(--text-sec)">
-            <strong>RAM budget:</strong> <span id="buffer-ram-budget">—</span> ·
-            <strong>Effective:</strong> <span id="buffer-effective">—</span>
+        <div id="buffer-estimate" style="margin-top:1rem;padding:0.9rem;border-radius:0.8rem;border:1px solid var(--border);background:color-mix(in srgb,var(--bg) 70%,transparent);font-size:0.78rem;color:var(--text-sec)">
+            —
         </div>
     </div>
 
@@ -1564,6 +1564,47 @@ function toggleBufferCustom() {
     if (sel && wrap) {
         wrap.style.display = sel.value === 'custom' ? '' : 'none';
     }
+}
+
+function toggleBufferFields() {
+    const enabled = document.getElementById('buffer_enabled').checked;
+    const fields = document.getElementById('buffer-fields');
+    if (fields) fields.style.display = enabled ? '' : 'none';
+    updateBufferEstimate();
+}
+
+const BUFFER_PROFILES = {
+    conservative: { readahead_mb: 6, workers: 2, cache_mb: 24 },
+    balanced:     { readahead_mb: 12, workers: 3, cache_mb: 48 },
+    aggressive:   { readahead_mb: 24, workers: 5, cache_mb: 96 },
+};
+
+function applyBufferProfile() {
+    const profile = document.getElementById('buffer_profile').value;
+    const preset = BUFFER_PROFILES[profile];
+    if (preset) {
+        document.getElementById('buffer_readahead_mb').value = preset.readahead_mb;
+        document.getElementById('buffer_workers').value = preset.workers;
+        document.getElementById('buffer_cache_mb').value = preset.cache_mb;
+    }
+    updateBufferEstimate();
+}
+
+function updateBufferEstimate() {
+    const out = document.getElementById('buffer-estimate');
+    if (!out) return;
+    const readahead = parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 0;
+    const workers = parseInt(document.getElementById('buffer_workers').value, 10) || 1;
+    const cache = parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0;
+    const enabled = document.getElementById('buffer_enabled').checked;
+    if (!enabled) {
+        out.textContent = 'Buffer disabled — streams fall back to 1 MiB read-ahead and no cache.';
+        return;
+    }
+    const worstCase = readahead + workers + cache;
+    const seconds = (readahead * 8) / 10;
+    out.textContent = `Worst case: ~${worstCase} MiB RAM · ~${seconds.toFixed(1)} s of video ahead at 10 Mbps ` +
+                      `· ${cache} MiB cache shared by all streams.`;
 }
 
 /* ── Password visibility ──────────────────────────────────────────────── */
@@ -2186,7 +2227,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     toggleDuplicateProtection();
     toggleMediaflowFields();
-    toggleBufferCustom();
+    toggleBufferFields();
     loadDbStats();
     loadLogs();
 });
