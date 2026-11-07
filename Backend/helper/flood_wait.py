@@ -180,4 +180,4 @@ class FloodWaitHandler:
 
 
 #----- Process-wide singleton: one handler for every client ----------------
-handler = FloodWaitHandler()
+flood_handler = FloodWaitHandler()

@@ -1,25 +1,6 @@
 DEFAULT_THEME = "graphite_amber"
 DEFAULT_STYLE = "default"
 
-#----- Omarchy: a single dark theme ported from the fork.
-#----- Added as the only extra theme; all other fork themes were dropped
-#----- to keep the theme surface small.
-THEMES["omarchy"] = {
-    "name": "Omarchy",
-    "is_dark": True,
-    "colors": {
-        "primary": "#89b4fa",
-        "secondary": "#74c7ec",
-        "accent": "#cba6f7",
-        "background": "#1e1e2e",
-        "card": "#313244",
-        "border": "#45475a",
-        "text": "#cdd6f4",
-        "text_secondary": "#a6adc8",
-    },
-    "css_classes": "theme-omarchy",
-}
-
 STYLES = {
     "default": {"name": "Default"},
     "glassy": {"name": "Glassy"},
@@ -207,6 +188,25 @@ THEMES = {
         },
         "css_classes": "theme-golden-hour"
     }
+}
+
+#----- Omarchy: a single dark theme ported from the fork.
+#----- Added as the only extra theme; all other fork themes were dropped
+#----- to keep the theme surface small.
+THEMES["omarchy"] = {
+    "name": "Omarchy",
+    "is_dark": True,
+    "colors": {
+        "primary": "#89b4fa",
+        "secondary": "#74c7ec",
+        "accent": "#cba6f7",
+        "background": "#1e1e2e",
+        "card": "#313244",
+        "border": "#45475a",
+        "text": "#cdd6f4",
+        "text_secondary": "#a6adc8",
+    },
+    "css_classes": "theme-omarchy",
 }
 
 def get_theme(theme_name: str = DEFAULT_THEME, style_name: str = DEFAULT_STYLE):

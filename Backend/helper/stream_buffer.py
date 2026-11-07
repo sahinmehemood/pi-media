@@ -25,7 +25,7 @@ from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 
 from Backend.logger import LOGGER
-from Backend.helper.flood_wait import handler as flood_handler
+from Backend.helper.flood_wait import flood_handler
 
 MiB = 1024 * 1024
 
