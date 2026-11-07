@@ -344,12 +344,7 @@ class ScanManager:
             try:
                 messages = await client.get_messages(chat_id, batch_ids)
             except FloodWait as e:
-                cidx = -1
-                for idx, c in multi_clients.items():
-                    if c is client:
-                        cidx = idx
-                        break
-                decision = await flood_handler.handle(e, cidx)
+                decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
                 if decision.abort:
                     LOGGER.error(f"[ScanManager] FloodWait aborted at {current}: {decision.reason}")
                     s["counters"]["errors"] += 1
@@ -414,12 +409,7 @@ class ScanManager:
         try:
             probe = await client.send_message(chat_id, SCAN_PROBE_TEXT)
         except FloodWait as e:
-            cidx = -1
-            for idx, c in multi_clients.items():
-                if c is client:
-                    cidx = idx
-                    break
-            decision = await flood_handler.handle(e, cidx)
+            decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
             if decision.abort:
                 LOGGER.warning(f"[ScanManager] Probe send aborted for {chat_id}: {decision.reason}")
                 return None
@@ -679,12 +669,7 @@ class DbCheckManager:
                 return True
             return await self._check_one(client, decoded.get("chat_id"), decoded.get("msg_id"))
         except FloodWait as e:
-            cidx = -1
-            for idx, c in multi_clients.items():
-                if c is client:
-                    cidx = idx
-                    break
-            decision = await flood_handler.handle(e, cidx)
+            decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
             if decision.abort:
                 LOGGER.error(f"[ScanManager] Check message aborted for {stream_hash}: {decision.reason}")
                 return None
@@ -704,12 +689,7 @@ class DbCheckManager:
                 return False
             return True
         except FloodWait as e:
-            cidx = -1
-            for idx, c in multi_clients.items():
-                if c is client:
-                    cidx = idx
-                    break
-            decision = await flood_handler.handle(e, cidx)
+            decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
             if decision.abort:
                 LOGGER.error(f"[ScanManager] Check one aborted for chat_id={chat_id}: {decision.reason}")
                 return False

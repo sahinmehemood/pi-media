@@ -4,7 +4,7 @@ from pyrogram import Client
 from pyrogram.errors import FloodWait
 from pyrogram.types import Message
 
-from Backend.helper.flood_wait import flood_handler
+from Backend.helper.flood_wait import flood_handler, PRIMARY_CLIENT
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
 
@@ -31,7 +31,7 @@ async def route_to_skip_channel(client: Client, message: Message) -> None:
     try:
         await message.copy(skip_chat)
     except FloodWait as e:
-        decision = await flood_handler.handle(e, -1)
+        decision = await flood_handler.handle(e, PRIMARY_CLIENT)
         if decision.abort:
             LOGGER.error(f"[SkipChannel] Copy aborted for message {message.id}: {decision.reason}")
             return

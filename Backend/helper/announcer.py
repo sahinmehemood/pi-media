@@ -121,7 +121,7 @@ async def _announce(info: dict) -> None:
             await _store_announcement_msg(info.get("media_type"), info.get("tmdb_id"), chat, sent.id)
     except FloodWait as e:
         # Centralized decision: wait + penalty + retry-or-abort via FloodWaitHandler.
-        decision = await flood_handler.handle(e, -1)  # -1 = StreamBot primary client
+        decision = await flood_handler.handle(e, StreamBot)
         if decision.abort:
             LOGGER.error("Announcement aborted after FloodWait: %s", decision.reason)
         else:
@@ -161,7 +161,7 @@ async def delete_announcement(media_type: str, tmdb_id) -> None:
         LOGGER.warning(f"Could not delete announcement {message_id} for {key}: {e}")
     except FloodWait as e:
         # Centralized decision for delete as well.
-        decision = await flood_handler.handle(e, -1)
+        decision = await flood_handler.handle(e, StreamBot)
         if decision.abort:
             LOGGER.warning("Announcement delete aborted after FloodWait: %s", decision.reason)
         else:

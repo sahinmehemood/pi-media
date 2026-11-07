@@ -18,7 +18,7 @@ from pyrogram.enums import ParseMode
 from Backend.logger import LOGGER
 import Backend.pyrofork.bot as botmod
 from Backend.pyrofork.bot import StreamBot
-from Backend.helper.flood_wait import flood_handler
+from Backend.helper.flood_wait import flood_handler, PRIMARY_CLIENT
 
 DELETE_BATCH_SIZE = 10
 _FALLBACK_WORTHY = (
@@ -51,7 +51,7 @@ async def edit_message(chat_id: int, msg_id: int, new_caption: str):
         await sleep(2)
         return
     except FloodWait as e:
-        decision = await flood_handler.handle(e, -1)
+        decision = await flood_handler.handle(e, StreamBot)
         if decision.abort:
             LOGGER.error(f"FloodWait aborted while editing message {msg_id} in {chat_id}: {decision.reason}")
             return
@@ -89,7 +89,7 @@ async def _userbot_edit(chat_id: int, msg_id: int, new_caption: str):
         await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
         await sleep(2)
     except FloodWait as e:
-        decision = await flood_handler.handle(e, -1)
+        decision = await flood_handler.handle(e, botmod.Userbot)
         if decision.abort:
             LOGGER.error(f"[USERBOT] FloodWait aborted (edit {msg_id} in {chat_id}): {decision.reason}")
             return
@@ -148,13 +148,7 @@ async def _delete_chunk(client, client_label: str, chat_id: int, msg_ids: List[i
         LOGGER.info(f"[{client_label.upper()}] Deleted {len(msg_ids)} message(s) in {chat_id}")
         return []
     except FloodWait as e:
-        # Look up client index for penalty tracking across all callers
-        cidx = -1
-        for idx, c in botmod.multi_clients.items():
-            if c is client:
-                cidx = idx
-                break
-        decision = await flood_handler.handle(e, cidx)
+        decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
         if decision.abort:
             LOGGER.error(f"[{client_label.upper()}] FloodWait aborted ({len(msg_ids)} msg(s) in {chat_id}): {decision.reason}")
             return msg_ids

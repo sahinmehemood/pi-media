@@ -1,5 +1,4 @@
 import asyncio
-import random
 import secrets
 import time
 from collections import deque
@@ -13,7 +12,7 @@ from pyrogram.session import Auth, Session
 
 from Backend import db
 from Backend.helper.exceptions import FileNotFound
-from Backend.helper.flood_wait import FloodWaitDecision, flood_handler, with_flood_retry
+from Backend.helper.flood_wait import flood_handler
 from Backend.helper.pyro import get_file_ids
 from Backend.logger import LOGGER
 from Backend.helper.bounded import BoundedDict
@@ -289,7 +288,7 @@ class ByteStreamer:
 
                     #----- Centralized FloodWait decision: parse wait, apply
                     #----- penalty, compute jitter, enforce max retries.
-                    decision = await flood_handler.handle(e, c_idx, attempt=flood_tries)
+                    decision = await flood_handler.handle(e, c_idx)
                     if decision.abort:
                         BUFFER_METRICS.incr("chunks_failed")
                         return seq_idx, None
