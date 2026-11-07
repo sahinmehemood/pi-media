@@ -40,6 +40,14 @@ _DEFAULTS: Dict[str, Any] = {
     "extra_databases": [],
     "global_search": False,
     "default_streaming": "bots",
+    #----- Streaming buffer (see Backend/helper/stream_buffer.py)
+    "buffer_enabled": True,
+    "buffer_profile": "balanced",
+    "buffer_adaptive": True,
+    "buffer_readahead_mb": 12,
+    "buffer_workers": 3,
+    "buffer_cache_mb": 48,
+    "buffer_stall_timeout": 90,
     "global_search_channels": [],
     "anime_channels": [],
     "manual_channels": [],
@@ -292,6 +300,48 @@ class Settings:
     def fanart_low_res_poster(self) -> bool:
         return bool(self._d.get("fanart_low_res_poster", True))
 
+    #----- Streaming buffer
+    @property
+    def buffer_enabled(self) -> bool:
+        return bool(self._d.get("buffer_enabled", True))
+
+    @property
+    def buffer_adaptive(self) -> bool:
+        return bool(self._d.get("buffer_adaptive", True))
+
+    @property
+    def buffer_profile(self) -> str:
+        profile = str(self._d.get("buffer_profile") or "balanced")
+        return profile if profile in ("conservative", "balanced", "aggressive", "custom") else "balanced"
+
+    @property
+    def buffer_readahead_mb(self) -> int:
+        try:
+            return max(0, int(self._d.get("buffer_readahead_mb", 12)))
+        except (ValueError, TypeError):
+            return 12
+
+    @property
+    def buffer_workers(self) -> int:
+        try:
+            return max(1, int(self._d.get("buffer_workers", 3)))
+        except (ValueError, TypeError):
+            return 3
+
+    @property
+    def buffer_cache_mb(self) -> int:
+        try:
+            return max(0, int(self._d.get("buffer_cache_mb", 48)))
+        except (ValueError, TypeError):
+            return 48
+
+    @property
+    def buffer_stall_timeout(self) -> int:
+        try:
+            return max(15, int(self._d.get("buffer_stall_timeout", 90)))
+        except (ValueError, TypeError):
+            return 90
+
     #----- Integers
     @property
     def subscription_group_id(self) -> int:
@@ -513,6 +563,25 @@ class SettingsManager:
         cred_keys = {"admin_username", "admin_password"}
         if any(old.get(k) != new.get(k) for k in cred_keys):
             results["admin_credentials"] = "updated — takes effect on next login"
+
+        #----- Streaming buffer changed: rebuild the policy and resize the cache
+        #----- in place so new streams use it without a restart.
+        buffer_keys = {
+            "buffer_enabled", "buffer_profile", "buffer_adaptive",
+            "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
+            "buffer_stall_timeout",
+        }
+        if any(old.get(k) != new.get(k) for k in buffer_keys):
+            try:
+                from Backend.helper.stream_buffer import refresh_policy
+                policy = refresh_policy()
+                results["buffer"] = (
+                    f"{policy.profile} — read-ahead {policy.readahead_mb:g} MiB, "
+                    f"{policy.workers} worker(s), cache {policy.cache_mb:g} MiB"
+                )
+            except Exception as exc:
+                LOGGER.error(f"SettingsManager reinit buffer: {exc}")
+                results["buffer"] = f"error: {exc}"
 
         #----- Global Search toggle changed (module reads current() live per call)
         if old.get("global_search") != new.get("global_search") and "global_search" not in results:

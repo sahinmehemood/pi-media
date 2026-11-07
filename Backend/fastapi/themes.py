@@ -1,13 +1,31 @@
-DEFAULT_THEME = "graphite_amber"
-DEFAULT_STYLE = "default"
+DEFAULT_THEME = "omarchy"
+DEFAULT_STYLE = "omarchy"
 
 STYLES = {
     "default": {"name": "Default"},
     "glassy": {"name": "Glassy"},
     "neo_brutal": {"name": "Neo Brutalism"},
+    "omarchy": {"name": "Omarchy"},
 }
 
 THEMES = {
+    #----- Flexoki dark: the palette Omarchy ships with. Warm paper on near
+    #----- black, one orange accent, no gradients, no glow.
+    "omarchy": {
+        "name": "Omarchy",
+        "is_dark": True,
+        "colors": {
+            "primary": "#DA702C",
+            "secondary": "#D0A215",
+            "accent": "#3AA99F",
+            "background": "#100F0F",
+            "card": "#1C1B1A",
+            "border": "#282726",
+            "text": "#CECDC3",
+            "text_secondary": "#878580"
+        },
+        "css_classes": "theme-omarchy"
+    },
     "graphite_amber": {
         "name": "Graphite Amber",
         "is_dark": True,

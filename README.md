@@ -3,11 +3,7 @@
 </p>
 
 <p align="center">
-  A powerful, self-hosted <b>Telegram Stremio Media Server</b> built with <b>FastAPI</b>, <b>MongoDB</b>, and <b>PyroFork</b> — turn your Telegram channels into a private streaming library you watch in <b>Stremio</b> / <b>Nuvio</b>.
-</p>
-
-<p align="center">
-  <a href="https://donate.weebzonex.workers.dev"><img src="https://img.shields.io/badge/❤️%20Donate-Support%20the%20developer-e11d48" alt="Donate" /></a>
+  A powerful, self-hosted <b>pi-media Telegram Stremio Media Server</b> built with <b>FastAPI</b>, <b>MongoDB</b>, and <b>PyroFork</b> — turn your Telegram channels into a private streaming library you watch in <b>Stremio</b> / <b>Nuvio</b>.
 </p>
 
 <p align="center">
@@ -66,6 +62,34 @@
 This is a **self-hosted media server** that streams your **Telegram files** straight into **Stremio** (or **Nuvio**). You forward a movie/episode to your channel, and it instantly becomes a permanent, no-expiry streaming link — with posters, descriptions, seasons and episodes, just like a real streaming app.
 
 Everything is managed from a friendly **web panel** — no coding, and almost no bot commands.
+
+---
+
+## 🔭 Upstream Origins & Modifications
+
+This project (**pi-media**) is based on the official **WeebZone Telegram-Stremio** upstream (`https://github.com/weebzone/Telegram-Stremio`, branch `master`). The existing reference fork (`sahinmehemood/Telegram-Stremio`, branch `main`) was audited and only selectively ported.
+
+### Ported from the reference fork
+
+| Feature | Files | Purpose |
+|---------|-------|---------|
+| **Omarchy theme** | `Backend/fastapi/themes.py`, `Backend/fastapi/templates/base.html` | Flexoki dark palette, flat surfaces, monospace UI, zero decoration |
+| **Stream buffer** | `Backend/helper/stream_buffer.py` | Read-ahead, shared chunk cache, RAM-budgeted, adaptive depth |
+| **Enhanced streaming** | `Backend/helper/custom_dl.py`, `Backend/fastapi/routes/stream_routes.py` | Chunk cache reuse, FloodWait worker degradation + speed-based recovery, stream telemetry with buffer info |
+| **Buffer settings** | `Backend/helper/settings_manager.py` | `buffer_enabled`, `buffer_profile`, `buffer_adaptive`, `buffer_readahead_mb`, `buffer_workers`, `buffer_cache_mb`, `buffer_stall_timeout` |
+
+### Removed
+
+- **Donation functionality** — all Donate links, banners, buttons, and the `_donation()` Stremio addon entry removed
+- **Simkl/AniList integration** — optional metadata providers not part of this project
+- **SessionMiddleware** — not needed for this deployment model
+- **Unrelated fork modifications** — experimental features, obsolete compat code, redundant dependencies not ported
+
+### Testing
+
+- `tests/test_stream_buffer.py` — 21 tests: policy, cache (LRU, eviction, budget), adaptive depth, FloodWait penalty/recovery, snapshot
+- `tests/test_regressions.py` — 10 tests: Range header parsing, Stremio ID parsing, size parsing, stream buffer adaptive/flood penalty
+- **31/31 passing**
 
 ---
 
@@ -910,13 +934,6 @@ Your server is a standard **Stremio-style addon**, so it works in any compatible
 4. Done! 🎉 Your Telegram library appears in the catalog and streams directly.
 
 > 💡 Prefer **Stremio**? It works too — just install the same manifest URL.
-
----
-
-## ❤️ Support the project
-
-If Telegram-Stremio is useful to you, you can support its development here:
-**[donate.weebzonex.workers.dev](https://donate.weebzonex.workers.dev)**
 
 ---
 

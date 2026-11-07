@@ -19,6 +19,17 @@ from Backend.helper.pyro import get_file_ids
 from Backend.logger import LOGGER
 from Backend.helper.bounded import BoundedDict
 from Backend.pyrofork.bot import client_avg_mbps, client_dc_map, client_failures, multi_clients, work_loads
+from Backend.helper.stream_buffer import (
+    METRICS as BUFFER_METRICS,
+    BufferPolicy,
+    cache_key,
+    chunk_index,
+    get_shared_cache,
+    note_flood_wait,
+    note_stall,
+    record_stream_speed,
+    stream_policy,
+)
 
 ACTIVE_STREAMS: Dict[str, Dict] = {}
 RECENT_STREAMS = deque(maxlen=20)
@@ -142,9 +153,19 @@ class ByteStreamer:
         chat_id: Optional[int] = None,
         message_id: Optional[int] = None,
         extra_clients: Optional[List] = None,
+        policy: Optional[BufferPolicy] = None,
     ):
         if not stream_id:
             stream_id = secrets.token_hex(8)
+
+        #----- Buffer policy is resolved once per stream: adaptive depth, worker
+        #----- count degraded by recent FloodWaits, and the shared chunk cache.
+        policy = policy or stream_policy()
+        cache = get_shared_cache() if (policy.enabled and policy.cache_bytes > 0) else None
+        if policy.enabled:
+            prefetch = policy.depth_chunks(chunk_size)
+            parallelism = policy.workers
+        stall_timeout = policy.stall_timeout if policy.enabled else 90.0
 
         now = time.time()
         registry_entry = {
@@ -163,6 +184,14 @@ class ByteStreamer:
             "status": "active",
             "part_count": part_count,
             "prefetch": prefetch,
+            "buffer": {
+                "enabled": policy.enabled,
+                "profile": policy.profile,
+                "depth_chunks": max(1, prefetch),
+                "workers": parallelism,
+                "cache_mb": policy.cache_mb,
+                "adaptive": policy.adaptive,
+            },
             "meta": meta or {},
         }
 
@@ -210,6 +239,17 @@ class ByteStreamer:
             slot = seq_idx % len(session_pool)
             c_idx, c_session, c_loc_box, c_refresh = session_pool[slot]
 
+            #----- Served straight from RAM when another stream already pulled
+            #----- this chunk (seek back, resume, or a second viewer).
+            #----- Key on the absolute chunk index: seq_idx is relative to this
+            #----- stream's start offset, so using it would alias mid-file starts
+            #----- onto chunk 0 and serve the wrong bytes.
+            key = cache_key(getattr(file_id, "media_id", None), chunk_size, chunk_index(off, chunk_size)) if cache is not None else None
+            if cache is not None and key is not None:
+                cached = cache.get(key)
+                if cached is not None:
+                    return seq_idx, cached
+
             tries = 0
             flood_tries = 0
             while tries < 3 and flood_tries < 5 and not stop_event.is_set():
@@ -227,6 +267,11 @@ class ByteStreamer:
                     if chunk_bytes == b"":
                         return seq_idx, None
 
+                    BUFFER_METRICS.incr("chunks_fetched")
+                    #----- Only full chunks go into the cache: a short read means
+                    #----- end-of-file and would poison later range requests.
+                    if cache is not None and key is not None and len(chunk_bytes) == chunk_size:
+                        cache.put(key, chunk_bytes)
                     return seq_idx, chunk_bytes
 
                 except asyncio.TimeoutError:
@@ -246,11 +291,13 @@ class ByteStreamer:
                         jitter = random.uniform(0.5, 2.0)
                         wait = required + jitter
                         flood_tries += 1
+                        note_flood_wait()
                         await asyncio.sleep(wait)
                     else:
                         tries += 1
                         backoff = min(0.5 * (2 ** (tries - 1)), 10.0)
                         await asyncio.sleep(backoff)
+            BUFFER_METRICS.incr("chunks_failed")
             return seq_idx, None
 
         async def producer():
@@ -369,9 +416,10 @@ class ByteStreamer:
                             pass
 
                     try:
-                        off_chunk = await asyncio.wait_for(q.get(), timeout=90.0)
+                        off_chunk = await asyncio.wait_for(q.get(), timeout=stall_timeout)
                     except asyncio.TimeoutError:
-                        LOGGER.error("Producer stall (90 s) for stream %s — aborting", stream_id)
+                        note_stall()
+                        LOGGER.error("Producer stall (%.0f s) for stream %s — aborting", stall_timeout, stream_id)
                         stop_event.set()
                         stream_entry["status"] = "error"
                         break
@@ -467,6 +515,9 @@ class ByteStreamer:
                         "parallelism": parallelism,
                         "chunk_size": chunk_size,
                     })
+
+                    if total_bytes > 0:
+                        record_stream_speed(avg_mbps)
 
                     prev = client_avg_mbps.get(client_index, 0.0)
                     if prev == 0.0:

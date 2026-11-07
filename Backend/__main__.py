@@ -3,6 +3,7 @@ import logging
 import secrets
 from traceback import format_exc
 
+from pyrogram.errors import FloodWait
 from pyrogram import idle
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -45,28 +46,42 @@ async def start_services():
         await db.reload_extra_databases(SettingsManager.current().extra_databases)
         await asyncio.sleep(0.5)
 
-        await StreamBot.start()
-        StreamBot.username = StreamBot.me.username
-        LOGGER.info(f"Bot Client : [@{StreamBot.username}]")
-        await asyncio.sleep(1.2)
+        #----- Telegram client startup with FloodWait retry
+        max_flood_retries = 5
+        flood_retry = 0
+        while flood_retry < max_flood_retries:
+            try:
+                await StreamBot.start()
+                StreamBot.username = StreamBot.me.username
+                LOGGER.info(f"Bot Client : [@{StreamBot.username}]")
+                await asyncio.sleep(1.2)
 
-        if botmod.Userbot is None:
-            stored_session = await get_active_session_string()
-            if stored_session:
-                botmod.build_userbot(stored_session)
-                LOGGER.info("Loaded Userbot session from encrypted storage.")
+                if botmod.Userbot is None:
+                    stored_session = await get_active_session_string()
+                    if stored_session:
+                        botmod.build_userbot(stored_session)
+                        LOGGER.info("Loaded Userbot session from encrypted storage.")
 
-        if botmod.Userbot is not None:
-            await botmod.Userbot.start()
-            botmod.Userbot.username = botmod.Userbot.me.username
-            LOGGER.info(f"Userbot Client : [@{botmod.Userbot.username}]")
+                if botmod.Userbot is not None:
+                    await botmod.Userbot.start()
+                    botmod.Userbot.username = botmod.Userbot.me.username
+                    LOGGER.info(f"Userbot Client : [@{botmod.Userbot.username}]")
+                else:
+                    LOGGER.info("Userbot not configured — running with StreamBot only.")
+                await asyncio.sleep(1.2)
+
+                LOGGER.info("Initializing Multi Clients...")
+                await initialize_clients()
+                await asyncio.sleep(2)
+                break  # Success, exit retry loop
+            except FloodWait as e:
+                flood_retry += 1
+                wait_time = getattr(e, "VALUE", 60) + 5
+                LOGGER.warning(f"FloodWait hit (attempt {flood_retry}/{max_flood_retries}): waiting {wait_time}s before retry")
+                await asyncio.sleep(wait_time)
         else:
-            LOGGER.info("Userbot not configured — running with StreamBot only.")
-        await asyncio.sleep(1.2)
-
-        LOGGER.info("Initializing Multi Clients...")
-        await initialize_clients()
-        await asyncio.sleep(2)
+            LOGGER.error("Max FloodWait retries exceeded. Aborting startup.")
+            return
 
         await setup_bot_commands(StreamBot)
         await asyncio.sleep(2)
