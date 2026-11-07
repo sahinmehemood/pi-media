@@ -192,6 +192,7 @@ def build_policy(data: Optional[Dict[str, Any]] = None) -> BufferPolicy:
         )
         cache_mb = _clamp_int(
             data.get("buffer_cache_mb"),
+            PROFILES[DEFAULT_PROFILE]["cache_mb"],
             0,
             MAX_CACHE_MB,
         )

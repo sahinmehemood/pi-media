@@ -178,6 +178,30 @@ class FloodWaitHandler:
             self._penalties[client_index],
         )
 
+    @staticmethod
+    def _parse_wait(error: Exception) -> Optional[float]:
+        """Extract wait seconds from any flood-style error.
+
+        Tries ``FloodWait.value`` first, then two regex fallbacks on the
+        string form.
+        """
+        value = getattr(error, "value", None)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+
+        err_str = str(error)
+        for pattern in (r"wait of (\d+) second", r"(\d+)\s*second"):
+            m = re.search(pattern, err_str, re.IGNORECASE)
+            if m:
+                try:
+                    return float(m.group(1))
+                except ValueError:
+                    continue
+        return None
+
 
 #----- Process-wide singleton: one handler for every client ----------------
 flood_handler = FloodWaitHandler()
