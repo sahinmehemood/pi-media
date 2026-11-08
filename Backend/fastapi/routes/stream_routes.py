@@ -25,6 +25,7 @@ from Backend.helper.virtual_dl import resolve_virtual_parts, virtual_stream_gene
 from Backend.helper.zip_stream import resolve_zip_entry
 from Backend.logger import LOGGER
 import Backend.pyrofork.bot as botmod
+from Backend.helper.stream_buffer import snapshot as buffer_snapshot
 from Backend.pyrofork.bot import (
     USERBOT_CLIENT_INDEX,
     client_dc_map,
@@ -722,6 +723,7 @@ async def get_stream_stats():
         "recent_streams": recent,
         "client_dc_map": client_dc_map,
         "work_loads": work_loads,
+        "buffer": buffer_snapshot(),
     })
 
 

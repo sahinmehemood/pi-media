@@ -38,8 +38,8 @@ async def start_services():
         app.add_middleware(
             SessionMiddleware,
             secret_key=SettingsManager.current().session_secret or secrets.token_hex(32),
-            session_cookie="session",
-            max_age=86400 * 30,
+            session_cookie="tg_stremio_session",
+            max_age=60 * 60 * 24 * 30,
             same_site="lax",
             https_only=False,
         )

@@ -64,6 +64,7 @@ from Backend.helper.session_auth import (
     submit_password,
 )
 from Backend.helper.settings_manager import SettingsManager
+from Backend.helper.stream_buffer import snapshot as buffer_snapshot
 from Backend.helper.split_files import strip_part_suffix
 from Backend.helper.subtitles import (
     list_languages,
@@ -577,7 +578,8 @@ async def get_admin_stats_api() -> dict:
     return {
         "cache_size": cache_size,
         "total_bots": len(multi_clients),
-        "bot_workloads": bot_stats
+        "bot_workloads": bot_stats,
+        "buffer": buffer_snapshot(),
     }
 
 
@@ -1787,7 +1789,7 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["session_secret"]
 
     #----- Type coercion and validation
-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
+    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
     for key in bool_keys:
         if key in payload:
             payload[key] = bool(payload[key])
