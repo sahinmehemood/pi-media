@@ -23,15 +23,8 @@ templates.env.globals["cover_url"] = resolve_cover_url
 
 #----- Shared template context (request, theme metadata) for every page
 def _base_context(request: Request) -> dict:
-    #----- Stale session cookies can hold an old theme/style that no longer
-    #----- exists in the registry. Validate against current registry so the
-    #----- default always wins.
-    theme_name = request.session.get("theme")
-    if theme_name not in get_all_themes():
-        theme_name = DEFAULT_THEME
-    style_name = request.session.get("style")
-    if style_name not in get_all_styles():
-        style_name = DEFAULT_STYLE
+    theme_name = request.session.get("theme", DEFAULT_THEME)
+    style_name = request.session.get("style", DEFAULT_STYLE)
     return {
         "request": request,
         "theme": get_theme(theme_name, style_name),

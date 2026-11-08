@@ -5,7 +5,6 @@ from datetime import datetime
 import httpx
 
 from Backend import db
-from Backend.config import Telegram
 from Backend.helper.metadata import get_tmdb_client, tmdb_api_key
 from Backend.helper.settings_manager import SettingsManager
 from Backend.pyrofork.bot import (
@@ -96,34 +95,13 @@ async def _check_base_url() -> dict:
     if not base:
         return {"key": "base_url", "label": "Base URL", "status": "not_configured",
                 "message": "Base URL not set — Stremio can't reach your streams."}
-    local_url = f"http://127.0.0.1:{Telegram.PORT}/status"
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(local_url)
-            resp.raise_for_status()
-
-        data = resp.json()
-        if data.get("status") != "ok":
-            raise RuntimeError("Local status endpoint returned an unexpected response.")
-
-        return {
-            "key": "base_url",
-            "label": "Base URL",
-            "status": "ok",
-            "message": (
-                f"Local application healthy (HTTP {resp.status_code}). "
-                "External HTTPS reachability is not independently verified here."
-            ),
-            "url": base,
-        }
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            resp = await client.get(base)
+        return {"key": "base_url", "label": "Base URL", "status": "ok",
+                "message": f"Reachable (HTTP {resp.status_code}).", "url": base}
     except Exception as e:
-        return {
-            "key": "base_url",
-            "label": "Base URL",
-            "status": "error",
-            "message": f"Local application health check failed: {str(e)[:110]}",
-            "url": base,
-        }
+        return {"key": "base_url", "label": "Base URL", "status": "error", "message": str(e)[:140], "url": base}
 
 
 async def run_health_checks(force: bool = False) -> dict:
