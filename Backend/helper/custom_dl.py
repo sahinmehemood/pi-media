@@ -714,6 +714,12 @@ async def _speed_test_single_client(
                     chunk = getattr(r, "bytes", None)
                     if not chunk:
                         eof_reached = True
+                        #----- Drain remaining queued items so queue.join()
+                        #----- below can complete; otherwise orphaned items
+                        #----- never get task_done() and the join blocks forever.
+                        while not queue.empty():
+                            queue.get_nowait()
+                            queue.task_done()
                         continue
                     bytes_got = len(chunk)
                     total_bytes += bytes_got

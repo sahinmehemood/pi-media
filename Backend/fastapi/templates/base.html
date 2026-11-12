@@ -629,44 +629,73 @@ textarea:-webkit-autofill {
 #mobile-menu { will-change: max-height, opacity; }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   Mobile density layer (test-3)
-   Phones get a compact, deliberately-designed layout: shorter chrome,
-   tighter spacing, smaller radii and headings. Everything is scoped to
+   Mobile density layer (test-5)
+   Compact phone layout with design tokens. Everything is scoped to
    <=640px so desktop/Tailwind defaults are untouched.
    ───────────────────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
+    /* ── Design tokens: change once, applies everywhere ───────────────── */
+    :root {
+        --mb-chrome-pad: 4.25rem;
+        --mb-nav-pad-y: 0.5rem;
+        --mb-nav-pad-x: 0.7rem;
+        --mb-nav-height: 2.5rem;
+        --mb-btn-size: 2rem;
+        --mb-menu-pad: 0.5rem;
+        --mb-menu-link-pad-y: 0.5rem;
+        --mb-menu-link-pad-x: 0.7rem;
+        --mb-card-pad: 1rem;
+        --mb-field-pad: 0.75rem;
+        --mb-headline-h1: 1.35rem;
+        --mb-headline-h2: 1.1rem;
+        --mb-headline-h3: 0.95rem;
+        --mb-card-radius: 0.9rem;
+        --mb-btn-pad-y: 0.4rem;
+        --mb-btn-pad-x: 0.7rem;
+        --mb-table-font: 0.7rem;
+        --mb-main-pad-y: 0.75rem;
+        --mb-main-pad-x: 0.9rem;
+        --mb-main-mt: 0.6rem;
+        --mb-footer-pad-y: 1rem;
+        --mb-footer-pad-x: 0.9rem;
+    }
+
     /* page chrome */
-    body { padding-top: 4.25rem !important; }
+    body { padding-top: var(--mb-chrome-pad) !important; }
     html.style-omarchy body { padding-top: calc(var(--om-bar) + 3.25rem) !important; }
-    main { margin-top: .75rem !important; }
-    #navbar { top: .5rem !important; padding: .45rem .7rem !important; }
-    html.style-omarchy #navbar { top: var(--om-bar) !important; padding: .4rem .6rem !important; }
+    main { margin-top: var(--mb-main-mt) !important; padding: var(--mb-main-pad-y) var(--mb-main-pad-x) !important; }
+    #navbar { top: 0.4rem !important; padding: var(--mb-nav-pad-y) var(--mb-nav-pad-x) !important; height: var(--mb-nav-height) !important; }
+    html.style-omarchy #navbar { top: var(--om-bar) !important; padding: 0.4rem 0.6rem !important; }
     #navbar a .text-lg { font-size: 1rem !important; }
-    #menu-btn, #user-btn { width: 2.25rem !important; height: 2.25rem !important; }
-    #mobile-menu > .glass-panel { padding: .6rem !important; }
-    #mobile-menu a { padding: .55rem .75rem !important; }
+    #menu-btn, #user-btn { width: var(--mb-btn-size) !important; height: var(--mb-btn-size) !important; font-size: 0.9rem !important; }
+    #mobile-menu > .glass-panel { padding: var(--mb-menu-pad) !important; margin: var(--mb-menu-pad) !important; }
+    #mobile-menu a { padding: var(--mb-menu-link-pad-y) var(--mb-menu-link-pad-x) !important; font-size: 0.85rem !important; }
+    #mobile-menu > .glass-panel { border-radius: var(--mb-card-radius) !important; }
 
     /* headings & typography */
-    main h1 { font-size: 1.4rem !important; }
-    main h2 { font-size: 1.15rem !important; }
-    main h3 { font-size: 1rem !important; }
+    main h1 { font-size: var(--mb-headline-h1) !important; line-height: 1.3 !important; }
+    main h2 { font-size: var(--mb-headline-h2) !important; line-height: 1.35 !important; }
+    main h3 { font-size: var(--mb-headline-h3) !important; line-height: 1.4 !important; }
 
     /* card & panel density */
-    main .p-8 { padding: 1.1rem !important; }
-    main .p-6 { padding: .9rem !important; }
-    main .p-5 { padding: .75rem !important; }
-    main .gap-8 { gap: .9rem !important; }
-    main .space-y-8 > * + * { margin-top: .9rem !important; }
-    .glass-panel, .surface-card { border-radius: 1rem !important; }
+    main .p-8, main .p-6, main .p-5 { padding: var(--mb-card-pad) !important; }
+    main .gap-8 { gap: 0.75rem !important; }
+    main .space-y-8 > * + * { margin-top: 0.75rem !important; }
+    .glass-panel, .surface-card { border-radius: var(--mb-card-radius) !important; }
     main .rounded-\[2rem\],
     main .rounded-\[2\.5rem\],
-    main .rounded-3xl { border-radius: .9rem !important; }
+    main .rounded-3xl { border-radius: var(--mb-card-radius) !important; }
 
     /* controls */
-    .btn-primary, .btn-ghost { padding: .45rem .8rem !important; }
+    .btn-primary, .btn-ghost { padding: var(--mb-btn-pad-y) var(--mb-btn-pad-x) !important; font-size: 0.85rem !important; border-radius: 0.8rem !important; }
+    .field { padding: var(--mb-field-pad) !important; font-size: 0.85rem !important; }
 
     /* tables */
-    main table { font-size: .72rem; }
+    main table { font-size: var(--mb-table-font) !important; }
+
+    /* footer */
+    footer { padding: var(--mb-footer-pad-y) var(--mb-footer-pad-x) !important; }
+    footer .glass-panel { padding: 1rem 1.2rem !important; }
 }
 </style>
 
