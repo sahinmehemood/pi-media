@@ -630,99 +630,95 @@ textarea:-webkit-autofill {
 
 /* ─────────────────────────────────────────────────────────────────────────
    Mobile density layer (test-5)
-   Compact phone layout with design tokens. Everything is scoped to
-   <=640px so desktop/Tailwind defaults are untouched.
+   Compact Omarchy phone layout. Sharp corners, monospace type, tight
+   spacing. Everything scoped to <=640px so desktop/Tailwind defaults
+   are untouched.
    ───────────────────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
-    /* ── Design tokens: tight, phone-friendly values ───────────────── */
+    /* ── Design tokens: single source of truth for mobile scale ── */
     :root {
-        --mb-chrome-pad: 3rem;
-        --mb-nav-pad-y: 0.35rem;
+        --mb-nav-height: 1.8rem;
+        --mb-nav-pad-y: 0.3rem;
         --mb-nav-pad-x: 0.5rem;
-        --mb-nav-height: 2rem;
-        --mb-btn-size: 1.75rem;
-        --mb-menu-pad: 0.4rem;
-        --mb-menu-link-pad-y: 0.45rem;
-        --mb-menu-link-pad-x: 0.6rem;
-        --mb-card-pad: 0.75rem;
-        --mb-field-pad: 0.55rem;
-        --mb-headline-h1: 1.15rem;
-        --mb-headline-h2: 1rem;
-        --mb-headline-h3: 0.9rem;
-        --mb-card-radius: 0.6rem;
-        --mb-btn-pad-y: 0.3rem;
-        --mb-btn-pad-x: 0.6rem;
-        --mb-table-font: 0.68rem;
-        --mb-main-pad-y: 0.5rem;
-        --mb-main-pad-x: 0.75rem;
-        --mb-main-mt: 0.4rem;
-        --mb-footer-pad-y: 0.75rem;
-        --mb-footer-pad-x: 0.75rem;
+        --mb-btn-size: 1.6rem;
+        --mb-card-pad: 0.55rem;
+        --mb-field-pad: 0.45rem;
+        --mb-h1: 1rem;
+        --mb-h2: 0.9rem;
+        --mb-h3: 0.85rem;
+        --mb-text-sm: 0.8rem;
+        --mb-text-xs: 0.75rem;
+        --mb-btn-pad-y: 0.25rem;
+        --mb-btn-pad-x: 0.55rem;
+        --mb-main-pad-y: 0.4rem;
+        --mb-main-pad-x: 0.65rem;
+        --mb-main-mt: 0.3rem;
+        --mb-footer-pad-y: 0.6rem;
+        --mb-footer-pad-x: 0.65rem;
     }
 
-    /* page chrome — shorter navbar, tighter body padding */
-    body { padding-top: var(--mb-chrome-pad) !important; }
-    html.style-omarchy body { padding-top: calc(var(--om-bar) + 2.5rem) !important; }
+    /* ── Page chrome ── */
+    body { padding-top: 2.8rem !important; }
+    html.style-omarchy body { padding-top: calc(var(--om-bar) + 2rem) !important; }
     main { margin-top: var(--mb-main-mt) !important; padding: var(--mb-main-pad-y) var(--mb-main-pad-x) !important; }
-    #navbar { top: 0.3rem !important; padding: var(--mb-nav-pad-y) var(--mb-nav-pad-x) !important; height: var(--mb-nav-height) !important; }
-    html.style-omarchy #navbar { top: var(--om-bar) !important; padding: 0.3rem 0.5rem !important; }
-    #navbar a .text-lg { font-size: 0.95rem !important; }
-    #menu-btn, #user-btn { width: var(--mb-btn-size) !important; height: var(--mb-btn-size) !important; font-size: 0.8rem !important; }
-    #mobile-menu > .glass-panel { padding: var(--mb-menu-pad) !important; margin: var(--mb-menu-pad) !important; }
-    #mobile-menu a { padding: var(--mb-menu-link-pad-y) var(--mb-menu-link-pad-x) !important; font-size: 0.8rem !important; }
-    #mobile-menu > .glass-panel { border-radius: var(--mb-card-radius) !important; }
+    #navbar { top: 0.25rem !important; padding: var(--mb-nav-pad-y) var(--mb-nav-pad-x) !important; height: var(--mb-nav-height) !important; }
+    html.style-omarchy #navbar { top: var(--om-bar) !important; padding: 0.2rem 0.5rem !important; }
+    #navbar a .text-lg { font-size: 0.9rem !important; }
+    #menu-btn, #user-btn { width: var(--mb-btn-size) !important; height: var(--mb-btn-size) !important; font-size: 0.75rem !important; }
+    #mobile-menu { top: var(--mb-nav-height) !important; }
+    #mobile-menu > .glass-panel { padding: var(--mb-card-pad) !important; margin: var(--mb-card-pad) 0 !important; border-radius: 0 !important; }
+    #mobile-menu a { padding: 0.4rem 0.55rem !important; font-size: 0.78rem !important; }
 
-    /* headings & typography — smaller, tighter line height */
-    main h1 { font-size: var(--mb-headline-h1) !important; line-height: 1.25 !important; margin-bottom: 0.75rem !important; }
-    main h2 { font-size: var(--mb-headline-h2) !important; line-height: 1.3 !important; margin-bottom: 0.65rem !important; }
-    main h3 { font-size: var(--mb-headline-h3) !important; line-height: 1.35 !important; margin-bottom: 0.6rem !important; }
+    /* ── Typography — sharp, monospace, tight ── */
+    main h1 { font-size: var(--mb-h1) !important; line-height: 1.2 !important; margin-bottom: 0.6rem !important; }
+    main h2 { font-size: var(--mb-h2) !important; line-height: 1.25 !important; margin-bottom: 0.5rem !important; }
+    main h3 { font-size: var(--mb-h3) !important; line-height: 1.3 !important; margin-bottom: 0.5rem !important; }
+    main p, main span, main div, main td, main th { font-size: var(--mb-text-sm) !important; }
+    main div[class*="text-4xl"],
+    main div[class*="text-5xl"],
+    main div[class*="text-6xl"] { font-size: 1.25rem !important; line-height: 1.15 !important; }
+    main div[class*="text-sm"][class*="text-text-secondary"] { font-size: var(--mb-text-xs) !important; }
 
-    /* card & panel density — much tighter */
+    /* ── Cards & panels — sharp Omarchy corners, compact ── */
     main .p-8, main .p-6, main .p-5 { padding: var(--mb-card-pad) !important; }
-    main .gap-8 { gap: 0.6rem !important; }
-    main .space-y-8 > * + * { margin-top: 0.6rem !important; }
-    /* card & panel density — sharp Omarchy corners, not curvy */
-    main .p-8, main .p-6, main .p-5 { padding: var(--mb-card-pad) !important; }
-    main .gap-8 { gap: 0.6rem !important; }
-    main .space-y-8 > * + * { margin-top: 0.6rem !important; }
-    /* Sharp Omarchy corners — no border-radius rounding */
-    .glass-panel, .surface-card { border-radius: 0 !important; }
+    .glass-panel, .surface-card { border-radius: 0 !important; padding: var(--mb-card-pad) !important; box-shadow: none !important; }
     main .rounded-\[2rem\],
     main .rounded-\[2\.5rem\],
-    main .rounded-3xl { border-radius: 0 !important; }
-    .glass-panel, .surface-card { padding: var(--mb-card-pad) !important; }
-
-    /* controls — smaller buttons and inputs, sharp Omarchy corners */
-    .btn-primary, .btn-ghost { padding: var(--mb-btn-pad-y) var(--mb-btn-pad-x) !important; font-size: 0.8rem !important; border-radius: 0 !important; }
-    .field { padding: var(--mb-field-pad) !important; font-size: 0.8rem !important; border-radius: 0 !important; }
-
-    /* tables — smaller text */
-    main table { font-size: var(--mb-table-font) !important; }
-
-    /* footer — tighter */
-    footer { padding: var(--mb-footer-pad-y) var(--mb-footer-pad-x) !important; }
-    footer .glass-panel { padding: 0.75rem 1rem !important; }
-
-    /* stat cards / metric boxes — compact height */
+    main .rounded-3xl,
+    .rounded-full { border-radius: 0 !important; }
+    main .gap-8 { gap: 0.5rem !important; }
+    main .space-y-8 > * + * { margin-top: 0.5rem !important; }
     main [class*="bg-"] > div,
     main div[class*="rounded-3xl"] > div,
     main .glass-panel > div,
-    main .surface-card > div {
-        padding: 0.65rem var(--mb-card-pad) !important;
-    }
-    main div[class*="text-4xl"],
-    main div[class*="text-5xl"],
-    main div[class*="text-6xl"] { font-size: 1.5rem !important; line-height: 1.2 !important; }
-    main div[class*="text-sm"][class*="text-text-secondary"] { font-size: 0.72rem !important; }
+    main .surface-card > div { padding: 0.5rem var(--mb-card-pad) !important; }
 
-    /* large action buttons — not full-height */
+    /* ── Controls — sharp, small ── */
+    .btn-primary, .btn-ghost { padding: var(--mb-btn-pad-y) var(--mb-btn-pad-x) !important; font-size: 0.78rem !important; border-radius: 0 !important; box-shadow: none !important; }
+    .btn-primary:hover { filter: none !important; transform: none !important; }
+    .btn-primary:active { transform: none !important; }
+    .field { padding: var(--mb-field-pad) !important; font-size: 0.78rem !important; border-radius: 0 !important; }
+    .badge { font-size: 0.65rem !important; padding: 0.2rem 0.5rem !important; border-radius: 0 !important; }
+
+    /* ── Tables ── */
+    main table { font-size: var(--mb-table-font) !important; }
+    main th, main td { padding: 0.4rem 0.55rem !important; }
+
+    /* ── Footer ── */
+    footer { padding: var(--mb-footer-pad-y) var(--mb-footer-pad-x) !important; }
+    footer .glass-panel { padding: 0.5rem 0.7rem !important; border-radius: 0 !important; }
+
+    /* ── Large action buttons — still compact ── */
     main .btn-primary,
     main button[class*="bg-primary"],
     main a[class*="bg-primary"] {
-        padding: 0.5rem 1rem !important;
-        font-size: 0.85rem !important;
-        border-radius: 0.6rem !important;
+        padding: 0.4rem 0.8rem !important;
+        font-size: 0.8rem !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
     }
+    main .btn-primary:hover { filter: none !important; }
+    main .btn-primary:active { transform: none !important; }
 }
 </style>
 
