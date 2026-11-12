@@ -637,78 +637,78 @@ textarea:-webkit-autofill {
 @media (max-width: 640px) {
     /* ── Design tokens: single source of truth for mobile scale ── */
     :root {
-        --mb-nav-height: 2.2rem;
-        --mb-nav-pad-y: 0.4rem;
-        --mb-nav-pad-x: 0.65rem;
-        --mb-btn-size: 1.85rem;
-        --mb-card-pad: 0.7rem;
-        --mb-field-pad: 0.5rem;
-        --mb-h1: 1.15rem;
-        --mb-h2: 1rem;
-        --mb-h3: 0.9rem;
-        --mb-text-sm: 0.82rem;
-        --mb-text-xs: 0.76rem;
-        --mb-btn-pad-y: 0.32rem;
-        --mb-btn-pad-x: 0.7rem;
-        --mb-main-pad-y: 0.5rem;
-        --mb-main-pad-x: 0.7rem;
-        --mb-main-mt: 0.4rem;
-        --mb-footer-pad-y: 0.75rem;
-        --mb-footer-pad-x: 0.7rem;
+        --mb-nav-height: 2.4rem;
+        --mb-nav-pad-y: 0.45rem;
+        --mb-nav-pad-x: 0.7rem;
+        --mb-btn-size: 2rem;
+        --mb-card-pad: 0.8rem;
+        --mb-field-pad: 0.55rem;
+        --mb-h1: 1.25rem;
+        --mb-h2: 1.1rem;
+        --mb-h3: 1rem;
+        --mb-text-sm: 0.85rem;
+        --mb-text-xs: 0.8rem;
+        --mb-btn-pad-y: 0.35rem;
+        --mb-btn-pad-x: 0.8rem;
+        --mb-main-pad-y: 0.6rem;
+        --mb-main-pad-x: 0.8rem;
+        --mb-main-mt: 0.5rem;
+        --mb-footer-pad-y: 0.8rem;
+        --mb-footer-pad-x: 0.8rem;
     }
 
     /* ── Page chrome ── */
-    body { padding-top: 3rem !important; }
-    html.style-omarchy body { padding-top: calc(var(--om-bar) + 2.2rem) !important; }
+    body { padding-top: 3.2rem !important; }
+    html.style-omarchy body { padding-top: calc(var(--om-bar) + 2.4rem) !important; }
     main { margin-top: var(--mb-main-mt) !important; padding: var(--mb-main-pad-y) var(--mb-main-pad-x) !important; }
-    #navbar { top: 0.35rem !important; padding: var(--mb-nav-pad-y) var(--mb-nav-pad-x) !important; height: var(--mb-nav-height) !important; }
-    html.style-omarchy #navbar { top: var(--om-bar) !important; padding: 0.3rem 0.6rem !important; }
-    #navbar a .text-lg { font-size: 0.95rem !important; }
-    #menu-btn, #user-btn { width: var(--mb-btn-size) !important; height: var(--mb-btn-size) !important; font-size: 0.8rem !important; }
+    #navbar { top: 0.4rem !important; padding: var(--mb-nav-pad-y) var(--mb-nav-pad-x) !important; height: var(--mb-nav-height) !important; }
+    html.style-omarchy #navbar { top: var(--om-bar) !important; padding: 0.35rem 0.65rem !important; }
+    #navbar a .text-lg { font-size: 1rem !important; }
+    #menu-btn, #user-btn { width: var(--mb-btn-size) !important; height: var(--mb-btn-size) !important; font-size: 0.85rem !important; }
     #mobile-menu { top: var(--mb-nav-height) !important; }
     #mobile-menu > .glass-panel { padding: var(--mb-card-pad) !important; margin: var(--mb-card-pad) 0 !important; }
-    #mobile-menu a { padding: 0.45rem 0.6rem !important; font-size: 0.8rem !important; }
+    #mobile-menu a { padding: 0.5rem 0.65rem !important; font-size: 0.85rem !important; }
 
-    /* ── Typography — sharp, monospace, readable ── */
-    main h1 { font-size: var(--mb-h1) !important; line-height: 1.25 !important; margin-bottom: 0.7rem !important; }
-    main h2 { font-size: var(--mb-h2) !important; line-height: 1.3 !important; margin-bottom: 0.55rem !important; }
-    main h3 { font-size: var(--mb-h3) !important; line-height: 1.35 !important; margin-bottom: 0.5rem !important; }
+    /* ── Typography ── */
+    main h1 { font-size: var(--mb-h1) !important; line-height: 1.3 !important; margin-bottom: 0.8rem !important; }
+    main h2 { font-size: var(--mb-h2) !important; line-height: 1.35 !important; margin-bottom: 0.6rem !important; }
+    main h3 { font-size: var(--mb-h3) !important; line-height: 1.4 !important; margin-bottom: 0.55rem !important; }
     main p, main span, main div, main td, main th { font-size: var(--mb-text-sm) !important; }
     main div[class*="text-4xl"],
     main div[class*="text-5xl"],
-    main div[class*="text-6xl"] { font-size: 1.35rem !important; line-height: 1.18 !important; }
+    main div[class*="text-6xl"] { font-size: 1.4rem !important; line-height: 1.2 !important; }
     main div[class*="text-sm"][class*="text-text-secondary"] { font-size: var(--mb-text-xs) !important; }
 
-    /* ── Cards & panels — sharp Omarchy corners ── */
+    /* ── Cards & panels ── */
     main .p-8, main .p-6, main .p-5 { padding: var(--mb-card-pad) !important; }
-    main .gap-8 { gap: 0.55rem !important; }
-    main .space-y-8 > * + * { margin-top: 0.55rem !important; }
+    main .gap-8 { gap: 0.6rem !important; }
+    main .space-y-8 > * + * { margin-top: 0.6rem !important; }
     main [class*="bg-"] > div,
     main div[class*="rounded-3xl"] > div,
     main .glass-panel > div,
-    main .surface-card > div { padding: 0.6rem var(--mb-card-pad) !important; }
+    main .surface-card > div { padding: 0.65rem var(--mb-card-pad) !important; }
 
-    /* ── Controls — sharp, readable ── */
-    .btn-primary, .btn-ghost { padding: var(--mb-btn-pad-y) var(--mb-btn-pad-x) !important; font-size: 0.8rem !important; box-shadow: none !important; }
+    /* ── Controls ── */
+    .btn-primary, .btn-ghost { padding: var(--mb-btn-pad-y) var(--mb-btn-pad-x) !important; font-size: 0.82rem !important; box-shadow: none !important; }
     .btn-primary:hover { filter: none !important; transform: none !important; }
     .btn-primary:active { transform: none !important; }
-    .field { padding: var(--mb-field-pad) !important; font-size: 0.78rem !important; }
-    .badge { font-size: 0.68rem !important; padding: 0.22rem 0.5rem !important; }
+    .field { padding: var(--mb-field-pad) !important; font-size: 0.8rem !important; }
+    .badge { font-size: 0.7rem !important; padding: 0.25rem 0.55rem !important; }
 
     /* ── Tables ── */
-    main table { font-size: var(--mb-table-font) !important; }
-    main th, main td { padding: 0.42rem 0.55rem !important; }
+    main table { font-size: 0.82rem !important; }
+    main th, main td { padding: 0.45rem 0.6rem !important; }
 
     /* ── Footer ── */
     footer { padding: var(--mb-footer-pad-y) var(--mb-footer-pad-x) !important; }
-    footer .glass-panel { padding: 0.6rem 0.75rem !important; }
+    footer .glass-panel { padding: 0.65rem 0.8rem !important; }
 
-    /* ── Large action buttons — compact ── */
+    /* ── Large action buttons ── */
     main .btn-primary,
     main button[class*="bg-primary"],
     main a[class*="bg-primary"] {
-        padding: 0.42rem 0.85rem !important;
-        font-size: 0.82rem !important;
+        padding: 0.45rem 0.9rem !important;
+        font-size: 0.85rem !important;
     }
     main .btn-primary:hover { filter: none !important; }
     main .btn-primary:active { transform: none !important; }
