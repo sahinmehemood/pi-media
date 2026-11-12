@@ -79,7 +79,7 @@ def _reset():
 
 
 def _flood(value=5):
-    return type("FloodWait", (Exception,), {"value": value})(f"wait of {value} seconds")
+    return fw.FloodWait(value, f"wait of {value} seconds")
 
 
 def _run_handle(err, client):
@@ -193,3 +193,71 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+#----- max_wait cap (added in test-3) ----------------------------------------
+
+def test_handle_aborts_when_wait_exceeds_max_wait():
+    _reset()
+    decision = _run_handle(_flood(3600), PRIMARY_CLIENT)
+    assert decision.abort is True
+    assert decision.wait_seconds == 0.0
+    assert "max_wait" in decision.reason
+
+
+def test_max_wait_is_configurable():
+    _reset()
+    h = fw.FloodWaitHandler(max_wait=1.0)
+    d = asyncio.run(h.handle(_flood(30), PRIMARY_CLIENT))
+    assert d.abort is True
+
+
+#----- run_with_flood_retry helper (added in test-3) --------------------------
+
+def test_retry_helper_returns_result_and_records_success():
+    _reset()
+    calls = {"n": 0}
+
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _flood(5)
+        return "ok"
+
+    out = asyncio.run(fw.run_with_flood_retry(PRIMARY_CLIENT, flaky, what="test"))
+    assert out == "ok"
+    assert calls["n"] == 2
+    assert handler.penalty(PRIMARY_CLIENT) == 0  # success decayed the penalty
+
+
+def test_retry_helper_aborts_after_max_attempts():
+    _reset()
+
+    async def always_floods():
+        raise _flood(5)
+
+    try:
+        asyncio.run(fw.run_with_flood_retry(PRIMARY_CLIENT, always_floods, attempts=3, what="test"))
+        raised = False
+    except Exception as e:
+        raised = True
+        assert type(e).__name__ == "FloodWait"
+    assert raised is True
+    assert handler._flood_counts[PRIMARY_CLIENT] == 3
+
+
+def test_retry_helper_propagates_non_flood_errors_immediately():
+    _reset()
+    calls = {"n": 0}
+
+    async def bad():
+        calls["n"] += 1
+        raise ValueError("boom")
+
+    try:
+        asyncio.run(fw.run_with_flood_retry(PRIMARY_CLIENT, bad, what="test"))
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised is True
+    assert calls["n"] == 1  # no retry on non-flood errors

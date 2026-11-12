@@ -18,7 +18,7 @@ from pyrogram.enums import ParseMode
 from Backend.logger import LOGGER
 import Backend.pyrofork.bot as botmod
 from Backend.pyrofork.bot import StreamBot
-from Backend.helper.flood_wait import flood_handler, PRIMARY_CLIENT
+from Backend.helper.flood_wait import run_with_flood_retry
 
 DELETE_BATCH_SIZE = 10
 _FALLBACK_WORTHY = (
@@ -47,20 +47,17 @@ async def _resolve_peer(client, chat_id) -> bool:
 
 async def edit_message(chat_id: int, msg_id: int, new_caption: str):
     try:
-        await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
+        await run_with_flood_retry(
+            StreamBot, StreamBot.edit_message_caption,
+            chat_id=chat_id, message_id=msg_id, caption=new_caption,
+            parse_mode=ParseMode.HTML,
+            what=f"edit message {msg_id} in {chat_id}",
+        )
         await sleep(2)
         return
     except FloodWait as e:
-        decision = await flood_handler.handle(e, StreamBot)
-        if decision.abort:
-            LOGGER.error(f"FloodWait aborted while editing message {msg_id} in {chat_id}: {decision.reason}")
-            return
-        await sleep(decision.wait_seconds)
-        try:
-            await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
-            return
-        except Exception as e2:
-            LOGGER.error(f"Retry after FloodWait failed while editing {msg_id} in {chat_id}: {e2}")
+        LOGGER.error(f"FloodWait aborted while editing message {msg_id} in {chat_id}: {e}")
+        return
     except PeerIdInvalid as e:
         if await _resolve_peer(StreamBot, chat_id):
             try:
@@ -86,18 +83,15 @@ async def edit_message(chat_id: int, msg_id: int, new_caption: str):
 async def _userbot_edit(chat_id: int, msg_id: int, new_caption: str):
     global _userbot_session_dead
     try:
-        await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
+        await run_with_flood_retry(
+            botmod.Userbot, botmod.Userbot.edit_message_caption,
+            chat_id=chat_id, message_id=msg_id, caption=new_caption,
+            parse_mode=ParseMode.HTML,
+            what=f"[USERBOT] edit {msg_id} in {chat_id}",
+        )
         await sleep(2)
     except FloodWait as e:
-        decision = await flood_handler.handle(e, botmod.Userbot)
-        if decision.abort:
-            LOGGER.error(f"[USERBOT] FloodWait aborted (edit {msg_id} in {chat_id}): {decision.reason}")
-            return
-        await sleep(decision.wait_seconds)
-        try:
-            await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
-        except Exception as e2:
-            LOGGER.error(f"[USERBOT] Retry after FloodWait failed while editing {msg_id} in {chat_id}: {e2}")
+        LOGGER.error(f"[USERBOT] FloodWait aborted (edit {msg_id} in {chat_id}): {e}")
     except PeerIdInvalid as e:
         if await _resolve_peer(botmod.Userbot, chat_id):
             try:
@@ -144,22 +138,16 @@ async def delete_messages_batch(chat_id: int, msg_ids: List[int]):
 async def _delete_chunk(client, client_label: str, chat_id: int, msg_ids: List[int]) -> List[int]:
     global _userbot_session_dead
     try:
-        await client.delete_messages(chat_id=chat_id, message_ids=msg_ids)
+        await run_with_flood_retry(
+            client, client.delete_messages,
+            chat_id=chat_id, message_ids=msg_ids,
+            what=f"[{client_label.upper()}] delete {len(msg_ids)} msg(s) in {chat_id}",
+        )
         LOGGER.info(f"[{client_label.upper()}] Deleted {len(msg_ids)} message(s) in {chat_id}")
         return []
     except FloodWait as e:
-        decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
-        if decision.abort:
-            LOGGER.error(f"[{client_label.upper()}] FloodWait aborted ({len(msg_ids)} msg(s) in {chat_id}): {decision.reason}")
-            return msg_ids
-        await sleep(decision.wait_seconds)
-        try:
-            await client.delete_messages(chat_id=chat_id, message_ids=msg_ids)
-            LOGGER.info(f"[{client_label.upper()}] Deleted {len(msg_ids)} message(s) in {chat_id} after FloodWait retry")
-            return []
-        except Exception as e2:
-            LOGGER.error(f"[{client_label.upper()}] Retry after FloodWait failed in {chat_id}: {e2}")
-            return msg_ids
+        LOGGER.error(f"[{client_label.upper()}] FloodWait aborted ({len(msg_ids)} msg(s) in {chat_id}): {e}")
+        return msg_ids
     except PeerIdInvalid as e:
         if await _resolve_peer(client, chat_id):
             try:

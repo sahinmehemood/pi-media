@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response as PlainResponse
 from fastapi.responses import StreamingResponse
+from pyrogram.errors import FloodWait
 
 from Backend import db
 from Backend.fastapi.security.tokens import verify_token
@@ -18,6 +19,7 @@ from Backend.helper.bounded import BoundedDict
 from Backend.helper.analytics import client_ip_from, record_stream_start
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
 from Backend.helper.encrypt import decode_string
+from Backend.helper.flood_wait import flood_handler
 from Backend.helper.pyro import get_thumb_download_target
 from Backend.helper.settings_manager import SettingsManager
 from Backend.helper.utils import track_usage
@@ -221,6 +223,14 @@ async def thumb_handler(id: str):
             data = buf.getvalue()
         except HTTPException:
             raise
+        except FloodWait as e:
+            decision = await flood_handler.handle(e, client)
+            LOGGER.warning(f"[THUMB] FloodWait for {id}: {decision.reason}")
+            raise HTTPException(
+                status_code=503,
+                detail="Thumbnail temporarily rate-limited by Telegram",
+                headers={"Retry-After": str(max(1, int(decision.wait_seconds)))},
+            )
         except Exception as e:
             LOGGER.warning(f"[THUMB] fetch failed for {id}: {e}")
             raise HTTPException(status_code=404, detail="Thumbnail unavailable")
@@ -260,6 +270,14 @@ async def subtitle_handler(token: str, id: str, name: str, token_data: dict = De
         message = await client.get_messages(chat_id, msg_id)
         buf = await client.download_media(message, in_memory=True)
         data = buf.getvalue()
+    except FloodWait as e:
+        decision = await flood_handler.handle(e, client)
+        LOGGER.warning(f"[SUBTITLE] FloodWait for {id}: {decision.reason}")
+        raise HTTPException(
+            status_code=503,
+            detail="Subtitles temporarily rate-limited by Telegram",
+            headers={"Retry-After": str(max(1, int(decision.wait_seconds)))},
+        )
     except Exception as e:
         LOGGER.warning(f"[SUBTITLE] fetch failed for {id}: {e}")
         raise HTTPException(status_code=404, detail="Subtitle unavailable")

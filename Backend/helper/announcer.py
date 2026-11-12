@@ -1,4 +1,3 @@
-import asyncio
 from asyncio import create_task
 from datetime import datetime
 
@@ -7,7 +6,7 @@ from pyrogram.errors import FloodWait, MessageDeleteForbidden, MessageIdInvalid
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from Backend import db
-from Backend.helper.flood_wait import flood_handler
+from Backend.helper.flood_wait import run_with_flood_retry
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
 from Backend.pyrofork.bot import StreamBot, get_streambot_url
@@ -103,29 +102,32 @@ async def _announce(info: dict) -> None:
     caption = _build_caption(info)
     poster = info.get("backdrop") or info.get("poster")
     markup = _build_markup(info)
+    label = f"Announcement '{info.get('title')}'"
 
     try:
         sent = None
         if poster:
             try:
-                sent = await StreamBot.send_photo(chat, poster, caption=caption,
-                                           parse_mode=ParseMode.HTML, reply_markup=markup)
-            except FloodWait:
-                raise
+                sent = await run_with_flood_retry(
+                    StreamBot, StreamBot.send_photo, chat, poster,
+                    caption=caption, parse_mode=ParseMode.HTML, reply_markup=markup,
+                    what=f"{label} (photo)",
+                )
+            except FloodWait as e:
+                LOGGER.error(f"{label}: photo send aborted after FloodWait: {e}")
             except Exception:
                 sent = None
         if sent is None:
-            sent = await StreamBot.send_message(chat, caption, parse_mode=ParseMode.HTML,
-                                     reply_markup=markup, disable_web_page_preview=True)
+            sent = await run_with_flood_retry(
+                StreamBot, StreamBot.send_message, chat, caption,
+                parse_mode=ParseMode.HTML, reply_markup=markup,
+                disable_web_page_preview=True,
+                what=label,
+            )
         if sent is not None:
             await _store_announcement_msg(info.get("media_type"), info.get("tmdb_id"), chat, sent.id)
     except FloodWait as e:
-        # Centralized decision: wait + penalty + retry-or-abort via FloodWaitHandler.
-        decision = await flood_handler.handle(e, StreamBot)
-        if decision.abort:
-            LOGGER.error("Announcement aborted after FloodWait: %s", decision.reason)
-        else:
-            await asyncio.sleep(decision.wait_seconds)
+        LOGGER.error(f"{label}: aborted after FloodWait: {e}")
     except Exception as e:
         LOGGER.error(f"Announcement failed for '{info.get('title')}': {e}")
 
@@ -155,18 +157,15 @@ async def delete_announcement(media_type: str, tmdb_id) -> None:
     if not chat_id or not message_id:
         return
     try:
-        await StreamBot.delete_messages(chat_id, message_id)
+        await run_with_flood_retry(
+            StreamBot, StreamBot.delete_messages, chat_id, message_id,
+            what=f"Announcement delete {key}",
+        )
         LOGGER.info(f"Deleted announcement message {message_id} for {key}")
+    except FloodWait as e:
+        LOGGER.warning(f"Announcement delete aborted after FloodWait: {e}")
     except (MessageDeleteForbidden, MessageIdInvalid) as e:
         LOGGER.warning(f"Could not delete announcement {message_id} for {key}: {e}")
-    except FloodWait as e:
-        # Centralized decision for delete as well.
-        decision = await flood_handler.handle(e, StreamBot)
-        if decision.abort:
-            LOGGER.warning("Announcement delete aborted after FloodWait: %s", decision.reason)
-        else:
-            await asyncio.sleep(decision.wait_seconds)
-            LOGGER.info("Deleted announcement message %s for %s after FloodWait", message_id, key)
     except Exception as e:
         LOGGER.warning(f"Failed to delete announcement message for {key}: {e}")
 

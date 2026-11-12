@@ -1,9 +1,11 @@
 from pyrogram import Client
 from pyrogram.enums import ChatMemberStatus
+from pyrogram.errors import FloodWait
 from pyrogram.types import ChatMemberUpdated
 
 from Backend import db
 from Backend.config import Telegram
+from Backend.helper.flood_wait import run_with_flood_retry
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
 
@@ -31,14 +33,26 @@ async def on_user_join(client: Client, chat_member_updated: ChatMemberUpdated):
         return
 
     try:
-        await client.ban_chat_member(chat_member_updated.chat.id, user.id)
-        await client.unban_chat_member(chat_member_updated.chat.id, user.id)
-        LOGGER.info(f"Kicked unauthorized user {user.id} from group {chat_member_updated.chat.id}")
-        await client.send_message(
-            user.id,
-            "❌ <b>Access Denied</b>\n\n"
-            "You were removed from the private group because you do not have an active subscription.\n"
-            "Please press /start in this bot to purchase or renew your subscription."
+        await run_with_flood_retry(
+            client, client.ban_chat_member, chat_member_updated.chat.id, user.id,
+            what=f"kick unauthorized joiner {user.id}",
         )
+        await run_with_flood_retry(
+            client, client.unban_chat_member, chat_member_updated.chat.id, user.id,
+            what=f"unban kicked joiner {user.id}",
+        )
+        LOGGER.info(f"Kicked unauthorized user {user.id} from group {chat_member_updated.chat.id}")
+        try:
+            await run_with_flood_retry(
+                client, client.send_message, user.id,
+                "❌ <b>Access Denied</b>\n\n"
+                "You were removed from the private group because you do not have an active subscription.\n"
+                "Please press /start in this bot to purchase or renew your subscription.",
+                what=f"denial notice to {user.id}",
+            )
+        except FloodWait as e:
+            LOGGER.warning(f"Access-denied notice to {user.id} delayed by FloodWait: {e}")
+    except FloodWait as e:
+        LOGGER.error(f"Failed to kick unauthorized user {user.id} (FloodWait): {e}")
     except Exception as e:
         LOGGER.error(f"Failed to kick/notify unauthorized user {user.id}: {e}")

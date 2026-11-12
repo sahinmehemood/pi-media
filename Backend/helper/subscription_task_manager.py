@@ -2,8 +2,10 @@ import asyncio
 from typing import Optional
 
 from pyrogram import Client
+from pyrogram.errors import FloodWait
 
 from Backend import db
+from Backend.helper.flood_wait import flood_handler
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
 from Backend.pyrofork.bot import get_streambot_url
@@ -36,6 +38,16 @@ async def subscription_checker_loop(bot: Client):
                         f"Please open the bot {get_streambot_url()} and send /start to renew your subscription and regain access."
                     )
                     LOGGER.info(f"Kicked expired user {user_id}")
+                except FloodWait as e:
+                    # Rate-limited: wait centrally, then leave this user for the next run.
+                    decision = await flood_handler.handle(e, bot)
+                    if decision.abort:
+                        LOGGER.error(f"FloodWait aborted kick/notify for {user_id}: {decision.reason}")
+                    else:
+                        LOGGER.warning(
+                            f"FloodWait {getattr(e, 'value', '?')}s while kicking {user_id} — will retry next cycle."
+                        )
+                        await asyncio.sleep(decision.wait_seconds)
                 except Exception as e:
                     LOGGER.error(f"Failed to kick/notify expired user {user_id}: {e}")
 
@@ -53,6 +65,15 @@ async def subscription_checker_loop(bot: Client):
                     )
                     await db.mark_reminder_sent(user_id)
                     LOGGER.info(f"Sent expiry reminder to user {user_id}")
+                except FloodWait as e:
+                    decision = await flood_handler.handle(e, bot)
+                    if decision.abort:
+                        LOGGER.error(f"FloodWait aborted reminder for {user_id}: {decision.reason}")
+                    else:
+                        LOGGER.warning(
+                            f"FloodWait {getattr(e, 'value', '?')}s while reminding {user_id} — will retry next cycle."
+                        )
+                        await asyncio.sleep(decision.wait_seconds)
                 except Exception as e:
                     LOGGER.error(f"Failed to send reminder to user {user_id}: {e}")
 

@@ -7,8 +7,7 @@ from typing import Any, Dict, List, Optional
 from pyrogram.errors import FloodWait, ChannelPrivate, ChatAdminRequired
 
 from Backend.logger import LOGGER
-from Backend.pyrofork.bot import multi_clients
-from Backend.helper.flood_wait import flood_handler
+from Backend.helper.flood_wait import flood_handler, run_with_flood_retry
 from Backend.helper.encrypt import encode_string, decode_string
 from Backend.helper.manual_add import stamp_caption_with_id
 from Backend.helper.metadata import caption_with_links, extract_default_id, has_raw_ref, metadata
@@ -342,19 +341,18 @@ class ScanManager:
                 break
 
             try:
-                messages = await client.get_messages(chat_id, batch_ids)
+                messages = await run_with_flood_retry(
+                    client, client.get_messages, chat_id, batch_ids,
+                    what=f"[ScanManager] batch fetch at {current}",
+                )
             except FloodWait as e:
-                decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
-                if decision.abort:
-                    LOGGER.error(f"[ScanManager] FloodWait aborted at {current}: {decision.reason}")
-                    s["counters"]["errors"] += 1
-                    current = upper
-                    empty_streak += 1
-                    s["cursors"][str(ch_key)] = current
-                    s["current_id"] = current
-                    continue
-                await asyncio.sleep(decision.wait_seconds)
-                messages = await client.get_messages(chat_id, batch_ids)
+                LOGGER.error(f"[ScanManager] FloodWait aborted at {current}: {e}")
+                s["counters"]["errors"] += 1
+                current = upper
+                empty_streak += 1
+                s["cursors"][str(ch_key)] = current
+                s["current_id"] = current
+                continue
             except Exception as e:
                 LOGGER.error(f"[ScanManager] Batch fetch error at {current}: {e}")
                 s["counters"]["errors"] += 1
@@ -378,7 +376,14 @@ class ScanManager:
                     async with sem:
                         if self._cancel:
                             return
-                        await self._process_message(client, msg, chat_id)
+                        try:
+                            await self._process_message(client, msg, chat_id)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as e:
+                            # One bad message must never kill the whole scan.
+                            LOGGER.error(f"[ScanManager] Message {msg.id} in {chat_id} failed: {e}")
+                            s["counters"]["errors"] += 1
                         s["counters"]["processed"] += 1
 
                 await asyncio.gather(*(_worker(m) for m in to_process))
@@ -407,18 +412,10 @@ class ScanManager:
     async def _probe_last_message_id(self, client, chat_id: int):
         probe = None
         try:
-            probe = await client.send_message(chat_id, SCAN_PROBE_TEXT)
-        except FloodWait as e:
-            decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
-            if decision.abort:
-                LOGGER.warning(f"[ScanManager] Probe send aborted for {chat_id}: {decision.reason}")
-                return None
-            await asyncio.sleep(decision.wait_seconds)
-            try:
-                probe = await client.send_message(chat_id, SCAN_PROBE_TEXT)
-            except Exception as ex:
-                LOGGER.warning(f"[ScanManager] Probe send failed for {chat_id}: {ex}")
-                return None
+            probe = await run_with_flood_retry(
+                client, client.send_message, chat_id, SCAN_PROBE_TEXT,
+                what=f"[ScanManager] probe send to {chat_id}",
+            )
         except Exception as e:
             LOGGER.warning(f"[ScanManager] Could not send probe to {chat_id}: {e}")
             return None

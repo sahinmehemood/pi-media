@@ -2,7 +2,6 @@ from asyncio import Lock, Queue, create_task
 from asyncio import sleep as asleep
 
 from pyrogram import Client, filters
-from pyrogram.enums.parse_mode import ParseMode
 from pyrogram.errors import FloodWait
 from pyrogram.types import Message
 
@@ -11,6 +10,7 @@ from Backend import db
 from Backend.helper.announcer import announce_new_media
 from Backend.helper.auto_catalog import start_single_media_catalog_sync
 from Backend.helper.encrypt import encode_string
+from Backend.helper.flood_wait import flood_handler, run_with_flood_retry
 from Backend.helper.manual_add import resolve_telegram_message, stamp_caption_with_id
 from Backend.helper.requests_manager import auto_fulfill
 from Backend.helper.metadata import caption_with_links, extract_default_id, has_raw_ref, metadata
@@ -138,7 +138,11 @@ async def _handle_personal_session(client: Client, message: Message) -> None:
     async with manual_session_lock:
         channel = str(message.chat.id).replace("-100", "")
         try:
-            resolved = await resolve_telegram_message(client, chat_id=channel, msg_id=message.id)
+            resolved = await run_with_flood_retry(
+                client, resolve_telegram_message, client,
+                chat_id=channel, msg_id=message.id,
+                what=f"[Manual Session] resolve message {message.id}",
+            )
         except Exception as e:
             LOGGER.warning(f"[Manual Session] Could not resolve message {message.id}: {e}")
             return
@@ -253,13 +257,17 @@ async def file_receive_handler(client: Client, message: Message):
         stamp = message if is_real_session or has_raw_ref(message.caption) else None
         await file_queue.put((metadata_info, int(channel), msg_id, size, raw_size, title, stamp))
     except FloodWait as e:
-        LOGGER.info(f"Sleeping for {str(e.value)}s")
-        await asleep(e.value)
-        await message.reply_text(
-            text=f"Got Floodwait of {str(e.value)}s",
-            disable_web_page_preview=True,
-            parse_mode=ParseMode.MARKDOWN
+        # Centralized decision (wait + jitter + penalty + max-wait cap).  The
+        # file is skipped this run — re-indexing it happens on the next scan.
+        decision = await flood_handler.handle(e, flood_handler.client_index_of(client))
+        if decision.abort:
+            LOGGER.error(f"[Receiver] FloodWait aborted for message {message.id}: {decision.reason}")
+            return
+        LOGGER.warning(
+            f"[Receiver] FloodWait of {getattr(e, 'value', '?')}s on message {message.id} — "
+            f"file skipped this run; re-forward it or run a channel scan to index it."
         )
+        await asleep(decision.wait_seconds)
 
 
 def _override_matches_indexed(override_id: str, imdb_id, tmdb_id) -> bool:

@@ -214,16 +214,19 @@ class ByteStreamer:
             "meta": meta or {},
         }
 
-        ACTIVE_STREAMS[stream_id] = registry_entry
-        stream_entry = registry_entry
-        work_loads[client_index] += 1
-
         queue_maxsize = max(1, prefetch)
         q: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
         stop_event = asyncio.Event()
 
+        #----- Set up the Telegram media session BEFORE counting this stream as
+        #----- active. A failed setup must not inflate work_loads or leave a
+        #----- phantom "active" entry in the registry.
         media_session = await self._get_media_session(file_id)
         location_box: List[object] = [await self._get_location(file_id)]
+
+        ACTIVE_STREAMS[stream_id] = registry_entry
+        stream_entry = registry_entry
+        work_loads[client_index] += 1
 
         async def _make_refresh_fn(loc_b, streamer_ref, file_id_ref):
             async def _refresh() -> bool:
@@ -743,12 +746,22 @@ async def _speed_test_single_client(
                         last_progress_time = now
 
                 except asyncio.TimeoutError:
+                    client_failures[client_index] = client_failures.get(client_index, 0) + 1
                     LOGGER.debug(
                         "Speed-test chunk timeout client=%s offset=%s (skipping)",
                         client_index, offset,
                     )
-                except Exception as e:
+                except FloodWait:
+                    # A real flood earns the client a penalty (worker shedding).
                     flood_handler.note_flood_wait(client_index)
+                    LOGGER.debug(
+                        "Speed-test flood-wait client=%s offset=%s (shedding a worker)",
+                        client_index, offset,
+                    )
+                except Exception as e:
+                    # Network/auth errors are failures, not floods: never shed
+                    # workers for them.
+                    client_failures[client_index] = client_failures.get(client_index, 0) + 1
                     LOGGER.debug(
                         "Speed-test fetch error client=%s offset=%s: %s",
                         client_index, offset, e,

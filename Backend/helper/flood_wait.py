@@ -19,15 +19,33 @@ Everything behind the seam — parsing wait seconds from the error, tracking
 per-client consecutive-flood counts, computing the worker-shedding penalty,
 adding jitter, enforcing max retries, resolving client indices — lives inside
 the implementation.
+
+Retry helper
+------------
+Most call sites only need "call this coroutine, and if Telegram floods us,
+wait and try again".  ``run_with_flood_retry`` gives every caller the *same*
+bounded, cancellation-safe retry loop instead of each file rolling its own
+(one-shot retry, bare ``sleep(e.value)``, or an unbounded ``while True``):
+
+    result = await run_with_flood_retry(StreamBot, client.send_message, chat, "hi")
+
+* FloodWait  -> central decision: wait (with jitter) and retry, or abort.
+* other exceptions -> propagate immediately to the caller.
+* success    -> ``record_success`` decays the client penalty.
+
+The loop is bounded by ``FloodWaitHandler.max_retries`` and by
+``FloodWaitHandler.max_wait``: a FloodWait longer than ``max_wait`` aborts
+instead of blocking a coroutine for hours (Telegram can ask for 22h+).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Union
+from typing import Awaitable, Callable, Optional, TypeVar, Union
 
 from pyrogram.errors import FloodWait
 
@@ -36,6 +54,14 @@ logger = logging.getLogger("flood_wait")
 #----- Client index conventions --------------------------------------------
 # -1 means the StreamBot primary client (it is not registered in multi_clients).
 PRIMARY_CLIENT = -1
+
+#----- Default ceiling for a single flood wait ------------------------------
+# Telegram can return waits of hours (e.g. 22h for a hard flood).  Blocking a
+# web request or a scan worker for that long is never useful: the operation
+# will be stale by the time the wait ends.  Callers get a clean abort instead.
+DEFAULT_MAX_WAIT_SECONDS = 300.0
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -55,9 +81,15 @@ class FloodWaitHandler:
     jitter, backoff, penalty decay, client-index resolution) is hidden inside.
     """
 
-    def __init__(self, max_retries: int = 5, max_penalty: int = 4) -> None:
+    def __init__(
+        self,
+        max_retries: int = 5,
+        max_penalty: int = 4,
+        max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
+    ) -> None:
         self.max_retries = max_retries
         self.max_penalty = max_penalty
+        self.max_wait = float(max_wait)
         # client_index -> how many workers to shed (0..max_penalty)
         self._penalties: dict[int, int] = {}
         # client_index -> consecutive flood-wait count
@@ -81,6 +113,8 @@ class FloodWaitHandler:
         * Parses wait seconds from pyrogram's ``FloodWait.value`` or from the
           raw error string.
         * Tracks consecutive floods per client; aborts past ``max_retries``.
+        * Aborts when a single wait exceeds ``max_wait`` (never block a
+          coroutine for hours on a stale operation).
         * Raises the per-client penalty (worker shedding) on each flood.
         * Adds increasing jitter per attempt so retries don't thundering-herd.
         """
@@ -103,6 +137,16 @@ class FloodWaitHandler:
                 reason=(
                     f"max flood retries ({self.max_retries}) exceeded "
                     f"for client {client_index}"
+                ),
+            )
+
+        if self.max_wait > 0 and wait > self.max_wait:
+            return FloodWaitDecision(
+                abort=True,
+                wait_seconds=0.0,
+                reason=(
+                    f"FloodWait {wait:.0f}s for client {client_index} exceeds "
+                    f"max_wait {self.max_wait:.0f}s — aborting instead of blocking"
                 ),
             )
 
@@ -211,3 +255,54 @@ class FloodWaitHandler:
 
 #----- Process-wide singleton: one handler for every client ----------------
 flood_handler = FloodWaitHandler()
+
+
+async def run_with_flood_retry(
+    client: Union[int, object],
+    fn: Callable[..., Awaitable[_T]],
+    *args,
+    attempts: Optional[int] = None,
+    what: str = "Telegram call",
+    **kwargs,
+) -> _T:
+    """Call ``fn(*args, **kwargs)`` with centralized FloodWait retry.
+
+    The single retry loop every caller should use instead of rolling its own:
+
+    * ``FloodWait`` -> ``flood_handler.handle`` decides wait-vs-abort; on wait
+      we sleep (with jitter) and retry the same call.
+    * Any other exception -> propagates to the caller immediately.
+    * Success -> ``flood_handler.record_success`` decays the client penalty.
+
+    Bounded by ``attempts`` (defaults to ``handler.max_retries + 1``) and by
+    ``handler.max_wait``, so it can never loop forever or block for hours.
+    Raises the last ``FloodWait`` when attempts are exhausted.
+    """
+    client_index = flood_handler.client_index_of(client)
+    max_attempts = attempts if attempts is not None else flood_handler.max_retries + 1
+    max_attempts = max(1, int(max_attempts))
+
+    last_error: Optional[FloodWait] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = await fn(*args, **kwargs)
+        except FloodWait as e:
+            decision = await flood_handler.handle(e, client_index)
+            if decision.abort:
+                logger.error("%s aborted after FloodWait: %s", what, decision.reason)
+                raise
+            logger.warning(
+                "%s FloodWait (attempt %d/%d): %s — retrying",
+                what, attempt, max_attempts, decision.reason,
+            )
+            last_error = e
+            await asyncio.sleep(decision.wait_seconds)
+            continue
+
+        flood_handler.record_success(client_index)
+        return result
+
+    # Exhausted attempts without a hard abort (e.g. max_wait=0 custom handler).
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"{what}: no attempt was made")
