@@ -635,6 +635,7 @@
         </div>
     </div>
 
+
     <!-- ── Manual Add Channels ─────────────────────────────────────────── -->
     <div class="settings-card">
         <h2><i class="fa-solid fa-hand-pointer"></i> Manual Add Channels</h2>
@@ -1354,6 +1355,10 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
                 <span class="bk-ic"><i class="fa-solid fa-cloud-arrow-up"></i></span>
                 <span class="bk-txt"><b>Import</b><small>Restore from file</small></span>
             </button>
+            <a href="/api/admin/backup/library" class="bk-btn bk-export" style="grid-column:1/-1" download>
+                <span class="bk-ic"><i class="fa-solid fa-mobile-screen"></i></span>
+                <span class="bk-txt"><b>Library for TeleStremio</b><small>Movies, series &amp; channels</small></span>
+            </a>
         </div>
 
         <div id="restore-status" class="bk-status" style="display:none"></div>
@@ -1368,6 +1373,7 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
         <p class="bk-warn">
             <i class="fa-solid fa-triangle-exclamation"></i>
             Restoring replaces your catalogs, plans and tokens, and reconnects extra databases and bot tokens from the file.
+            The TeleStremio library file is restored in TeleStremio under Settings → Backup → Import file, and replaces the library there.
         </p>
     </div>
 
@@ -1999,6 +2005,7 @@ function renderSettings(s) {
     const wp = document.getElementById('webdav_password');
     if (wp) wp.value = s.webdav_password || '';
     toggleMediaflowFields();
+    toggleBufferFields();
 
     const titles = s.channel_titles || {};
     rebuildAuthChannels(s.auth_channels, s.anime_channels, titles);
@@ -2205,7 +2212,6 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     toggleDuplicateProtection();
     toggleMediaflowFields();
-    toggleBufferFields();
     loadDbStats();
     loadLogs();
 });

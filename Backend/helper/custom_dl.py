@@ -16,13 +16,6 @@ from Backend.helper.flood_wait import flood_handler
 from Backend.helper.pyro import get_file_ids
 from Backend.logger import LOGGER
 from Backend.helper.bounded import BoundedDict
-from Backend.pyrofork.bot import (
-    client_avg_mbps,
-    client_dc_map,
-    client_failures,
-    multi_clients,
-    work_loads,
-)
 from Backend.helper.stream_buffer import (
     METRICS as BUFFER_METRICS,
     cache_key,
@@ -31,6 +24,7 @@ from Backend.helper.stream_buffer import (
     record_stream_speed,
     stream_policy,
 )
+from Backend.pyrofork.bot import client_avg_mbps, client_dc_map, client_failures, multi_clients, work_loads
 
 ACTIVE_STREAMS: Dict[str, Dict] = {}
 RECENT_STREAMS = deque(maxlen=20)
@@ -77,7 +71,7 @@ async def _cleanup_stale_streams():
                         entry["end_ts"] = now
                         RECENT_STREAMS.appendleft(entry)
                         idx = entry.get("client_index")
-                        if idx is not None and idx in work_loads:
+                        if entry.pop("load_held", False) and idx in work_loads:
                             work_loads[idx] = max(0, work_loads[idx] - 1)
                 except Exception:
                     pass
@@ -103,7 +97,6 @@ class ByteStreamer:
         self.client_index = client_index
         self._file_id_cache = BoundedDict(2000)
         self._session_lock = asyncio.Lock()
-        self._background_tasks: set = set()
         if client_index >= 0:
             ByteStreamer._instances[client_index] = self
         _track_task(asyncio.create_task(self._clean_cache()))
@@ -115,20 +108,20 @@ class ByteStreamer:
         test_mode = await self.client.storage.test_mode()
         current_dc = await self.client.storage.dc_id()
         for dc in common_dcs:
-            if dc in self.client.media_sessions or dc == current_dc:
+            if dc in self.client.media_sessions:
                 continue
             try:
-                auth_key = await Auth(self.client, dc, test_mode).create()
+                auth_key = await self.client.storage.auth_key() if dc == current_dc else await Auth(self.client, dc, test_mode).create()
                 session = Session(self.client, dc, auth_key, test_mode, is_media=True)
                 session.no_updates = True
                 session.timeout = 30
                 session.sleep_threshold = 60
                 await session.start()
-                imported = False
-                for _ in range(6):
+                imported = dc == current_dc
+                for _ in range(0 if imported else 6):
                     try:
                         exported = await self.client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc))
-                        await session.send(raw.functions.auth.ImportAuthorization(id=exported.id, bytes=exported.bytes))
+                        await session.send(raw.functions.auth.ImportAuthorization(id=exported.id,bytes=exported.bytes,))
                         imported = True
                         break
                     except AuthBytesInvalid:
@@ -137,7 +130,7 @@ class ByteStreamer:
                         await asyncio.sleep(1)
                     except Exception:
                         break
-                if imported:
+                if imported and dc not in self.client.media_sessions:
                     self.client.media_sessions[dc] = session
                 else:
                     await session.stop()
@@ -212,6 +205,7 @@ class ByteStreamer:
                 "adaptive": policy.adaptive,
             },
             "meta": meta or {},
+            "load_held": True,
         }
 
         queue_maxsize = max(1, prefetch)
@@ -233,11 +227,11 @@ class ByteStreamer:
                 if not chat_id or not message_id:
                     return False
                 try:
-                    ck2 = (int(chat_id), int(message_id))
-                    streamer_ref._file_id_cache.pop(ck2, None)
+                    cache_key = (int(chat_id), int(message_id))
+                    streamer_ref._file_id_cache.pop(cache_key, None)
                     fresh = await get_file_ids(streamer_ref.client, chat_id, message_id)
                     if fresh:
-                        streamer_ref._file_id_cache[ck2] = fresh
+                        streamer_ref._file_id_cache[cache_key] = fresh
                         loc_b[0] = await ByteStreamer._get_location(fresh)
                         return True
                 except Exception as exc:
@@ -265,9 +259,6 @@ class ByteStreamer:
             or "failed" (all retries exhausted — caller must surface an error,
             never silently truncate the stream).
             """
-            slot = seq_idx % len(session_pool)
-            c_idx, c_session, c_loc_box, c_refresh = session_pool[slot]
-
             #----- Served straight from RAM when another stream already pulled
             #----- this chunk (seek back, resume, or a second viewer).
             key = cache_key(getattr(file_id, "media_id", None), chunk_size, chunk_index(off, chunk_size)) if cache is not None else None
@@ -279,6 +270,7 @@ class ByteStreamer:
             tries = 0
             flood_tries = 0
             while tries < 3 and flood_tries < 5 and not stop_event.is_set():
+                c_idx, c_session, c_loc_box, c_refresh = session_pool[(seq_idx + tries) % len(session_pool)]
                 try:
                     r = await asyncio.wait_for(
                         c_session.send(
@@ -321,13 +313,13 @@ class ByteStreamer:
                     # loop retries the same chunk
 
                 except Exception as e:
-                    #----- Non-FloodWait errors (network, auth, etc.): retry
-                    #----- with backoff instead of aborting the stream.
                     err_str = str(e)
 
                     if "FILE_REFERENCE" in err_str or "file_reference" in err_str.lower():
                         await c_refresh()
 
+                    #----- Non-FloodWait errors (network, auth, etc.): retry
+                    #----- with backoff instead of aborting the stream.
                     tries += 1
                     client_failures[c_idx] = client_failures.get(c_idx, 0) + 1
                     await asyncio.sleep(min(0.5 * (2 ** (tries - 1)), 10.0))
@@ -589,10 +581,8 @@ class ByteStreamer:
 
                     asyncio.create_task(delayed_pop())
                 finally:
-                    try:
-                        work_loads[client_index] -= 1
-                    except Exception:
-                        pass
+                    if stream_entry.pop("load_held", False):
+                        work_loads[client_index] = max(0, work_loads.get(client_index, 0) - 1)
 
                 stop_event.set()
 
@@ -620,8 +610,8 @@ class ByteStreamer:
 
             session = Session(self.client, dc, auth_key, test_mode, is_media=True)
             session.no_updates = True
-            session.timeout = 30
-            session.sleep_threshold = 60
+            session.timeout = 30 
+            session.sleep_threshold = 60 
 
             await session.start()
 
@@ -661,6 +651,7 @@ class ByteStreamer:
 TEST_CHUNK_SIZE = 100 * 1024 * 1024
 
 
+#----- Download a fixed slice from one client and measure throughput
 async def _speed_test_single_client(
     client: Client,
     client_index: int,
@@ -698,14 +689,14 @@ async def _speed_test_single_client(
         dl_start = time.perf_counter()
         last_progress_time = dl_start
         total_bytes = 0
-        chunk_size = 512 * 1024
+        chunk_size = 512 * 1024  
         max_concurrent_chunks = 8
         queue = asyncio.Queue()
         target_offsets = list(range(0, TEST_CHUNK_SIZE, chunk_size))
         for off in target_offsets:
             queue.put_nowait(off)
         eof_reached = False
-
+        
         async def fetch_chunk_worker():
             nonlocal total_bytes, last_progress_time, eof_reached
             while not queue.empty() and not eof_reached:
@@ -723,7 +714,6 @@ async def _speed_test_single_client(
                     chunk = getattr(r, "bytes", None)
                     if not chunk:
                         eof_reached = True
-                        queue.task_done()
                         continue
                     bytes_got = len(chunk)
                     total_bytes += bytes_got
@@ -767,12 +757,14 @@ async def _speed_test_single_client(
                         client_index, offset, e,
                     )
                 finally:
+                    # Exactly one completion per item, on every path: a leaked
+                    # task_done() makes queue.join() below wait forever.
                     queue.task_done()
         workers = [
             asyncio.create_task(fetch_chunk_worker())
             for _ in range(max_concurrent_chunks)
         ]
-
+        
         await queue.join()
         for w in workers:
             w.cancel()
@@ -794,6 +786,7 @@ async def _speed_test_single_client(
     return result
 
 
+#----- Run the speed test across every connected client, fastest first
 async def run_speed_test(chat_id: int, message_id: int) -> List[dict]:
     if not multi_clients:
         return [{"error": "No bot clients connected"}]
