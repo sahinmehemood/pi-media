@@ -10,6 +10,7 @@ from Backend import __version__, db
 from Backend.fastapi import server
 from Backend.fastapi.main import app
 from Backend.helper import subscription_task_manager
+from Backend.helper.custom_dl import shutdown_background_tasks
 from Backend.helper.link_checker import DeadLinkChecker
 from Backend.helper.pinger import ping
 from Backend.helper.pyro import restart_notification, setup_bot_commands
@@ -103,6 +104,7 @@ async def stop_services():
         if botmod.Userbot is not None:
             await botmod.Userbot.stop()
 
+        await shutdown_background_tasks()
         await db.disconnect()
         LOGGER.info("Services stopped successfully.")
     except Exception:

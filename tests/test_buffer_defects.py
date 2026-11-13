@@ -322,17 +322,6 @@ def _():
         raise AssertionError(f"{bad!r} was silently accepted as {got!r}")
 
 
-def main():
-    passed = sum(1 for ok, _n, _e in RESULTS if ok)
-    total = len(RESULTS)
-    for ok, name, err in RESULTS:
-        print(("PASS " if ok else "FAIL ") + name)
-        if not ok:
-            print(f"       -> {err}")
-    print(f"\n{passed}/{total} passed")
-    return 0 if passed == total else 1
-
-
 # ===================== F1: the CALL SITE is wired =====================
 
 def _ensure_custom_dl():

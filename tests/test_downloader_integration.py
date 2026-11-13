@@ -313,6 +313,88 @@ def _():
     _run(scenario())
 
 
+
+
+# ===================== failure semantics =====================
+# The port originally collapsed the fork's 3-tuple (seq, bytes, status) into
+# upstream's 2-tuple, so an exhausted-retry failure was indistinguishable from
+# a clean EOF and the client got a TRUNCATED stream presented as complete.
+# These tests force a failure and assert the stream is surfaced as an error.
+
+class _AlwaysFailsSession:
+    """Raises a non-flood error on every GetFile, so retries are exhausted."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def send(self, _msg):
+        self.calls += 1
+        raise RuntimeError("simulated transport failure")
+
+
+def _make_failing_streamer():
+    custom_dl = sys.modules["Backend.helper.custom_dl"]
+    s = object.__new__(custom_dl.ByteStreamer)
+    s.client = types.SimpleNamespace(storage=None, media_sessions={})
+    s.client_index = 0
+    s._file_id_cache = {}
+    s._session_lock = asyncio.Lock()
+    s._fake_session = _AlwaysFailsSession()
+
+    async def _get_media_session(_fid):
+        return s._fake_session
+
+    async def _get_location(_fid):
+        return object()
+
+    s._get_media_session = _get_media_session
+    s._get_location = _get_location
+    return s
+
+
+@test("a chunk failure is reported as an error, not a clean EOF")
+def _():
+    _bootstrap()
+    custom_dl = sys.modules["Backend.helper.custom_dl"]
+    sb_mod = sys.modules["Backend.helper.stream_buffer"]
+    sb_mod._policy = None
+    sb_mod._cache = None
+    sb_mod.refresh_policy({"buffer_enabled": True, "buffer_profile": "balanced",
+                           "buffer_adaptive": False})
+    custom_dl.work_loads[0] = 0
+    custom_dl.ACTIVE_STREAMS.clear()
+
+    async def scenario():
+        streamer = _make_failing_streamer()
+        gen = await streamer.prefetch_stream(
+            file_id=FakeFileId(), client_index=0, offset=0,
+            first_part_cut=0, last_part_cut=1 * MiB, part_count=1,
+            chunk_size=1 * MiB, prefetch=2, parallelism=1,
+            stream_id="FAILPATH", chat_id=-100123, message_id=42)
+
+        chunks = []
+        try:
+            async for c in gen:
+                chunks.append(c)
+        finally:
+            await gen.aclose()
+        await asyncio.sleep(0.05)
+        return chunks
+
+    chunks = _run(scenario())
+    entry = custom_dl.ACTIVE_STREAMS.get("FAILPATH")
+    status = entry.get("status") if entry else None
+
+    # The stream must be marked as errored. It must NOT look finished.
+    assert status != "finished", (
+        "a failed stream was marked 'finished' — the client would receive a "
+        "truncated file presented as complete")
+    # No data may be yielded when every fetch failed.
+    assert chunks == [], f"a failed stream still yielded {len(chunks)} chunk(s)"
+    # And the workload must be released.
+    assert custom_dl.work_loads.get(0, 0) == 0, "work_loads leaked on failure"
+
+
 def main():
     passed = sum(1 for ok, _n, _e in RESULTS if ok)
     total = len(RESULTS)
