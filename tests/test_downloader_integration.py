@@ -188,10 +188,28 @@ async def _drive_one_chunk(streamer, policy_settings, chunk_size=1 * MiB):
     return snapshot, got, dict(work_loads), len(ACTIVE_STREAMS)
 
 
+
+def _run(coro):
+    """Run a coroutine on a fresh loop.
+
+    asyncio.get_event_loop() raises on Python 3.12+ when no loop is running in
+    the main thread (and is deprecated outright in 3.14), which is why this is
+    not simply asyncio.run: tests may be invoked from an environment that has
+    already closed its loop.
+    """
+    try:
+        return asyncio.run(coro)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
 def test(name):
     def deco(fn):
         try:
-            asyncio.get_event_loop().run_until_complete(fn()) if asyncio.iscoroutinefunction(fn) else fn()
+            _run(fn()) if asyncio.iscoroutinefunction(fn) else fn()
             RESULTS.append((True, name, ""))
         except AssertionError as e:
             RESULTS.append((False, name, str(e)))
@@ -204,7 +222,7 @@ def test(name):
 @test("disabled buffer: real downloader uses 1 chunk and 1 worker")
 def _():
     s = _make_streamer()
-    snapshot, got, wl, active = asyncio.get_event_loop().run_until_complete(
+    snapshot, got, wl, active = _run(
         _drive_one_chunk(s, {"buffer_enabled": False, "buffer_profile": "balanced"}))
 
     assert snapshot is not None, "no registry entry was created"
@@ -219,7 +237,7 @@ def _():
 @test("enabled buffer: real downloader applies the profile policy")
 def _():
     s = _make_streamer()
-    snapshot, got, wl, active = asyncio.get_event_loop().run_until_complete(
+    snapshot, got, wl, active = _run(
         _drive_one_chunk(s, {"buffer_enabled": True, "buffer_profile": "aggressive",
                              "buffer_adaptive": False}))
     assert snapshot is not None, "no registry entry"
@@ -234,7 +252,7 @@ def _():
 @test("real downloader streams bytes and releases workload exactly once")
 def _():
     s = _make_streamer()
-    snapshot, got, wl, active = asyncio.get_event_loop().run_until_complete(
+    snapshot, got, wl, active = _run(
         _drive_one_chunk(s, {"buffer_enabled": True, "buffer_profile": "balanced",
                              "buffer_adaptive": False}))
     assert got is not None, "generator produced no chunk"
@@ -292,7 +310,7 @@ def _():
         assert s2._fake_session.calls == calls_before, (
             "second stream hit Telegram instead of the cache")
 
-    asyncio.get_event_loop().run_until_complete(scenario())
+    _run(scenario())
 
 
 def main():
@@ -304,3 +322,7 @@ def main():
             print(f"       -> {err}")
     print(f"\n{passed}/{total} passed")
     return 0 if passed == total else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

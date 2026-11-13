@@ -120,3 +120,6 @@ def main():
         print(f"PASS {t.__name__}")
     print(f"\n{len(tests)}/{len(tests)} passed")
     return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

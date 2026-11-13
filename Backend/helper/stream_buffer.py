@@ -46,6 +46,11 @@ MIN_STALL_TIMEOUT = 15.0
 MAX_STALL_TIMEOUT = 600.0
 DEFAULT_STALL_TIMEOUT = 90.0
 
+#----- Ceiling on prefetch queue depth. Every production call site passes a
+#----- 1 MiB chunk_size, where readahead (<=128 MiB) needs at most 128 slots;
+#----- 64 is a safety net against a pathological tiny chunk_size, not a knob.
+MAX_PREFETCH_CHUNKS = 64
+
 #----- Never let buffering claim more than this share of physical memory
 RAM_BUDGET_SHARE = 0.20
 
@@ -128,10 +133,19 @@ class BufferPolicy:
         return round(self.cache_bytes / MiB, 2)
 
     def depth_chunks(self, chunk_size: int = MiB) -> int:
-        """Queue length in chunks, never less than one full chunk."""
+        """Queue length in chunks, never less than one, never above the cap.
+
+        Queue slots hold (offset, bytes) tuples, so slot count IS the memory
+        budget. ``readahead_bytes / chunk_size`` is unbounded as chunk_size
+        shrinks: at 48 MiB readahead and a 16 KiB chunk that is 3072 slots for
+        one stream. Every production call site passes 1 MiB, so the cap is a
+        no-op in practice (48 max) — it only stops a pathological tiny
+        chunk_size from opening thousands of slots.
+        """
         if chunk_size <= 0:
             return 1
-        return max(1, math.ceil(self.readahead_bytes / chunk_size))
+        computed = math.ceil(self.readahead_bytes / chunk_size)
+        return max(1, min(MAX_PREFETCH_CHUNKS, computed))
 
     def _replace(self, **changes: Any) -> "BufferPolicy":
         values = {

@@ -1781,6 +1781,35 @@ async def get_settings_api() -> dict:
     return {"settings": data}
 
 
+def _coerce_bounded_int(value, low: int, high: int, key: str) -> int:
+    """Coerce a JSON value to an int clamped into [low, high].
+
+    Accepts int, integral float and integer-parsable strings (the settings
+    form posts JSON numbers, and a browser may serialise 12 as 12.0 or "12").
+    Rejects bool — a subclass of int, so True must not silently become 1 —
+    and non-integral floats (3.9) and anything unparsable, with a 400 rather
+    than silently rounding user input to a different value.
+    """
+    if isinstance(value, bool):
+        raise HTTPException(status_code=400, detail=f"{key} must be an integer between {low} and {high}")
+
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise HTTPException(status_code=400, detail=f"{key} must be a whole number between {low} and {high}")
+        parsed = int(value)
+    elif isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{key} must be an integer between {low} and {high}")
+    else:
+        raise HTTPException(status_code=400, detail=f"{key} must be an integer between {low} and {high}")
+
+    return max(low, min(high, parsed))
+
+
 async def update_settings_api(payload: dict) -> dict:
 
     #----- Empty password string means leave it unchanged
@@ -1808,15 +1837,10 @@ async def update_settings_api(payload: dict) -> dict:
     }
     for key, (low, high) in buffer_int_bounds.items():
         if key in payload:
-            try:
-                payload[key] = max(low, min(high, int(payload[key])))
-            except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail=f"{key} must be an integer between {low} and {high}")
+            payload[key] = _coerce_bounded_int(payload[key], low, high, key)
     if "buffer_stall_timeout" in payload:
-        try:
-            payload["buffer_stall_timeout"] = max(15, min(600, int(payload["buffer_stall_timeout"])))
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="buffer_stall_timeout must be an integer between 15 and 600")
+        payload["buffer_stall_timeout"] = _coerce_bounded_int(
+            payload["buffer_stall_timeout"], 15, 600, "buffer_stall_timeout")
 
     list_str_keys = {"auth_channels", "multi_tokens", "extra_databases", "global_search_channels", "anime_channels", "manual_channels"}
     for key in list_str_keys:

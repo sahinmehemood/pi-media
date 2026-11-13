@@ -1,5 +1,4 @@
 import asyncio
-import random
 import re
 import secrets
 import time
@@ -18,11 +17,12 @@ from Backend.helper.exceptions import FileNotFound
 from Backend.helper.pyro import get_file_ids
 from Backend.logger import LOGGER
 from Backend.helper.bounded import BoundedDict
-from Backend.helper.flood_wait import flood_handler
+from Backend.helper.flood_wait import FloodWaitHandler, flood_handler
 from Backend.helper.stream_buffer import (
     cache_key,
     chunk_index,
     get_shared_cache,
+    record_stream_speed,
     stream_policy,
 )
 from Backend.pyrofork.bot import client_avg_mbps, client_dc_map, client_failures, multi_clients, work_loads
@@ -67,6 +67,19 @@ def _ensure_stale_cleaner():
     if not _STALE_CLEANER_STARTED:
         _STALE_CLEANER_STARTED = True
         asyncio.create_task(_cleanup_stale_streams())
+
+
+def _is_flood_error(error: Exception) -> bool:
+    """True only for genuine FloodWait-style errors.
+
+    The chunk fetcher must not send unrelated errors (FILE_REFERENCE refresh,
+    timeouts, RPC failures) to the flood handler: handle() treats an
+    unparseable error as an abort, which would kill the stream on any error.
+    """
+    try:
+        return FloodWaitHandler._parse_wait(error) is not None
+    except Exception:
+        return False
 
 
 #----- Telegram file byte streamer with prefetch, multi-client parallelism, and telemetry
@@ -288,13 +301,22 @@ class ByteStreamer:
                     if "FILE_REFERENCE" in err_str or "file_reference" in err_str.lower():
                         await c_refresh()
 
-                    flood_m = re.search(r'wait of (\d+) second', err_str, re.IGNORECASE)
-                    if flood_m:
-                        required = float(flood_m.group(1))
-                        jitter = random.uniform(0.5, 2.0)
-                        wait = required + jitter
+                    #----- Only genuine FloodWaits go to the central handler. The
+                    #----- old local loop slept `required + jitter` with NO ceiling,
+                    #----- so a 22h flood blocked the fetch task for 22h and never
+                    #----- shed a worker. handle() enforces max_wait (300s) and
+                    #----- records the penalty that stream_policy() reads; we sleep
+                    #----- the wait it computed (it does not sleep internally).
+                    if _is_flood_error(e):
+                        decision = await flood_handler.handle(e, c_idx)
+                        if decision.abort:
+                            LOGGER.error(
+                                "Chunk fetch aborted for stream %s: %s",
+                                stream_id, decision.reason,
+                            )
+                            return seq_idx, None
                         flood_tries += 1
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(decision.wait_seconds)
                     else:
                         tries += 1
                         backoff = min(0.5 * (2 ** (tries - 1)), 10.0)
@@ -521,6 +543,12 @@ class ByteStreamer:
                         client_avg_mbps[client_index] = avg_mbps
                     else:
                         client_avg_mbps[client_index] = 0.5 * prev + 0.5 * avg_mbps
+
+                    #----- Feed the adaptive-depth EWMA. Without this the whole
+                    #----- "adaptive" feature is inert: SPEED never sees a sample,
+                    #----- so multiplier() stays pinned at 1.0. Runs once per
+                    #----- stream (this is the consumer's finally), not per chunk.
+                    record_stream_speed(avg_mbps)
 
                     asyncio.create_task(db.log_stream_stats(stream_entry))
 

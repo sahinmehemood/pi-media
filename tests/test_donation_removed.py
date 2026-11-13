@@ -125,3 +125,7 @@ def main():
             print(f"       -> {err}")
     print(f"\n{passed}/{total} passed")
     return 0 if passed == total else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

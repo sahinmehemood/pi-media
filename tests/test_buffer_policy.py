@@ -207,3 +207,7 @@ def main():
     if failed:
         print("failed:", ", ".join(failed))
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
