@@ -1790,10 +1790,33 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["session_secret"]
 
     #----- Type coercion and validation
-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
+    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
     for key in bool_keys:
         if key in payload:
             payload[key] = bool(payload[key])
+
+    #----- Streaming buffer numeric bounds (must match stream_buffer.build_policy,
+    #----- otherwise the API would persist a value the policy silently clamps)
+    if "buffer_profile" in payload:
+        payload["buffer_profile"] = str(payload["buffer_profile"] or "balanced").strip().lower()
+        if payload["buffer_profile"] not in ("conservative", "balanced", "aggressive", "custom"):
+            raise HTTPException(status_code=400, detail="buffer_profile must be conservative, balanced, aggressive or custom")
+    buffer_int_bounds = {
+        "buffer_readahead_mb": (2, 128),
+        "buffer_workers": (1, 8),
+        "buffer_cache_mb": (0, 512),
+    }
+    for key, (low, high) in buffer_int_bounds.items():
+        if key in payload:
+            try:
+                payload[key] = max(low, min(high, int(payload[key])))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"{key} must be an integer between {low} and {high}")
+    if "buffer_stall_timeout" in payload:
+        try:
+            payload["buffer_stall_timeout"] = max(15, min(600, int(payload["buffer_stall_timeout"])))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="buffer_stall_timeout must be an integer between 15 and 600")
 
     list_str_keys = {"auth_channels", "multi_tokens", "extra_databases", "global_search_channels", "anime_channels", "manual_channels"}
     for key in list_str_keys:

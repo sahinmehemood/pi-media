@@ -532,7 +532,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
     </div>
     <p class="label-caps px-1 mb-2">Theme</p>
     <div class="theme-opts mb-3" data-theme-picker></div>
-    <a href="https://donate.weebzonex.workers.dev" target="_blank" rel="noopener" class="menu-row"><i class="fa-solid fa-heart"></i>Support the project</a>
     <a href="/logout" class="menu-row danger"><i class="fa-solid fa-arrow-right-from-bracket"></i>Log out</a>
 </div>
 
@@ -562,7 +561,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
         {% for href, label, icon, prefix in nav[dock_count:] %}
         <a href="{{ href }}" class="sheet-link" {% if is_active(prefix) %}aria-current="page"{% endif %}><i class="fa-solid {{ icon }}"></i>{{ label }}</a>
         {% endfor %}
-        <a href="https://donate.weebzonex.workers.dev" target="_blank" rel="noopener" class="sheet-link"><i class="fa-solid fa-heart"></i>Support</a>
     </div>
     <p class="label-caps mb-2">Theme</p>
     <div class="theme-opts mb-4" data-theme-picker></div>

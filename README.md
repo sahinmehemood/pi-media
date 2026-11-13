@@ -7,10 +7,6 @@
 </p>
 
 <p align="center">
-  <a href="https://donate.weebzonex.workers.dev"><img src="https://img.shields.io/badge/❤️%20Donate-Support%20the%20developer-e11d48" alt="Donate" /></a>
-</p>
-
-<p align="center">
   <img src="https://img.shields.io/badge/UV%20Package%20Manager-2B7A77?logo=uv&logoColor=white" alt="UV Package Manager" />
   <img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
@@ -1008,13 +1004,6 @@ Your server is a standard **Stremio-style addon**, so it works in any compatible
 4. Done! 🎉 Your Telegram library appears in the catalog and streams directly.
 
 > 💡 Prefer **Stremio**? It works too — just install the same manifest URL.
-
----
-
-## ❤️ Support the project
-
-If Telegram-Stremio is useful to you, you can support its development here:
-**[donate.weebzonex.workers.dev](https://donate.weebzonex.workers.dev)**
 
 ---
 

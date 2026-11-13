@@ -1,0 +1,45 @@
+[13-Nov-26 05:16:42 PM] [INFO] - Logger initialized with IST timezone.
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/routes/api_routes.py:157: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query("movie", regex="^(movie|tv)$"),
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/routes/api_routes.py:188: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query(regex="^(movie|tv)$")
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/routes/api_routes.py:207: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query(regex="^(movie|tv)$")
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/routes/api_routes.py:267: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query(regex="^(movie|tv)$")
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/routes/api_routes.py:443: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query(..., regex="^(movie|tv)$"),
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/main.py:309: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query("movie", regex="^(movie|tv)$"),
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/main.py:614: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query("movie", regex="^(movie|tv|series)$"),
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/main.py:622: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query("movie", regex="^(movie|tv)$"),
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/main.py:659: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str | None = Query(None, regex="^(movie|tv)$"),
+/data/data/com.termux/files/home/telegram-stremio/Backend/fastapi/main.py:675: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+  media_type: str = Query("movie", regex="^(movie|tv)$"),
+[13-Nov-26 05:16:51 PM] [INFO] - Initializing Telegram-Stremio v-5.3.3
+[13-Nov-26 05:16:52 PM] [INFO] - Tracking Database connected successfully: mongodb+srv://thesahin17_db_user:*****@cluster0.urhhm1p.mongodb.net/tracking
+[13-Nov-26 05:16:52 PM] [INFO] - Storage 1 Database connected successfully: mongodb+srv://thesahin17_db_user:*****@cluster0.t55w4yf.mongodb.net/storage1
+[13-Nov-26 05:16:54 PM] [INFO] - Active storage DB: storage_1
+[13-Nov-26 05:17:01 PM] [INFO] - SettingsManager: settings loaded successfully.
+[13-Nov-26 05:17:04 PM] [INFO] - reload_extra_databases: 0 database(s) added, 0 database(s) removed.
+[13-Nov-26 05:17:07 PM] [INFO] - Bot Client : [@reonthebot]
+[13-Nov-26 05:17:16 PM] [INFO] - Loaded Userbot session from encrypted storage.
+[13-Nov-26 05:17:18 PM] [INFO] - Userbot Client : [@aliang3]
+[13-Nov-26 05:17:20 PM] [INFO] - Initializing Multi Clients...
+[13-Nov-26 05:17:20 PM] [INFO] - Main StreamBot connected to DC 5
+[13-Nov-26 05:17:20 PM] [INFO] - Starting - Bot Client 1
+[13-Nov-26 05:17:31 PM] [INFO] - Client 1 connected to DC 5
+[13-Nov-26 05:17:31 PM] [INFO] - Multi-Client Mode Enabled with 2 clients
+[13-Nov-26 05:17:33 PM] [INFO] - Found 2 existing commands. Deleting them...
+[13-Nov-26 05:17:33 PM] [INFO] - Bot commands updated successfully.
+[13-Nov-26 05:17:35 PM] [INFO] - Initializing Telegram-Stremio Web Server...
+[13-Nov-26 05:17:35 PM] [INFO] - Telegram-Stremio Started Successfully!
+INFO:     Started server process [24347]
+INFO:     Waiting for application startup.
+[13-Nov-26 05:17:35 PM] [INFO] - Started Dead Link Checker background task (Interval: 86400s)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:52764 - "GET / HTTP/1.1" 302 Found

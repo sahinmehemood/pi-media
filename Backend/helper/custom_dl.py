@@ -18,6 +18,13 @@ from Backend.helper.exceptions import FileNotFound
 from Backend.helper.pyro import get_file_ids
 from Backend.logger import LOGGER
 from Backend.helper.bounded import BoundedDict
+from Backend.helper.flood_wait import flood_handler
+from Backend.helper.stream_buffer import (
+    cache_key,
+    chunk_index,
+    get_shared_cache,
+    stream_policy,
+)
 from Backend.pyrofork.bot import client_avg_mbps, client_dc_map, client_failures, multi_clients, work_loads
 
 ACTIVE_STREAMS: Dict[str, Dict] = {}
@@ -146,6 +153,21 @@ class ByteStreamer:
         if not stream_id:
             stream_id = secrets.token_hex(8)
 
+        #----- Buffer policy resolves prefetch depth, parallelism, cache, and
+        #----- stall timeout from settings + RAM budget + FloodWait penalty.
+        policy = stream_policy(client_index=client_index, userbot=client_index < 0)
+        cache = get_shared_cache() if (policy.enabled and policy.cache_bytes > 0) else None
+        if policy.enabled:
+            prefetch = policy.depth_chunks(chunk_size)
+            parallelism = policy.workers
+        else:
+            #----- Buffer disabled: honour the documented fallback (settings UI)
+            #----- — one chunk of read-ahead, one worker, no shared cache —
+            #----- rather than inheriting the caller's buffer-era defaults.
+            prefetch = 1
+            parallelism = 1
+        stall_timeout = policy.stall_timeout
+
         now = time.time()
         registry_entry = {
             "stream_id": stream_id,
@@ -163,20 +185,32 @@ class ByteStreamer:
             "status": "active",
             "part_count": part_count,
             "prefetch": prefetch,
+            "buffer": {
+                "enabled": policy.enabled,
+                "profile": policy.profile,
+                "depth_chunks": max(1, prefetch),
+                "workers": parallelism,
+                "cache_mb": policy.cache_mb,
+                "adaptive": policy.adaptive,
+            },
             "meta": meta or {},
             "load_held": True,
         }
-
-        ACTIVE_STREAMS[stream_id] = registry_entry
-        stream_entry = registry_entry
-        work_loads[client_index] += 1
 
         queue_maxsize = max(1, prefetch)
         q: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
         stop_event = asyncio.Event()
 
+        #----- Set up the Telegram media session BEFORE counting this stream as
+        #----- active. A failed setup must not inflate work_loads or leave a
+        #----- phantom "active" entry in the registry.
         media_session = await self._get_media_session(file_id)
         location_box: List[object] = [await self._get_location(file_id)]
+
+        ACTIVE_STREAMS[stream_id] = registry_entry
+        stream_entry = registry_entry
+        work_loads[client_index] += 1
+
         async def _make_refresh_fn(loc_b, streamer_ref, file_id_ref):
             async def _refresh() -> bool:
                 if not chat_id or not message_id:
@@ -208,6 +242,14 @@ class ByteStreamer:
                     LOGGER.warning("Skipping extra client %s (session setup failed): %s", ec_idx, e)
 
         async def fetch_chunk_with_retries(seq_idx: int, off: int) -> Tuple[int, Optional[bytes]]:
+            #----- Served straight from RAM when another stream already pulled
+            #----- this chunk (seek back, resume, or a second viewer).
+            key = cache_key(getattr(file_id, "media_id", None), chunk_size, chunk_index(off, chunk_size)) if cache is not None else None
+            if cache is not None and key is not None:
+                cached = cache.get(key)
+                if cached is not None:
+                    return seq_idx, cached
+
             tries = 0
             flood_tries = 0
             while tries < 3 and flood_tries < 5 and not stop_event.is_set():
@@ -226,6 +268,13 @@ class ByteStreamer:
                     if chunk_bytes == b"":
                         return seq_idx, None
 
+                    #----- Success: decay the flood penalty for this client.
+                    flood_handler.record_success(c_idx)
+
+                    #----- Only full chunks go into the cache: a short read means
+                    #----- end-of-file and would poison later range requests.
+                    if cache is not None and key is not None and len(chunk_bytes) == chunk_size:
+                        cache.put(key, chunk_bytes)
                     return seq_idx, chunk_bytes
 
                 except asyncio.TimeoutError:
@@ -368,9 +417,9 @@ class ByteStreamer:
                             pass
 
                     try:
-                        off_chunk = await asyncio.wait_for(q.get(), timeout=90.0)
+                        off_chunk = await asyncio.wait_for(q.get(), timeout=stall_timeout)
                     except asyncio.TimeoutError:
-                        LOGGER.error("Producer stall (90 s) for stream %s — aborting", stream_id)
+                        LOGGER.error("Producer stall (%.0f s) for stream %s — aborting", stall_timeout, stream_id)
                         stop_event.set()
                         stream_entry["status"] = "error"
                         break
@@ -618,6 +667,12 @@ async def _speed_test_single_client(
                     chunk = getattr(r, "bytes", None)
                     if not chunk:
                         eof_reached = True
+                        #----- Drain remaining queued items so queue.join()
+                        #----- below can complete; otherwise orphaned items
+                        #----- never get task_done() and the join blocks forever.
+                        while not queue.empty():
+                            queue.get_nowait()
+                            queue.task_done()
                         continue
                     bytes_got = len(chunk)
                     total_bytes += bytes_got
