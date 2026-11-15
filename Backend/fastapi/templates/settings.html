@@ -1102,6 +1102,7 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
                 <span class="toggle-label"><strong>Adaptive depth</strong> — grow read-ahead when the link is fast, shrink it under a FloodWait</span>
             </label>
             <p id="buffer-estimate" style="font-size:0.78rem;color:var(--text-sec);margin:0.85rem 0 0"></p>
+            <p id="buffer-live" style="font-size:0.78rem;color:var(--text-sec);margin:0.35rem 0 0"></p>
         </div>
     </div>
 
@@ -1554,6 +1555,35 @@ const BUFFER_PROFILES = {
     balanced:     { readahead: 12, workers: 3, cache: 48 },
     aggressive:   { readahead: 24, workers: 5, cache: 96 },
 };
+
+/* Live buffer health: measured link speed, cache hit rate, flood pressure.
+   Polled from the same system-stats endpoint the dashboard uses, so no new
+   API surface is needed. Failures stay silent — this line is a nicety. */
+let bufferLiveTimer = null;
+function renderBufferLive(b) {
+    const out = document.getElementById('buffer-live');
+    if (!out) return;
+    if (!b || !b.enabled) { out.textContent = ''; return; }
+    const parts = [];
+    if (b.measured_mbps > 0) parts.push(`link ~${b.measured_mbps} Mbps (${b.samples} sample${b.samples === 1 ? '' : 's'})`);
+    if (b.cache && b.cache.budget_mb > 0) parts.push(`cache ${b.cache.used_mb}/${b.cache.budget_mb} MiB, ${Math.round((b.cache.hit_rate || 0) * 100)}% hit rate`);
+    if (b.flood_penalty > 0) parts.push(`flood penalty ${b.flood_penalty}`);
+    if (!parts.length) { out.textContent = 'No traffic yet — live stats appear once streams run.'; return; }
+    out.textContent = `Live: ${parts.join(' · ')}`;
+}
+async function pollBufferLive() {
+    try {
+        const res = await fetch('/api/system/stats');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderBufferLive(data.buffer);
+    } catch (_) { /* endpoint unreachable — leave the last line as is */ }
+}
+function startBufferLivePolling() {
+    if (bufferLiveTimer) clearInterval(bufferLiveTimer);
+    pollBufferLive();
+    bufferLiveTimer = setInterval(pollBufferLive, 10000);
+}
 
 function toggleBufferFields() {
     const enabled = document.getElementById('buffer_enabled').checked;
@@ -2217,6 +2247,9 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     toggleDuplicateProtection();
     toggleMediaflowFields();
+    toggleBufferFields();
+    updateBufferEstimate();
+    startBufferLivePolling();
     loadDbStats();
     loadLogs();
 });

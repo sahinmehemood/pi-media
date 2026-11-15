@@ -116,7 +116,17 @@ async def get_system_stats_api():
         db_stats = await db.get_database_stats()
         total_movies, total_tv_shows = db.content_totals(db_stats)
         api_tokens = await db.get_all_api_tokens()
-        
+
+        #----- Buffer health for the admin panel: policy, effective depth,
+        #----- cache hit rate, flood penalty, measured link speed. Defensive
+        #----- import — a buffer problem must never break the stats endpoint.
+        try:
+            from Backend.helper.stream_buffer import snapshot as buffer_snapshot
+            buffer_info = buffer_snapshot()
+        except Exception as buf_err:
+            LOGGER.warning(f"get_system_stats_api: buffer snapshot unavailable: {buf_err}")
+            buffer_info = {}
+
         return {
             "server_status": "running",
             "uptime": get_readable_time(time() - StartTime),
@@ -128,7 +138,8 @@ async def get_system_stats_api():
             "databases": db_stats,
             "total_databases": len(db_stats),
             "current_db_index": db.current_db_index,
-            "api_tokens": api_tokens
+            "api_tokens": api_tokens,
+            "buffer": buffer_info
         }
     except Exception as e:
         print(f"System Stats API Error: {e}")
