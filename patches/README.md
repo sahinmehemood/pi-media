@@ -9,6 +9,32 @@ be re-patched in minutes without hunting through the diff.
 | 1 | Smart streaming buffer (adaptive read-ahead, worker pool, shared RAM cache, centralized FloodWait handling) | Partially — 2 new modules are drop-in; 6 integration touch points |
 | 2 | Donation & promotional-content removal (no injected "Support" stream in addon responses, no donate links in UI/docs) | Fully — pure deletions, re-apply by re-deleting |
 
+## Update runbook — what to do on every new upstream release
+
+You only need to say: **"New official release — update the final branch."**
+
+The agent then does this (also runnable by hand):
+
+```bash
+bash patches/reapply.sh
+```
+
+The script:
+1. Fetches the newest `weebzone/Telegram-Stremio` and starts a fresh branch from it
+2. Copies the two drop-in modules (`stream_buffer.py`, `flood_wait.py`) and
+   `tests/` whole from the previous `final` branch — safe, they depend only on
+   `pyrogram.errors`, `Backend.logger` and settings key names
+3. Prints the exact per-file merge diffs for the 6 integration touch points and
+   the Feature 2 deletion list — each hunk is merged against the *new* upstream
+   file, never copied wholesale (upstream may have edited the same lines)
+4. Runs the regression suite (`for f in tests/test_*.py; do python3.14 "$f"; done`)
+   — `test_donation_removed.py` alone tells you if any promotional content
+   slipped back in during the merge
+5. Pushes the rebuilt `final` branch to GitHub
+
+Commit layout after a re-patch is the same 6-commit series as the original
+(see bottom of this file), so the branch history stays reviewable.
+
 ## File manifest
 
 ### Feature 1 — new modules (drop-in, copy over on every rebase)
@@ -100,3 +126,6 @@ feat: remove donation and promotional content
 test: add buffer, flood-wait and donation-removal regression suite
 docs: add feature patch re-application guide
 ```
+
+Each re-patch repeats this series on top of the new upstream base — `git log`
+then reads as one clean feature block per upstream release.
