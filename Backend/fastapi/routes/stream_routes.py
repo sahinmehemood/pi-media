@@ -370,6 +370,16 @@ async def media_streamer(request: Request, chat_id: int, msg_id: int, token: str
         results = await asyncio.gather(*[_get_extra_file_id(i) for i in other_indices[:parallelism - 1]])
         extra_clients_for_stream = [r for r in results if r is not None]
 
+    headers, status = _build_stream_headers(mime_type, file_name, req_length, range_header, start, end, file_size)
+
+    #----- HEAD must not create a stream. prefetch_stream registers the stream in
+    #----- ACTIVE_STREAMS and increments work_loads synchronously, and the returned
+    #----- generator is never iterated for HEAD — so its finally would never run,
+    #----- leaving a phantom active stream and an inflated workload until the
+    #----- stale-stream sweeper reclaims it. Return before creating anything.
+    if request.method == "HEAD":
+        return PlainResponse(status_code=status, headers=headers)
+
     body_gen = await streamer.prefetch_stream(
         file_id=file_id,
         client_index=index,
@@ -390,10 +400,6 @@ async def media_streamer(request: Request, chat_id: int, msg_id: int, token: str
 
     asyncio.create_task(track_usage(stream_id, token, token_data))
 
-    headers, status = _build_stream_headers(mime_type, file_name, req_length, range_header, start, end, file_size)
-
-    if request.method == "HEAD":
-        return PlainResponse(status_code=status, headers=headers)
     return StreamingResponse(body_gen, headers=headers, status_code=status, media_type=mime_type)
 
 
