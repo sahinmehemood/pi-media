@@ -23,7 +23,9 @@ from Backend.helper.stream_buffer import (
     cache_key,
     chunk_index,
     get_shared_cache,
+    note_speed_sample,
     record_stream_speed,
+    shedded_workers,
     stream_policy,
 )
 from Backend.pyrofork.bot import client_avg_mbps, client_dc_map, client_failures, multi_clients, work_loads
@@ -209,6 +211,10 @@ class ByteStreamer:
             prefetch = 1
             parallelism = 1
         stall_timeout = policy.stall_timeout
+        #----- Flood penalty already baked into `parallelism` above. The producer
+        #----- compares against the penalty accumulated DURING the stream to
+        #----- shed workers live (shedded_workers ignores the starting level).
+        start_penalty = flood_handler.penalty(client_index)
 
         now = time.time()
         registry_entry = {
@@ -306,6 +312,7 @@ class ByteStreamer:
             while tries < 3 and flood_tries < 5 and not stop_event.is_set():
                 c_idx, c_session, c_loc_box, c_refresh = session_pool[(seq_idx + tries) % len(session_pool)]
                 try:
+                    fetch_started = time.monotonic()
                     r = await asyncio.wait_for(
                         c_session.send(
                             raw.functions.upload.GetFile(
@@ -322,6 +329,17 @@ class ByteStreamer:
                     #----- Success: decay the flood penalty for this client.
                     flood_handler.record_success(c_idx)
                     BUFFER_METRICS.incr("chunks_fetched")
+
+                    #----- Mid-stream speed sample, measured at the network edge
+                    #----- (pure GetFile latency — no queue waits, no player
+                    #----- pacing). Scaled by the worker count to approximate the
+                    #----- aggregate link rate the adaptive depth was calibrated
+                    #----- on. Time-gated inside the window: at most one accepted
+                    #----- sample per second per process.
+                    fetch_elapsed = time.monotonic() - fetch_started
+                    if fetch_elapsed > 0:
+                        chunk_mbps = (len(chunk_bytes) * 8) / 1_000_000.0 / fetch_elapsed
+                        note_speed_sample(chunk_mbps * max(1, parallelism))
 
                     #----- Only full chunks go into the cache: a short read means
                     #----- end-of-file and would poison later range requests.
@@ -376,7 +394,20 @@ class ByteStreamer:
                 next_to_put = 0
                 max_parallel = max(1, parallelism)
 
-                initial = min(part_count, max_parallel)
+                def workers_allowed_now() -> int:
+                    """Workers this stream may keep in flight at this instant.
+
+                    A FloodWait on this client DURING the stream sheds workers
+                    without touching the stream-start policy; successful fetches
+                    decay the penalty, so the allowance recovers on its own.
+                    """
+                    allowed = shedded_workers(
+                        max_parallel, start_penalty, flood_handler.penalty(client_index))
+                    if allowed < len(scheduled_tasks):
+                        BUFFER_METRICS.incr("workers_shed")
+                    return allowed
+
+                initial = min(part_count, workers_allowed_now())
                 for i in range(initial):
                     seq = next_to_schedule
                     off = offset + seq * chunk_size
@@ -425,7 +456,11 @@ class ByteStreamer:
 
                             results_buffer[seq_idx] = chunk_bytes
 
-                            if next_to_schedule < part_count:
+                            #----- Replacement scheduling honours the live
+                            #----- allowance: under a fresh FloodWait we stop
+                            #----- replacing finished fetches until the shed
+                            #----- workers drain out of the in-flight set.
+                            if next_to_schedule < part_count and len(scheduled_tasks) < workers_allowed_now():
                                 seq = next_to_schedule
                                 off = offset + seq * chunk_size
                                 task = asyncio.create_task(fetch_chunk_with_retries(seq, off))
@@ -499,7 +534,8 @@ class ByteStreamer:
                     if off_chunk == ("error", None):
                         #----- Producer signalled a chunk retrieval failure.
                         #----- Do not present an incomplete stream as complete.
-                        BUFFER_METRICS.incr("chunks_failed")
+                        #----- chunks_failed was already counted at the fetch
+                        #----- site; counting again here would double it.
                         stream_entry["status"] = "error"
                         break
 

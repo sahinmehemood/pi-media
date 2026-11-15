@@ -15,6 +15,12 @@ The buffer never talks to Telegram directly.  ``ByteStreamer`` (custom_dl)
 owns the network; the buffer owns the *policy* and *cache* that the network
 layer consults.  This separation is the seam: you can swap the buffer
 implementation without touching the streamer, and vice versa.
+
+Live signals the streamer feeds back across the seam:
+
+    note_speed_sample(mbps)     # per-chunk link speed, time-gated, mid-stream
+    record_stream_speed(mbps)   # one aggregate sample when a stream finishes
+    shedded_workers(...)        # pure: workers allowed right now under flood
 """
 
 from __future__ import annotations
@@ -251,27 +257,69 @@ def build_policy(data: Optional[Dict[str, Any]] = None) -> BufferPolicy:
 #----- Speed window (feeds the adaptive read-ahead) ------------------------
 
 class _SpeedWindow:
-    """EWMA of measured stream throughput, in Mbps."""
+    """EWMA of measured stream throughput, in Mbps.
 
-    __slots__ = ("_mbps", "_samples")
+    Two sampling paths with different trust levels:
+
+    * ``observe`` — always accepted.  Used for the once-per-stream aggregate,
+      the ground-truth average including stalls and pauses.
+    * ``observe_gated`` — ignored when the previous accepted sample is younger
+      than ``SAMPLE_INTERVAL_S``.  Used for mid-stream per-chunk samples, which
+      arrive every few hundred milliseconds; without the gate the EWMA would
+      overweight whatever happened in the last second.
+
+    Both paths deliberately reject non-positive values: a paused or fully
+    buffered stream must never read as "slow link".
+    """
+
+    __slots__ = ("_mbps", "_samples", "_last_ts")
+
+    SAMPLE_INTERVAL_S = 1.0
 
     def __init__(self) -> None:
         self._mbps = 0.0
         self._samples = 0
+        self._last_ts = 0.0
 
-    def observe(self, mbps: float) -> None:
+    @staticmethod
+    def _normalize(mbps: float) -> Optional[float]:
         try:
             value = float(mbps)
         except (TypeError, ValueError):
-            return
+            return None
         if value <= 0:
-            return
-        value = min(value, 10_000.0)
+            return None
+        return min(value, 10_000.0)
+
+    def _accept(self, value: float) -> None:
         if self._samples == 0:
             self._mbps = value
         else:
             self._mbps = 0.7 * self._mbps + 0.3 * value
         self._samples = min(self._samples + 1, 1000)
+
+    def observe(self, mbps: float) -> None:
+        value = self._normalize(mbps)
+        if value is None:
+            return
+        self._accept(value)
+        self._last_ts = time.monotonic()
+
+    def observe_gated(self, mbps: float) -> bool:
+        """Accept a mid-stream sample at most once per SAMPLE_INTERVAL_S.
+
+        Returns True when the sample was accepted, so the caller can tell
+        rejected from absorbed samples without reaching into the window.
+        """
+        value = self._normalize(mbps)
+        if value is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_ts < self.SAMPLE_INTERVAL_S:
+            return False
+        self._accept(value)
+        self._last_ts = now
+        return True
 
     @property
     def mbps(self) -> float:
@@ -309,6 +357,7 @@ class BufferMetrics:
         "cache_misses",
         "cache_evictions",
         "flood_waits",
+        "workers_shed",
         "stall_timeouts",
         "streams_finished",
     )
@@ -501,6 +550,37 @@ def record_stream_speed(mbps: float) -> None:
     """Feed a finished stream's throughput back into the adaptive window."""
     METRICS.incr("streams_finished")
     SPEED.observe(mbps)
+
+
+def note_speed_sample(mbps: float) -> bool:
+    """Feed one mid-stream link-speed sample, time-gated.
+
+    Called from the chunk fetcher with the per-chunk network rate scaled by the
+    stream's worker count, so the adaptive depth reacts to the link's real
+    capability *during* a stream instead of only between streams. Measured at
+    the network edge on purpose: the consumer-side delivery rate equals
+    min(link, player) — a fast link feeding a slow player would read as slow
+    and the buffer would never relax.
+    """
+    return SPEED.observe_gated(mbps)
+
+
+def shedded_workers(parallelism: int, start_penalty: int, current_penalty: int) -> int:
+    """Workers a stream may use right now, given flood penalties.
+
+    Pure so the producer's scheduling decision is testable without Telegram.
+    ``parallelism`` is the stream-start worker count, which already has
+    ``start_penalty`` baked in; only the *extra* penalty accumulated since then
+    reduces it. Never returns less than 1 — a flood slows the stream down, it
+    must never stop it.
+    """
+    try:
+        start_penalty = int(start_penalty)
+        current_penalty = int(current_penalty)
+    except (TypeError, ValueError):
+        return max(MIN_WORKERS, int(parallelism))
+    extra = max(0, current_penalty - start_penalty)
+    return max(MIN_WORKERS, int(parallelism) - extra)
 
 
 def stream_policy(client_index: int = PRIMARY_CLIENT, userbot: bool = False) -> BufferPolicy:
