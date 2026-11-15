@@ -1788,6 +1788,35 @@ async def get_settings_api() -> dict:
     return {"settings": data}
 
 
+def _coerce_bounded_int(value, low: int, high: int, key: str) -> int:
+    """Coerce a JSON value to an int clamped into [low, high].
+
+    Accepts int, integral float and integer-parsable strings (the settings
+    form posts JSON numbers, and a browser may serialise 12 as 12.0 or "12").
+    Rejects bool — a subclass of int, so True must not silently become 1 —
+    and non-integral floats (3.9) and anything unparsable, with a 400 rather
+    than silently rounding user input to a different value.
+    """
+    if isinstance(value, bool):
+        raise HTTPException(status_code=400, detail=f"{key} must be an integer between {low} and {high}")
+
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise HTTPException(status_code=400, detail=f"{key} must be a whole number between {low} and {high}")
+        parsed = int(value)
+    elif isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{key} must be an integer between {low} and {high}")
+    else:
+        raise HTTPException(status_code=400, detail=f"{key} must be an integer between {low} and {high}")
+
+    return max(low, min(high, parsed))
+
+
 async def update_settings_api(payload: dict) -> dict:
 
     #----- Empty password string means leave it unchanged
@@ -1797,10 +1826,28 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["session_secret"]
 
     #----- Type coercion and validation
-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
+    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
     for key in bool_keys:
         if key in payload:
             payload[key] = bool(payload[key])
+
+    #----- Streaming buffer numeric bounds (must match stream_buffer.build_policy,
+    #----- otherwise the API would persist a value the policy silently clamps)
+    if "buffer_profile" in payload:
+        payload["buffer_profile"] = str(payload["buffer_profile"] or "balanced").strip().lower()
+        if payload["buffer_profile"] not in ("conservative", "balanced", "aggressive", "custom"):
+            raise HTTPException(status_code=400, detail="buffer_profile must be conservative, balanced, aggressive or custom")
+    buffer_int_bounds = {
+        "buffer_readahead_mb": (2, 128),
+        "buffer_workers": (1, 8),
+        "buffer_cache_mb": (0, 512),
+    }
+    for key, (low, high) in buffer_int_bounds.items():
+        if key in payload:
+            payload[key] = _coerce_bounded_int(payload[key], low, high, key)
+    if "buffer_stall_timeout" in payload:
+        payload["buffer_stall_timeout"] = _coerce_bounded_int(
+            payload["buffer_stall_timeout"], 15, 600, "buffer_stall_timeout")
 
     list_str_keys = {"auth_channels", "multi_tokens", "extra_databases", "global_search_channels", "anime_channels", "manual_channels"}
     for key in list_str_keys:
