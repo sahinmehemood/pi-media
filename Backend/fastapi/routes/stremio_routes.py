@@ -42,10 +42,6 @@ ADDON_NAME = "Telegram"
 ADDON_VERSION = __version__
 PAGE_SIZE = 15
 
-def _donation():
-    text = "Enjoying Telegram Stremio?\nTap to support the developer"
-    return {"name": "❤️ Support", "title": text, "description": text, "externalUrl": "https://donate.weebzonex.workers.dev"}
-
 async def _external_meta_for_id(id: str, parsed: dict, media_type: str) -> Optional[dict]:
     """Resolve basic metadata from TMDB or Cinemeta when an item is not in the database.
     This prevents Stremio/Nuvio from crashing with 'Could not load details' on un-cached items."""
@@ -2261,7 +2257,7 @@ async def get_streams(
             streams = filtered
 
     if not streams:
-        return {"streams": [_donation()]}
+        return {"streams": []}
 
     ascending = config.get("quality_sort") == "asc"
     if is_combined:
@@ -2282,7 +2278,6 @@ async def get_streams(
         if name_count[s["name"]] > 1 and SettingsManager.current().stream_formatter == "default":
             seen[s["name"]] = seen.get(s["name"], 0) + 1
             s["name"] = f"{s['name']} ({seen[s['name']]})"
-    streams.append(_donation())
     return {"streams": streams}
 
 #----- Configure/install landing page rendered as HTML for a token
