@@ -90,6 +90,21 @@ def test_dl_link_plugin_is_seamless():
     assert "diff --git a/Backend/helper/pyro.py" in patch
 
 
+def test_dl_channel_seams():
+    sm = read("Backend/helper/settings_manager.py")
+    assert '"dl_channel_id"' in sm and "def dl_channel_id" in sm
+    assert '"dl_channel_id")' in sm  # title sync in _all_channel_ids
+    api = read("Backend/fastapi/routes/api_routes.py")
+    assert 'payload["dl_channel_id"], "DL channel"' in api
+    assert '"DL": _norm_ids' in api  # cross-field clash check
+    assert 'add(s.dl_channel_id, "dl")' in api  # Bot Admin Manager list
+    html = read("Backend/fastapi/templates/settings.html")
+    assert 'id="dl_channel_id"' in html and 'id="dl_channel_id_clear"' in html
+    assert "dl_channel_id:" in html  # saveSettings payload
+    patch = read("patches/integrate.patch")
+    assert "dl_channel_id" in patch
+
+
 def test_startup_policy_init_seam():
     text = read("Backend/__main__.py")
     assert "refresh_policy(SettingsManager.current().to_dict())" in text

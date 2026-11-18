@@ -1942,11 +1942,17 @@ async def update_settings_api(payload: dict) -> dict:
             payload["skip_channel"], "skip channel"
         )
 
+    if "dl_channel_id" in payload and payload["dl_channel_id"]:
+        payload["dl_channel_id"] = _validate_channel_id(
+            payload["dl_channel_id"], "DL channel"
+        )
+
     #----- The same channel id may not appear in more than one channel field.
     #----- Only AUTH ∩ ANIME is allowed, because an anime channel is an auth channel
     #----- that's flagged as anime (the receiver only indexes files from auth channels).
     _channel_fields = ("auth_channels", "manual_channels", "global_search_channels",
-                       "anime_channels", "announcement_channel", "skip_channel")
+                       "anime_channels", "announcement_channel", "skip_channel",
+                       "dl_channel_id")
     if any(field in payload for field in _channel_fields):
         current = SettingsManager.current()
 
@@ -1962,6 +1968,7 @@ async def update_settings_api(payload: dict) -> dict:
             "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
             "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
             "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
+            "DL": _norm_ids(payload.get("dl_channel_id", str(current.dl_channel_id or ""))),
         }
 
         allowed_overlap = frozenset({"AUTH", "ANIME"})
@@ -1983,7 +1990,7 @@ async def update_settings_api(payload: dict) -> dict:
                 "admin_username", "admin_password", "session_secret", "http_proxy_url",
                 "cf_stream_url", "cf_stream_secret", "cf_stream_mode",
                 "mediaflow_password", "payment_instructions", "payment_qr_url",
-                "announcement_channel", "skip_channel"):
+                "announcement_channel", "skip_channel", "dl_channel_id"):
         if key in payload and isinstance(payload[key], str):
             payload[key] = payload[key].strip()
 
@@ -2601,6 +2608,8 @@ def _bot_served_channels() -> list[dict]:
         add(s.announcement_channel, "announce")
     if s.skip_channel:
         add(s.skip_channel, "skip")
+    if s.dl_channel_id:
+        add(s.dl_channel_id, "dl")
     return [mapping[k] for k in order]
 
 

@@ -40,13 +40,18 @@ class FakeMedia:
 
 
 class FakeMessage:
-    def __init__(self, mid=42, user=None, document=None, video=None, reply_to=None):
+    def __init__(self, mid=42, user=None, document=None, video=None, reply_to=None,
+                 forward_origin=None, forward_from_chat=None,
+                 forward_from_message_id=None):
         self.id = mid
         self.from_user = user
         self.chat = SimpleNamespace(id=user.id if user else 0)
         self.document = document
         self.video = video
         self.reply_to_message = reply_to
+        self.forward_origin = forward_origin
+        self.forward_from_chat = forward_from_chat
+        self.forward_from_message_id = forward_from_message_id
         self.replies = []
 
     async def reply_text(self, text, **kwargs):
@@ -92,9 +97,25 @@ class FakeClient:
             BotCommand("set", "Manually add IMDb metadata"),
         ]
         self.commands_set = []
+        self.copies = []
+        self.copy_msg_id = 9001
+        self.copy_error = None
+        self.member_status = "administrator"
+        self.member_error = None
 
     async def get_me(self):
         return self.me
+
+    async def copy_message(self, chat_id, from_chat_id, message_id):
+        self.copies.append((chat_id, from_chat_id, message_id))
+        if self.copy_error is not None:
+            raise self.copy_error
+        return SimpleNamespace(id=self.copy_msg_id)
+
+    async def get_chat_member(self, chat_id, user_id):
+        if self.member_error is not None:
+            raise self.member_error
+        return SimpleNamespace(status=self.member_status)
 
     async def get_bot_commands(self):
         return list(self.commands)
@@ -234,10 +255,16 @@ STUBS = install_stubs()
 dl = load_module("dl_link_under_test", ROOT / "Backend/pyrofork/plugins/dl_link.py")
 
 
+_PRISTINE_DEDUPE = (dl._dedupe_get, dl._dedupe_put)
+
+
 def reset():
     STUBS.db_state["by_user"].clear()
     STUBS.captured.clear()
     STUBS.botmod.Userbot = FakeUserbot()
+    dl._dedupe_get, dl._dedupe_put = _PRISTINE_DEDUPE
+    if hasattr(STUBS.settings, "dl_channel_id"):
+        del STUBS.settings.dl_channel_id
     STUBS.settings.subscription = False
     STUBS.settings.base_url = "https://example.test"
     STUBS.doctor.file_ids_error = None
@@ -471,6 +498,161 @@ def test_userbot_missing_is_explained():
         msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
         await dl.dl_auto_link(FakeClient(), msg)
         assert len(msg.replies) == 1 and "no Userbot is configured" in msg.replies[0]
+    run(main())
+
+
+#----- Pool mode (DL Channel)
+
+DL_ID = -1001234567890
+
+
+def _pool_on(dedupe_doc=None):
+    """Enable pool mode with an in-memory dedupe store; return the store."""
+    STUBS.settings.dl_channel_id = DL_ID
+    store = {}
+
+    async def fake_get(unique_id):
+        return dedupe_doc if dedupe_doc is not None else store.get(unique_id)
+
+    async def fake_put(unique_id, msg_id):
+        store[unique_id] = {"msg_id": msg_id}
+
+    dl._dedupe_get, dl._dedupe_put = fake_get, fake_put
+    return store
+
+
+def test_pool_payload_shape():
+    assert dl.pool_payload(DL_ID, 55) == {"chat_id": 1234567890, "msg_id": 55}
+    assert dl.pool_payload(1234567890, 55) == {"chat_id": 1234567890, "msg_id": 55}
+
+
+def test_pool_mode_copies_and_links_via_pool():
+    async def main():
+        reset()
+        store = _pool_on()
+        client = FakeClient()
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(client, msg)
+        assert client.copies == [(DL_ID, OWNER, 42)], client.copies
+        assert store == {"UNIQ1": {"msg_id": 9001}}, store
+        assert STUBS.captured == [{"chat_id": 1234567890, "msg_id": 9001}], STUBS.captured
+        assert len(msg.replies) == 1
+        text = msg.replies[0]
+        assert "/dl/TOK-111/ENC123/" in text and "bot pool" in text, text
+        assert "userbot not used" in text
+        # The userbot was never touched: no peer warm-up, no history scan.
+        assert STUBS.botmod.Userbot.calls == [], STUBS.botmod.Userbot.calls
+    run(main())
+
+
+def test_pool_mode_dedupe_hit_skips_copy():
+    async def main():
+        reset()
+        _pool_on(dedupe_doc={"msg_id": 777})
+        client = FakeClient()
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(client, msg)
+        assert client.copies == []
+        assert STUBS.captured == [{"chat_id": 1234567890, "msg_id": 777}]
+        assert "Already in" in msg.replies[0]
+    run(main())
+
+
+def test_pool_mode_copy_failure_never_falls_back():
+    async def main():
+        reset()
+        _pool_on()
+        client = FakeClient()
+        client.copy_error = RuntimeError("CHAT_ADMIN_REQUIRED")
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(client, msg)
+        assert len(msg.replies) == 1
+        text = msg.replies[0]
+        assert "Bot Admin Manager" in text and "not</b> used" in text, text
+        assert STUBS.captured == []  # no link of either kind was issued
+    run(main())
+
+
+def test_pool_mode_works_without_userbot():
+    async def main():
+        reset()
+        _pool_on()
+        STUBS.botmod.Userbot = None
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(FakeClient(), msg)
+        assert len(msg.replies) == 1 and "/dl/TOK-111/ENC123/" in msg.replies[0]
+    run(main())
+
+
+def test_forward_from_channel_replies_id_only():
+    async def main():
+        reset()
+        origin = SimpleNamespace(
+            chat=SimpleNamespace(id=DL_ID, type="channel", title="DL Pool"),
+            message_id=5)
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia(),
+                          forward_origin=origin)
+        client = FakeClient()
+        await dl.dl_auto_link(client, msg)
+        assert len(msg.replies) == 1
+        text = msg.replies[0]
+        assert "Channel ID" in text and str(DL_ID) in text, text
+        assert STUBS.captured == [] and client.copies == []
+    run(main())
+
+
+def test_forward_from_user_still_links():
+    async def main():
+        reset()
+        origin = SimpleNamespace(
+            chat=SimpleNamespace(id=555, type="private", title=None),
+            message_id=5)
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia(),
+                          forward_origin=origin)
+        await dl.dl_auto_link(FakeClient(), msg)
+        assert STUBS.captured == [{"chat_id": 999, "msg_id": 42, "global": True}]
+    run(main())
+
+
+def test_check_pool_mode_healthy():
+    async def main():
+        reset()
+        _pool_on(dedupe_doc={"msg_id": 777})
+        msg = _check_pair()
+        await dl.dl_check_command(FakeClient(), msg)
+        assert len(msg.replies) == 1
+        text = msg.replies[0]
+        assert "DL Channel" in text and "already pooled as post 777" in text, text
+        assert "File:" in text and "Probe:" in text and "Pool: 1 bot" in text, text
+        assert "healthy" in text
+        assert "✓ Userbot" not in text
+    run(main())
+
+
+def test_check_pool_mode_not_admin_is_degraded():
+    async def main():
+        reset()
+        _pool_on()
+        client = FakeClient()
+        client.member_status = "member"
+        msg = _check_pair()
+        await dl.dl_check_command(client, msg)
+        text = msg.replies[0]
+        assert "not an admin" in text and "not pooled yet" in text, text
+        assert "degraded" in text
+    run(main())
+
+
+def test_check_pool_mode_channel_unreachable_is_broken():
+    async def main():
+        reset()
+        _pool_on()
+        client = FakeClient()
+        client.member_error = RuntimeError("boom")
+        msg = _check_pair()
+        await dl.dl_check_command(client, msg)
+        text = msg.replies[0]
+        assert "cannot access the DL Channel" in text and "broken" in text, text
     run(main())
 
 

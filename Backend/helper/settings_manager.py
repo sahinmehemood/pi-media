@@ -48,6 +48,8 @@ _DEFAULTS: Dict[str, Any] = {
     "announce_new_content": False,
     "announcement_channel": "",
     "skip_channel": "",
+    #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
+    "dl_channel_id": "",
     "delete_on_metadata_fail": False,
     "better_poster_enabled": False,
     "better_poster": "",
@@ -177,6 +179,17 @@ class Settings:
     @property
     def skip_channel(self) -> str:
         return str(self._d.get("skip_channel") or "").strip()
+
+    @property
+    def dl_channel_id(self):
+        """DM Link pool channel as an int id, or None when not configured."""
+        raw = str(self._d.get("dl_channel_id") or "").strip()
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
 
     #----- Strings
     @property
@@ -426,7 +439,7 @@ class SettingsManager:
                 c = str(c).strip()
                 if c:
                     ids.add(c)
-        for key in ("announcement_channel", "skip_channel"):
+        for key in ("announcement_channel", "skip_channel", "dl_channel_id"):
             v = str(data.get(key) or "").strip()
             if v:
                 ids.add(v)
