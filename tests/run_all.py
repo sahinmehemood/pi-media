@@ -10,7 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-MODULES = ["test_stream_buffer_core", "test_buffered_streamer", "test_static_seams"]
+MODULES = ["test_stream_buffer_core", "test_buffered_streamer", "test_static_seams",
+           "test_dl_link"]
 
 
 def main() -> int:

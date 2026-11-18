@@ -23,12 +23,15 @@ REF="${2:-master}"
 PLUGIN_FILES=(
   Backend/helper/stream_buffer.py
   Backend/helper/buffered_streamer.py
+  Backend/pyrofork/plugins/dl_link.py
   tests/_loader.py
   tests/run_all.py
   tests/test_stream_buffer_core.py
   tests/test_buffered_streamer.py
   tests/test_static_seams.py
+  tests/test_dl_link.py
   docs/stream-buffer/DESIGN.md
+  docs/dl-link.md
   docs/stream-buffer/README.md
   tools/reapply.sh
   patches/integrate.patch

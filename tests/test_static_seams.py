@@ -75,6 +75,13 @@ def test_js_presets_match_engine_profiles():
         assert js == engine, (name, js, engine)
 
 
+def test_dl_link_plugin_is_seamless():
+    text = read("Backend/pyrofork/plugins/dl_link.py")
+    assert "dl_auto_link" in text and "dl_command" in text
+    patch = read("patches/integrate.patch")
+    assert "diff --git a/Backend/pyrofork" not in patch  # no seam edits there
+
+
 def test_startup_policy_init_seam():
     text = read("Backend/__main__.py")
     assert "refresh_policy(SettingsManager.current().to_dict())" in text
