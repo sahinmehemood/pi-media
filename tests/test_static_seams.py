@@ -78,8 +78,15 @@ def test_js_presets_match_engine_profiles():
 def test_dl_link_plugin_is_seamless():
     text = read("Backend/pyrofork/plugins/dl_link.py")
     assert "dl_auto_link" in text and "dl_command" in text
+    # The plugin never touches the command list itself: upstream's
+    # setup_bot_commands() owns (and wipes) it at every startup.
+    assert "set_bot_commands" not in text
     patch = read("patches/integrate.patch")
     assert "diff --git a/Backend/pyrofork" not in patch  # no seam edits there
+    # The /dl menu entry lives in upstream's commands list instead.
+    pyro = read("Backend/helper/pyro.py")
+    assert 'BotCommand("dl"' in pyro
+    assert "diff --git a/Backend/helper/pyro.py" in patch
 
 
 def test_startup_policy_init_seam():

@@ -27,8 +27,12 @@ Two pieces of glue live here because they cannot be upstream edits:
   can differ, so the payload's msg_id is resolved in the userbot's own
   view by matching the file in its chat history (file_unique_id, then
   name+size), never assumed equal to the bot-side id.
-* Command menu — /dl is merged into the bot's command list at runtime
-  (existing commands preserved), so it shows up in Telegram's menu.
+
+The /dl menu entry is NOT registered here: upstream's
+setup_bot_commands() wipes and rewrites the bot command list at every
+startup, so the entry lives in that list (Backend/helper/pyro.py, a
+one-line seam in the integration patch). The handler is the plugin;
+the menu is upstream's to own.
 """
 
 from urllib.parse import quote
@@ -104,9 +108,8 @@ async def resolve_token(user_id: int, user_name: str):
     return None
 
 
-#----- Runtime glue: userbot peer warm-up + /dl in the command menu
+#----- Runtime glue: userbot peer warm-up
 _peer_warmed = False
-_command_registered = False
 
 
 async def _warm_userbot_peer(client: Client) -> None:
@@ -155,26 +158,6 @@ async def _resolve_userbot_msg_id(bot_id: int, target: Message) -> int:
     except Exception:
         return target.id
     return fallback if fallback is not None else target.id
-
-
-async def _ensure_dl_command(client: Client) -> None:
-    """Merge /dl into the bot's command menu, keeping existing commands."""
-    global _command_registered
-    if _command_registered:
-        return
-    _command_registered = True
-    try:
-        from pyrogram.types import BotCommand
-
-        existing = await client.get_bot_commands() or []
-        if any(getattr(c, "command", None) == "dl" for c in existing):
-            return
-        await client.set_bot_commands([
-            *existing,
-            BotCommand("dl", "Stream/download link — reply to a file with /dl, or just send a file"),
-        ])
-    except Exception:
-        pass
 
 
 async def send_link(client: Client, message: Message, target: Message) -> None:
@@ -227,7 +210,6 @@ async def send_link(client: Client, message: Message, target: Message) -> None:
 @Client.on_message(filters.private & (filters.document | filters.video), group=11)
 async def dl_auto_link(client: Client, message: Message):
     try:
-        await _ensure_dl_command(client)
         await send_link(client, message, message)
     except Exception as e:
         LOGGER.warning(f"[DL] auto-link failed for message {message.id}: {e}")
@@ -236,7 +218,6 @@ async def dl_auto_link(client: Client, message: Message):
 #----- /dl: reply to any file in this chat to get (or re-get) its link
 @Client.on_message(filters.command("dl") & filters.private, group=11)
 async def dl_command(client: Client, message: Message):
-    await _ensure_dl_command(client)
     target = message.reply_to_message
     if target is None or media_of(target) is None:
         await message.reply_text(

@@ -200,7 +200,6 @@ def reset():
     STUBS.settings.subscription = False
     STUBS.settings.base_url = "https://example.test"
     dl._peer_warmed = False
-    dl._command_registered = False
 
 
 def test_handlers_registered():
@@ -303,29 +302,6 @@ def test_peer_warmup_failure_still_links():
         methods = [m for m, _u in STUBS.botmod.Userbot.calls
                    if m in ("get_chat", "get_users")]
         assert methods == ["get_chat", "get_users"], methods
-    run(main())
-
-
-def test_dl_added_to_command_menu_once():
-    async def main():
-        reset()
-        client = FakeClient()
-        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
-        await dl.dl_auto_link(client, msg)
-        await dl.dl_auto_link(client, FakeMessage(user=FakeUser(OWNER), document=FakeMedia()))
-        assert len(client.commands_set) == 1
-        merged = [c.command for c in client.commands_set[0]]
-        assert merged == ["start", "set", "dl"], merged
-    run(main())
-
-
-def test_dl_menu_skips_when_already_present():
-    async def main():
-        reset()
-        client = FakeClient(commands=[BotCommand("start", "s"), BotCommand("dl", "d")])
-        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
-        await dl.dl_auto_link(client, msg)
-        assert client.commands_set == []
     run(main())
 
 
