@@ -10,10 +10,13 @@ by the whole bot pool; otherwise the link is served by the Userbot.
 - **New file:** send any document/video to the bot in DM.
   It replies with the link automatically.
 - **Older file:** reply to the file message with `/dl`.
-- **Channel-ID helper:** forward a post *from a channel* to the bot
-  in DM and it replies with that channel's `-100…` ID (for Settings →
-  DL Channel) instead of a link. Reply `/dl` to the forwarded file if
-  you wanted its link.
+- **Channel-ID helper:** while no DL Channel is configured, forward
+  a post *from a channel* to the bot in DM and it replies with that
+  channel's `-100…` ID (for Settings → DL Channel) instead of a link.
+  Once a DL Channel is configured, forwards are link requests again —
+  and a forward *from the DL Channel itself* links the original
+  channel post directly (already pooled, no copy). Reply `/dl` to
+  any forwarded file always issues its link.
 - **Diagnostics:** reply to a file with `/check` for a staged
   pre-flight of the whole link path. In pool mode: DL Channel
   configured, bot admin status there, copy/dedupe state, file

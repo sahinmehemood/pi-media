@@ -601,6 +601,58 @@ def test_forward_from_channel_replies_id_only():
     run(main())
 
 
+def test_forward_from_other_channel_links_when_pool_on():
+    async def main():
+        reset()
+        _pool_on()
+        origin = SimpleNamespace(
+            chat=SimpleNamespace(id=-1009998887776, type="channel", title="Donghua"),
+            message_id=5)
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia(),
+                          forward_origin=origin)
+        client = FakeClient()
+        await dl.dl_auto_link(client, msg)
+        # A normal link request: copied into the DL Channel, pool payload.
+        assert client.copies == [(DL_ID, OWNER, 42)], client.copies
+        assert STUBS.captured == [{"chat_id": 1234567890, "msg_id": 9001}]
+        assert "Channel ID" not in msg.replies[0]
+    run(main())
+
+
+def test_forward_from_dl_channel_links_original_post():
+    async def main():
+        reset()
+        store = _pool_on()
+        origin = SimpleNamespace(
+            chat=SimpleNamespace(id=DL_ID, type="channel", title="DL Pool"),
+            message_id=321)
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia(),
+                          forward_origin=origin)
+        client = FakeClient()
+        await dl.dl_auto_link(client, msg)
+        assert client.copies == []  # already pooled: no copy
+        assert STUBS.captured == [{"chat_id": 1234567890, "msg_id": 321}], STUBS.captured
+        assert store == {"UNIQ1": {"msg_id": 321}}, store
+        assert "Already in your DL Channel" in msg.replies[0]
+    run(main())
+
+
+def test_forward_from_dl_channel_without_origin_id_shows_helper():
+    async def main():
+        reset()
+        _pool_on()
+        origin = SimpleNamespace(
+            chat=SimpleNamespace(id=DL_ID, type="channel", title="DL Pool"),
+            message_id=None)
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia(),
+                          forward_origin=origin)
+        await dl.dl_auto_link(FakeClient(), msg)
+        assert len(msg.replies) == 1
+        assert "configured DL Channel" in msg.replies[0], msg.replies[0]
+        assert STUBS.captured == []
+    run(main())
+
+
 def test_forward_from_user_still_links():
     async def main():
         reset()

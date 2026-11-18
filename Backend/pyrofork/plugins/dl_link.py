@@ -26,9 +26,13 @@ Access mirrors /start: in owner-only mode only the owner gets links;
 in subscription mode any user holding a valid API token does. The link
 itself is protected by that same personal token.
 
-Setup helper: forwarding a channel post to the bot in DM replies with
-that channel's id (for Settings → DL Channel) instead of a link;
-replying /dl to the forwarded file still issues its link.
+Setup helper: while no DL Channel is configured, forwarding a channel
+post to the bot in DM replies with that channel's id (for Settings →
+DL Channel) instead of a link. Once a DL Channel IS configured,
+forwards go back to being link requests — except a forward from the
+DL Channel itself, which links the original channel post directly
+(it is already pooled; no copy needed). Replying /dl to any forwarded
+file always issues its link.
 
 This file is a pyrofork plugin (auto-loaded from this package by the
 primary bot client). It adds no edits to any upstream file. The
@@ -426,16 +430,61 @@ async def _reply_channel_id(client: Client, message: Message, fwd) -> None:
     )
 
 
+async def _send_dl_post_link(client: Client, message: Message, dl_id: int,
+                             origin_msg_id: int) -> None:
+    """Link a file forwarded FROM the DL Channel: the original post is
+    already pooled, so the link points straight at it — no copy."""
+    user = message.from_user
+    user_id = user.id if user else message.chat.id
+    user_name = (user.first_name or user.username or f"User {user_id}") if user else f"User {user_id}"
+    token = await resolve_token(user_id, user_name)
+    if token is None:
+        return  # not authorised: stay silent, exactly like /dl does
+    media = media_of(message)
+    if media is None:
+        return
+    name, size = media
+    # Remember the mapping so DMing the same file later dedupes to this post.
+    await _dedupe_put(media_unique_id(message), origin_msg_id)
+    encoded = await encode_string(pool_payload(dl_id, origin_msg_id))
+    base_url = SettingsManager.current().base_url
+    link = build_link(base_url, token, encoded, name)
+    bots = 1 + len(getattr(botmod, "multi_clients", None) or {})
+    await message.reply_text(
+        "🔗 <b>Your stream / download link</b>\n\n"
+        f"📄 <code>{escape(name)}</code> ({human_size(size)})\n\n"
+        f"<code>{link}</code>\n\n"
+        f"Already in your DL Channel — served by the bot pool "
+        f"({bots} bot{'s' if bots != 1 else ''}), userbot not used. "
+        "Works in browsers and players (VLC, MX Player, mpv). "
+        "Keep it private — it carries your personal token.",
+        quote=True,
+        parse_mode=enums.ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
 #----- Auto-link: any document/video sent to the bot in DM gets its link.
-#----- A file forwarded FROM a channel gets the channel-id helper instead
-#----- (that's how the DL Channel id is discovered without a terminal).
+#----- Channel forwards are special only while they carry setup meaning:
+#----- no DL Channel yet -> the channel-id helper (id discovery); a forward
+#----- from the DL Channel itself -> a direct link to the pooled original.
+#----- Forwards from any other channel are ordinary link requests.
 @Client.on_message(filters.private & (filters.document | filters.video), group=11)
 async def dl_auto_link(client: Client, message: Message):
     try:
         fwd = _forward_channel(message)
         if fwd is not None:
-            await _reply_channel_id(client, message, fwd)
-            return
+            chat_id, origin_msg_id, _title = fwd
+            dl_id = _dl_channel_id()
+            if dl_id is None:
+                await _reply_channel_id(client, message, fwd)
+                return
+            if int(chat_id) == int(dl_id):
+                if origin_msg_id:
+                    await _send_dl_post_link(client, message, dl_id, int(origin_msg_id))
+                else:
+                    await _reply_channel_id(client, message, fwd)
+                return
         await send_link(client, message, message)
     except Exception as e:
         LOGGER.warning(f"[DL] auto-link failed for message {message.id}: {e}")
