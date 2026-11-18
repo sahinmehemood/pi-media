@@ -148,6 +148,24 @@ def test_small_flood_wait_is_honoured_then_recovers():
     run(main())
 
 
+def test_per_client_cap_is_strict():
+    async def main():
+        # custom policy: window of 8 but only 2 concurrent fetches allowed
+        # on the single client — the cap must never be exceeded (I5)
+        sb.refresh_policy({"buffer_profile": "custom", "buffer_workers": 8,
+                           "per_client_cap": 2, "buffer_readahead_mb": 16,
+                           "buffer_cache_mb": 48})
+        sb.get_cache().clear()
+        clients = [FakeClient(DATA, {"delay": 0.05})]
+        streamer, extras = make_streamer(clients)
+        out = await stream(streamer, extras, stream_id="cap")
+        await settle()
+        assert out == DATA
+        assert clients[0].session.max_concurrent <= 2, clients[0].session.max_concurrent
+        assert entry("cap")["status"] == "finished"
+    run(main())
+
+
 def test_disabled_policy_delegates_to_upstream():
     async def main():
         sb.refresh_policy({"buffer_enabled": False})

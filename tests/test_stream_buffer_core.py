@@ -143,6 +143,33 @@ def test_flood_budget_shed_and_penalty_decay():
     assert f.is_shed(2) and f.shed_clients() == (2,)
 
 
+def test_cache_key_positions():
+    aligned_a = sb.cache_key(7, 1024, ("chunk", 3))
+    aligned_b = sb.cache_key(7, 1024, ("chunk", 3))
+    unaligned = sb.cache_key(7, 1024, ("offset", 3072))
+    assert aligned_a == aligned_b
+    assert aligned_a != unaligned  # same byte range, different bytes — no collision
+    assert sb.cache_key(None, 1024, ("chunk", 0)) is None
+
+
+def test_speed_multiplier_caps_at_two():
+    s = sb.SpeedTracker()
+    assert s.observe(100.0)
+    assert s.multiplier() == 2.0
+
+
+def test_metrics_incr_rejects_unknown_names():
+    m = sb.BufferMetrics()
+    m.incr("chunks_fetched")
+    assert m.chunks_fetched == 1
+    try:
+        m.incr("chunks_fetchd")  # typo
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("incr must raise on an unknown counter")
+
+
 def test_module_state_refresh_and_snapshot():
     sb.refresh_policy({"buffer_profile": "custom", "buffer_cache_mb": 1})
     snap = sb.snapshot()

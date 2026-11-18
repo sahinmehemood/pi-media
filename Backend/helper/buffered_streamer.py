@@ -30,7 +30,7 @@ import re
 import secrets
 import time
 from collections import deque
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from fastapi import Request
 from pyrogram import raw
@@ -48,6 +48,19 @@ MAX_CHUNK_TRIES = 3  # non-flood attempts per chunk (matches upstream)
 MAX_FLOOD_TRIES = 5  # flood retries per chunk (matches upstream)
 
 _FLOOD_RE = re.compile(r"wait of (\d+) second", re.IGNORECASE)
+
+
+class PoolMember(NamedTuple):
+    """One streamable client in a stream's session pool."""
+
+    client_index: int
+    session: object
+    location_box: List[object]
+    refresh: object
+
+
+def _backoff_s(tries: int) -> float:
+    return min(0.5 * (2 ** (tries - 1)), 10.0)
 
 
 class BufferedByteStreamer(ByteStreamer):
@@ -87,9 +100,21 @@ class BufferedByteStreamer(ByteStreamer):
         )
 
     async def _buffered_prefetch(
-        self, policy, file_id, client_index, offset, first_part_cut,
-        last_part_cut, part_count, chunk_size, stream_id, meta, request,
-        chat_id, message_id, extra_clients,
+        self,
+        policy: sb.BufferPolicy,
+        file_id: FileId,
+        client_index: int,
+        offset: int,
+        first_part_cut: int,
+        last_part_cut: int,
+        part_count: int,
+        chunk_size: int,
+        stream_id: Optional[str],
+        meta: Optional[dict],
+        request: Optional[Request],
+        chat_id: Optional[int],
+        message_id: Optional[int],
+        extra_clients: Optional[List],
     ):
         if not stream_id:
             stream_id = secrets.token_hex(8)
@@ -124,11 +149,12 @@ class BufferedByteStreamer(ByteStreamer):
         media_id = getattr(file_id, "media_id", None)
         budget = sb.FloodBudget(policy.max_flood_wait_s)
         if policy.adaptive:
+            maximum = policy.workers * 2
             initial = max(1, int(round(policy.workers * sb.get_speed_tracker().multiplier())))
-            initial = min(policy.workers, initial)
+            initial = min(maximum, initial)
         else:
-            initial = policy.workers
-        window = sb.AdaptiveWindow(initial, policy.workers, adaptive=policy.adaptive)
+            maximum = initial = policy.workers
+        window = sb.AdaptiveWindow(initial, maximum, adaptive=policy.adaptive)
 
         q: asyncio.Queue = asyncio.Queue(maxsize=policy.readahead_chunks(chunk_size))
         stop_event = asyncio.Event()
@@ -155,45 +181,49 @@ class BufferedByteStreamer(ByteStreamer):
             return _refresh
 
         primary_refresh = await _make_refresh_fn(location_box, self, file_id)
-        # pool entries: (client_index, session, location_box, refresh_fn)
-        pool = [(client_index, media_session, location_box, primary_refresh)]
+        pool = [PoolMember(client_index, media_session, location_box, primary_refresh)]
         if extra_clients:
             for ec_idx, ec_streamer, ec_file_id in extra_clients:
                 try:
                     ec_session = await ec_streamer._get_media_session(ec_file_id)
                     ec_loc_box = [await ByteStreamer._get_location(ec_file_id)]
                     ec_refresh = await _make_refresh_fn(ec_loc_box, ec_streamer, ec_file_id)
-                    pool.append((ec_idx, ec_session, ec_loc_box, ec_refresh))
+                    pool.append(PoolMember(ec_idx, ec_session, ec_loc_box, ec_refresh))
                 except Exception as e:
                     LOGGER.warning("Skipping extra client %s (session setup failed): %s", ec_idx, e)
 
         in_flight = [0] * len(pool)
 
         def pick_pool_pos(tried: set, seq: int, attempt: int) -> Optional[int]:
-            """Least-penalised, least-loaded non-shed pool member.
+            """Least-penalised, least-loaded pool member under its cap.
 
-            Per-client cap is a preference: it filters the candidates when
-            any member is under it, and is ignored when all are at cap so
-            scheduling can never deadlock.
+            The per-client cap is strict (invariant I5): members at cap are
+            not candidates. Returns None when no member can take a fetch
+            right now — either all are shed (permanent) or all live members
+            are at cap (the caller waits for a slot; see fetch_one).
             """
-            candidates = [pos for pos, (c_idx, *_r) in enumerate(pool)
-                          if not budget.is_shed(c_idx)]
+            candidates = [pos for pos, member in enumerate(pool)
+                          if not budget.is_shed(member.client_index)
+                          and in_flight[pos] < policy.per_client_cap]
             if not candidates:
                 return None
             fresh = [pos for pos in candidates if pos not in tried]
             if fresh:
                 candidates = fresh
-            under_cap = [pos for pos in candidates
-                         if in_flight[pos] < policy.per_client_cap]
-            if under_cap:
-                candidates = under_cap
             start = (seq + attempt) % len(candidates)
             rotated = candidates[start:] + candidates[:start]
-            return min(rotated, key=lambda pos: (budget.penalty(pool[pos][0]), in_flight[pos]))
+            return min(rotated, key=lambda pos: (budget.penalty(pool[pos].client_index), in_flight[pos]))
+
+        def any_client_alive() -> bool:
+            return any(not budget.is_shed(m.client_index) for m in pool)
 
         async def fetch_one(seq: int, abs_off: int) -> Tuple[int, Optional[bytes], str]:
             """Fetch one chunk -> (seq, bytes, status); status in ok/eof/failed."""
-            key = sb.cache_key(media_id, chunk_size, abs_off)
+            if chunk_size > 0 and abs_off % chunk_size == 0:
+                position = ("chunk", abs_off // chunk_size)
+            else:
+                position = ("offset", abs_off)
+            key = sb.cache_key(media_id, chunk_size, position)
             if key is not None:
                 cached = cache.get(key)
                 if cached is not None:
@@ -209,9 +239,17 @@ class BufferedByteStreamer(ByteStreamer):
                 pos = pick_pool_pos(tried, seq, attempt)
                 attempt += 1
                 if pos is None:
-                    break  # every client shed — nothing left to try
+                    if not any_client_alive():
+                        break  # every client shed — nothing left to try
+                    # All live clients are at their concurrency cap: wait
+                    # for a slot instead of failing the chunk (I5).
+                    await asyncio.sleep(0.02)
+                    continue
                 tried.add(pos)
-                c_idx, c_session, c_loc_box, c_refresh = pool[pos]
+                member = pool[pos]
+                c_idx, c_session, c_loc_box, c_refresh = (
+                    member.client_index, member.session,
+                    member.location_box, member.refresh)
                 in_flight[pos] += 1
                 try:
                     r = await asyncio.wait_for(
@@ -236,7 +274,7 @@ class BufferedByteStreamer(ByteStreamer):
                 except asyncio.TimeoutError:
                     tries += 1
                     client_failures[c_idx] = client_failures.get(c_idx, 0) + 1
-                    await asyncio.sleep(min(0.5 * (2 ** (tries - 1)), 10.0))
+                    await asyncio.sleep(_backoff_s(tries))
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -260,7 +298,7 @@ class BufferedByteStreamer(ByteStreamer):
                             tries += 1
                     else:
                         tries += 1
-                        await asyncio.sleep(min(0.5 * (2 ** (tries - 1)), 10.0))
+                        await asyncio.sleep(_backoff_s(tries))
                 finally:
                     in_flight[pos] -= 1
             sb.METRICS.incr("chunks_failed")

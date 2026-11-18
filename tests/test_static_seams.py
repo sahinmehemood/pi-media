@@ -44,7 +44,7 @@ def test_settings_defaults_and_reinit_seam():
 def test_settings_api_validation_seam():
     text = read("Backend/fastapi/routes/api_routes.py")
     assert '"buffer_enabled", "buffer_adaptive"' in text
-    assert "_buffer_int_ranges" in text
+    assert "_buffer_ranges" in text
     assert "buffer_profile must be conservative, balanced, aggressive or custom" in text
 
 
@@ -56,6 +56,23 @@ def test_settings_page_card():
                        "buffer-fields", "buffer-estimate"):
         assert f'id="{element_id}"' in text, element_id
     assert "buffer_health" in text
+
+
+def test_js_presets_match_engine_profiles():
+    import re
+    import sys
+    sys.path.insert(0, str(ROOT / "tests"))
+    from _loader import load_stream_buffer
+
+    sb = load_stream_buffer()
+    html = read("Backend/fastapi/templates/settings.html")
+    block = re.search(r"BUFFER_PRESETS = \{(.*?)\};", html, re.S).group(1)
+    for name, prof in sb.PROFILES.items():
+        m = re.search(name + r":\s*\{\s*readahead:\s*(\d+),\s*workers:\s*(\d+),\s*cache:\s*(\d+)", block)
+        assert m, name
+        js = tuple(int(x) for x in m.groups())
+        engine = (prof["readahead_mb"], prof["workers"], prof["cache_mb"])
+        assert js == engine, (name, js, engine)
 
 
 def test_startup_policy_init_seam():

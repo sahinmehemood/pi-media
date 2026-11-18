@@ -63,21 +63,29 @@ Small interface, all policy/scheduling intelligence inside:
 - `build_policy(data) -> BufferPolicy` — profiles + strict clamps; pure.
 - `AdaptiveWindow` — per-stream AIMD controller. Interface:
   `window` (current target concurrency), `note_success()`, `note_flood()`,
-  `note_stall()`. Starts at the policy window; +1 per full window of
-  successes up to the policy max; halves on flood/stall (floor 1).
+  `note_stall()`. Starts at the policy workers pre-scaled by the speed
+  tracker; +1 per full window of successes up to a maximum of 2× the
+  policy workers (headroom so upward speed scaling can take effect);
+  halves on flood/stall (floor 1). With adaptation off, maximum = workers.
 - `SpeedTracker` — gated EWMA of observed stream throughput. Outliers
   (zero-byte, absurd) are rejected so one bad sample cannot poison it.
   `observe(mbps)`, `mbps()`, `multiplier()` (0.5–2.0 scaling for new streams'
   initial window).
 - `ChunkCache` — LRU, byte-budgeted. `get(key)`, `put(key, bytes)`,
-  `resize(budget)`, `stats()`. Key = (media_id, chunk_size, chunk_index).
+  `resize(budget)`, `stats()`. Key = (media_id, chunk_size, position),
+  where position is ("chunk", index) for chunk-aligned fetches — so the
+  same chunk reached from any stream offset shares one entry — and
+  ("offset", byte_offset) for unaligned fetches, whose bytes differ.
 - `FloodBudget` — one per stream, shared by all its workers:
-  `charge_wait(seconds) -> bool` (False when the stream's cumulative flood
-  budget is exhausted), `penalty(client_index)`, `record_flood(client_index,
-  seconds)`, `record_success(client_index)`, `shed(client_index)`,
+  `register_flood(client_index, wait_s) -> bool` (records the penalty and
+  charges the wait against the stream's cumulative budget in one atomic
+  step; False when the budget is exhausted), `penalty(client_index)`,
+  `record_success(client_index)`, `shed(client_index)`,
   `is_shed(client_index)`. A shed client receives no more chunks this stream.
 - `BufferMetrics` — counters (chunks_fetched, chunks_failed, cache_hits,
-  cache_misses, floods_seen, workers_shed, stall_timeouts) + `snapshot()`.
+  cache_misses, floods_seen, workers_shed, stall_timeouts,
+  streams_completed, streams_failed) + `snapshot()`. `incr` raises on an
+  unknown counter name — a typo is a bug, not a no-op.
 - Module state: `get_policy()`, `refresh_policy(data) -> BufferPolicy`,
   `get_cache()`, `note_stream_speed(mbps)`, `snapshot()` (policy + cache +
   metrics + speed, for the settings page).
@@ -89,7 +97,8 @@ through its interface with the standard library alone.
 
 `BufferedByteStreamer(ByteStreamer)` overrides only `prefetch_stream`, with
 the **identical external contract** as upstream: same signature, same
-`ACTIVE_STREAMS` registry keys and finish-time accounting (avg/instant/peak
+`ACTIVE_STREAMS` registry keys (plus additive `buffer_*` diagnostics) and
+finish-time accounting (avg/instant/peak
 Mbps, `db.log_stream_stats`, `work_loads`, RECENT_STREAMS hand-off), same
 in-order trimmed-byte generator, same disconnect handling. Inside, the
 producer is the buffer engine:
@@ -111,8 +120,12 @@ producer is the buffer engine:
 Keys (defaults): `buffer_enabled=True`, `buffer_profile="balanced"`,
 `buffer_adaptive=True`, `buffer_readahead_mb=16`, `buffer_workers=4`,
 `buffer_cache_mb=48`, `buffer_stall_timeout=90`.
-Validation is strict (integers must be integers — no silent float/bool
-coercion; out-of-range clamps to the documented range; bad profile = 400).
+Validation is strict (an integer setting must arrive as an integer —
+bools, floats and strings are rejected with 400, never silently coerced;
+in-type out-of-range values clamp to the documented range; bad
+profile = 400). `per_client_cap` is supplied by the profile (custom
+inherits balanced's) and `max_flood_wait_s` is a policy constant
+(300 s) in this version — neither is a settings key yet.
 Changing any buffer key hot-reloads the policy via `refresh_policy` — no
 restart. The settings page gains one card: enable toggle, profile select,
 the four numeric fields, a live readahead estimate, and a live health block
@@ -124,8 +137,9 @@ the four numeric fields, a live readahead estimate, and a live health block
 - I2 A stream that cannot complete ends as an error (registry status
   `error`, connection closes short of Content-Length) — never as a
   complete file. Silent truncation is a release-blocking defect.
-- I3 Bounded memory: in-flight + queued chunks ≤ window + readahead;
-  cache ≤ its byte budget; both derived from the policy, itself clamped.
+- I3 Bounded memory: in-flight chunks ≤ window (≤ policy workers, or
+  ≤ 2× workers with adaptation on) and queued chunks ≤ readahead;
+  cache ≤ its byte budget; all derived from the policy, itself clamped.
 - I4 No chunk fetch waits on FloodWait beyond the stream's flood budget
   (`max_flood_wait_s`, default 300 s cumulative); exhaustion sheds the
   client, and an empty pool fails the chunk (see I2).
@@ -141,7 +155,7 @@ the four numeric fields, a live readahead estimate, and a live health block
 
 | File | Change |
 |---|---|
-| `Backend/fastapi/routes/stream_routes.py` | `_get_streamer` constructs `BufferedByteStreamer` (+ import) |
+| `Backend/fastapi/routes/stream_routes.py` | `_get_streamer` and the userbot streamer construct `BufferedByteStreamer` (+ import) |
 | `Backend/helper/settings_manager.py` | buffer keys in `_DEFAULTS`, `Settings` properties, reinit hook calling `refresh_policy` |
 | `Backend/fastapi/routes/api_routes.py` | buffer keys in `bool_keys`; strict validation block in `update_settings_api` |
 | `Backend/fastapi/templates/settings.html` | one settings card; save/restore JS lines |

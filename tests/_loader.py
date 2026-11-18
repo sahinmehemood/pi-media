@@ -50,10 +50,22 @@ class FakeSession:
         self.data = data
         self.behaviour = behaviour or {}
         self.calls = 0
+        self.in_flight = 0
+        self.max_concurrent = 0
 
     async def send(self, request):
         self.calls += 1
+        self.in_flight += 1
+        self.max_concurrent = max(self.max_concurrent, self.in_flight)
+        try:
+            return await self._send(request)
+        finally:
+            self.in_flight -= 1
+
+    async def _send(self, request):
         b = self.behaviour
+        if b.get("delay"):
+            await asyncio.sleep(b["delay"])
         if b.get("fail_always"):
             raise RuntimeError("boom: connection reset")
         if b.get("flood_always"):

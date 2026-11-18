@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 import Backend.pyrofork.bot as botmod
 from Backend.config import Telegram
+from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
 from Backend.helper.passwords import hash_password
 from Backend.logger import LOGGER
 
@@ -312,7 +313,20 @@ class Settings:
         except (ValueError, TypeError):
             return 5
 
-    #----- Streaming buffer (mirrors the clamps in stream_buffer.build_policy)
+    #----- Streaming buffer (ranges shared with stream_buffer.RANGES;
+    #----- a stored value that is not an integer falls back to the
+    #----- default instead of being silently truncated)
+    def _buffer_int(self, key: str, default: int) -> int:
+        value = self._d.get(key, default)
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if not isinstance(value, int):
+            return default
+        low, high = _BUFFER_RANGES[key]
+        return max(low, min(high, value))
+
     @property
     def buffer_enabled(self) -> bool:
         return bool(self._d.get("buffer_enabled", True))
@@ -327,31 +341,19 @@ class Settings:
 
     @property
     def buffer_readahead_mb(self) -> int:
-        try:
-            return max(2, min(256, int(self._d.get("buffer_readahead_mb", 16))))
-        except (ValueError, TypeError):
-            return 16
+        return self._buffer_int("buffer_readahead_mb", 16)
 
     @property
     def buffer_workers(self) -> int:
-        try:
-            return max(1, min(16, int(self._d.get("buffer_workers", 4))))
-        except (ValueError, TypeError):
-            return 4
+        return self._buffer_int("buffer_workers", 4)
 
     @property
     def buffer_cache_mb(self) -> int:
-        try:
-            return max(0, min(1024, int(self._d.get("buffer_cache_mb", 48))))
-        except (ValueError, TypeError):
-            return 48
+        return self._buffer_int("buffer_cache_mb", 48)
 
     @property
     def buffer_stall_timeout(self) -> int:
-        try:
-            return max(15, min(600, int(self._d.get("buffer_stall_timeout", 90))))
-        except (ValueError, TypeError):
-            return 90
+        return self._buffer_int("buffer_stall_timeout", 90)
 
     #----- Lists
     @property

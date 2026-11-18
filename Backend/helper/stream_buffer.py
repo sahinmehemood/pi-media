@@ -92,9 +92,7 @@ def _clamp_key(data: Dict[str, Any], key: str, default: int) -> int:
     return _clamp(_as_int(data.get(key), default), low, high)
 
 
-# --------------------------------------------------------------------------
-# Policy
-# --------------------------------------------------------------------------
+#----- Policy
 
 
 @dataclass(frozen=True)
@@ -175,9 +173,7 @@ def build_policy(data: Optional[Dict[str, Any]] = None) -> BufferPolicy:
     )
 
 
-# --------------------------------------------------------------------------
-# Adaptive window (per-stream AIMD controller)
-# --------------------------------------------------------------------------
+#----- Adaptive window (per-stream AIMD controller)
 
 
 class AdaptiveWindow:
@@ -226,9 +222,7 @@ class AdaptiveWindow:
         self._window = max(1, self._window // 2)
 
 
-# --------------------------------------------------------------------------
-# Speed tracker (gated EWMA across streams)
-# --------------------------------------------------------------------------
+#----- Speed tracker (gated EWMA across streams)
 
 
 class SpeedTracker:
@@ -269,17 +263,15 @@ class SpeedTracker:
         return self._samples
 
     def multiplier(self) -> float:
-        """Scale for a new stream's initial window, in [0.5, 1.5]."""
+        """Scale for a new stream's initial window, in [0.5, 2.0]."""
         if self._ewma is None:
             return 1.0
-        return max(0.5, min(1.5, self._ewma / self._REFERENCE_MBPS))
+        return max(0.5, min(2.0, self._ewma / self._REFERENCE_MBPS))
 
 
-# --------------------------------------------------------------------------
-# Chunk cache (byte-budgeted LRU)
-# --------------------------------------------------------------------------
+#----- Chunk cache (byte-budgeted LRU)
 
-CacheKey = Tuple[Hashable, int, int]  # (media_id, chunk_size, chunk_index)
+CacheKey = Tuple[Hashable, int, Hashable]  # (media_id, chunk_size, position)
 
 
 class ChunkCache:
@@ -342,25 +334,23 @@ class ChunkCache:
         }
 
 
-def cache_key(media_id: Any, chunk_size: int, chunk_index: int) -> Optional[CacheKey]:
-    """Build a cache key, or None when the media id is unusable."""
+def cache_key(media_id: Any, chunk_size: int, position: Hashable) -> Optional[CacheKey]:
+    """Build a cache key, or None when the media id is unusable.
+
+    ``position`` identifies which bytes the chunk holds: the caller passes
+    ("chunk", index) for chunk-aligned fetches (so the same chunk reached
+    from any stream offset shares one entry) and ("offset", byte_offset)
+    for unaligned fetches, whose bytes are offset-specific.
+    """
     if media_id is None:
         return None
     try:
-        return (media_id, int(chunk_size), int(chunk_index))
+        return (media_id, int(chunk_size), position)
     except (TypeError, ValueError):
         return None
 
 
-def chunk_index_for_offset(offset: int, chunk_size: int) -> int:
-    if chunk_size <= 0:
-        return 0
-    return max(0, int(offset) // int(chunk_size))
-
-
-# --------------------------------------------------------------------------
-# Flood budget (per stream, shared by all its workers)
-# --------------------------------------------------------------------------
+#----- Flood budget (per stream, shared by all its workers)
 
 
 class FloodBudget:
@@ -423,9 +413,7 @@ class FloodBudget:
         return self._spent
 
 
-# --------------------------------------------------------------------------
-# Metrics
-# --------------------------------------------------------------------------
+#----- Metrics
 
 
 @dataclass
@@ -444,8 +432,9 @@ class BufferMetrics:
     _started: float = field(default_factory=time.time, repr=False)
 
     def incr(self, name: str, amount: int = 1) -> None:
-        if hasattr(self, name):
-            setattr(self, name, int(getattr(self, name)) + amount)
+        if name not in type(self).__dataclass_fields__ or name.startswith("_"):
+            raise ValueError(f"unknown buffer metric: {name!r}")
+        setattr(self, name, int(getattr(self, name)) + amount)
 
     def snapshot(self) -> Dict[str, Any]:
         return {
@@ -462,9 +451,7 @@ class BufferMetrics:
         }
 
 
-# --------------------------------------------------------------------------
-# Module state: current policy, shared cache, speed tracker, metrics
-# --------------------------------------------------------------------------
+#----- Module state: current policy, shared cache, speed tracker, metrics
 
 _POLICY: BufferPolicy = build_policy(None)
 _CACHE: ChunkCache = ChunkCache(_POLICY.cache_budget_bytes())
