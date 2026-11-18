@@ -16,6 +16,7 @@ from Backend import db
 from Backend.fastapi.security.tokens import verify_token
 from Backend.helper.bounded import BoundedDict
 from Backend.helper.analytics import client_ip_from, record_stream_start
+from Backend.helper.buffered_streamer import BufferedByteStreamer
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
 from Backend.helper.encrypt import decode_string
 from Backend.helper.pyro import get_thumb_download_target
@@ -125,7 +126,7 @@ def get_parallel_prefetch(client_count: int) -> tuple[int, int]:
 #----- Reuse (or lazily create) the cached ByteStreamer for a client index
 def _get_streamer(tg_client, index: int) -> ByteStreamer:
     if tg_client not in _streamer_by_client:
-        _streamer_by_client[tg_client] = ByteStreamer(tg_client, index)
+        _streamer_by_client[tg_client] = BufferedByteStreamer(tg_client, index)
     return _streamer_by_client[tg_client]
 
 
@@ -448,7 +449,7 @@ def _get_userbot_streamer() -> ByteStreamer:
     if botmod.Userbot is None:
         return None
     if _userbot_streamer is None or _userbot_streamer.client is not botmod.Userbot:
-        _userbot_streamer = ByteStreamer(botmod.Userbot, USERBOT_CLIENT_INDEX)
+        _userbot_streamer = BufferedByteStreamer(botmod.Userbot, USERBOT_CLIENT_INDEX)
     return _userbot_streamer
 
 

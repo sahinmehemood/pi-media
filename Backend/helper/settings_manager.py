@@ -62,6 +62,14 @@ _DEFAULTS: Dict[str, Any] = {
     "fanart_shuffle": False,
     "fanart_shuffle_interval": 5,
     "fanart_low_res_poster": True,
+    #----- Streaming buffer (see Backend/helper/stream_buffer.py)
+    "buffer_enabled": True,
+    "buffer_profile": "balanced",
+    "buffer_adaptive": True,
+    "buffer_readahead_mb": 16,
+    "buffer_workers": 4,
+    "buffer_cache_mb": 48,
+    "buffer_stall_timeout": 90,
 }
 
 
@@ -304,6 +312,47 @@ class Settings:
         except (ValueError, TypeError):
             return 5
 
+    #----- Streaming buffer (mirrors the clamps in stream_buffer.build_policy)
+    @property
+    def buffer_enabled(self) -> bool:
+        return bool(self._d.get("buffer_enabled", True))
+
+    @property
+    def buffer_adaptive(self) -> bool:
+        return bool(self._d.get("buffer_adaptive", True))
+
+    @property
+    def buffer_profile(self) -> str:
+        return str(self._d.get("buffer_profile") or "balanced").strip().lower()
+
+    @property
+    def buffer_readahead_mb(self) -> int:
+        try:
+            return max(2, min(256, int(self._d.get("buffer_readahead_mb", 16))))
+        except (ValueError, TypeError):
+            return 16
+
+    @property
+    def buffer_workers(self) -> int:
+        try:
+            return max(1, min(16, int(self._d.get("buffer_workers", 4))))
+        except (ValueError, TypeError):
+            return 4
+
+    @property
+    def buffer_cache_mb(self) -> int:
+        try:
+            return max(0, min(1024, int(self._d.get("buffer_cache_mb", 48))))
+        except (ValueError, TypeError):
+            return 48
+
+    @property
+    def buffer_stall_timeout(self) -> int:
+        try:
+            return max(15, min(600, int(self._d.get("buffer_stall_timeout", 90))))
+        except (ValueError, TypeError):
+            return 90
+
     #----- Lists
     @property
     def auth_channels(self) -> List[str]:
@@ -517,5 +566,24 @@ class SettingsManager:
         #----- Global Search toggle changed (module reads current() live per call)
         if old.get("global_search") != new.get("global_search") and "global_search" not in results:
             results["global_search"] = "enabled" if new.get("global_search") else "disabled"
+
+        #----- Streaming buffer changed: rebuild the policy, resize the cache
+        buffer_keys = {
+            "buffer_enabled", "buffer_profile", "buffer_adaptive",
+            "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
+            "buffer_stall_timeout",
+        }
+        if any(old.get(k) != new.get(k) for k in buffer_keys):
+            try:
+                from Backend.helper.stream_buffer import refresh_policy
+
+                policy = refresh_policy(new)
+                results["buffer"] = (
+                    f"policy rebuilt — profile={policy.profile}, "
+                    f"workers={policy.workers}, cache={policy.cache_mb} MiB"
+                )
+            except Exception as exc:
+                LOGGER.error(f"SettingsManager reinit buffer: {exc}")
+                results["buffer"] = f"error: {exc}"
 
         return results

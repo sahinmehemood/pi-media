@@ -693,6 +693,76 @@
     {% endif %}
 </div>
 
+<div class="settings-card">
+    <h2><i class="fa-solid fa-gauge-high"></i> Streaming Buffer</h2>
+    <label class="toggle-wrap">
+        <input type="checkbox" class="toggle-input" id="buffer_enabled"
+            {% if settings.buffer_enabled %}checked{% endif %} onchange="toggleBufferFields()">
+        <span class="toggle-track"></span>
+        <span class="toggle-label">
+            <strong>Enable streaming buffer</strong>
+            <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                Adaptive prefetch, multi-client scheduling, flood shielding and a chunk cache for
+                Stremio playback and /dl links. Off = upstream streaming behaviour, unchanged.
+            </span>
+        </span>
+    </label>
+    <div id="buffer-fields" style="{% if not settings.buffer_enabled %}display:none{% endif %}">
+        <div class="sess-grid">
+            <div>
+                <label class="s-label" for="buffer_profile">Profile</label>
+                <select id="buffer_profile" class="s-input" onchange="applyBufferProfile()">
+                    <option value="conservative" {% if settings.buffer_profile == 'conservative' %}selected{% endif %}>Conservative — lowest memory, fewest workers</option>
+                    <option value="balanced" {% if settings.buffer_profile == 'balanced' %}selected{% endif %}>Balanced — recommended</option>
+                    <option value="aggressive" {% if settings.buffer_profile == 'aggressive' %}selected{% endif %}>Aggressive — fastest links, more RAM</option>
+                    <option value="custom" {% if settings.buffer_profile == 'custom' %}selected{% endif %}>Custom — set the values below</option>
+                </select>
+            </div>
+            <div>
+                <label class="s-label" for="buffer_adaptive">Adaptive window</label>
+                <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="buffer_adaptive"
+                        {% if settings.buffer_adaptive %}checked{% endif %}>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">Grow/shrink concurrency live from measured speed and FloodWaits</span>
+                </label>
+            </div>
+            <div>
+                <label class="s-label" for="buffer_readahead_mb">Read-ahead (MiB)</label>
+                <input type="number" id="buffer_readahead_mb" class="s-input" min="2" max="256" step="1"
+                    value="{{ settings.buffer_readahead_mb }}" oninput="updateBufferEstimate()">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_workers">Workers</label>
+                <input type="number" id="buffer_workers" class="s-input" min="1" max="16" step="1"
+                    value="{{ settings.buffer_workers }}" oninput="updateBufferEstimate()">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_cache_mb">Chunk cache (MiB)</label>
+                <input type="number" id="buffer_cache_mb" class="s-input" min="0" max="1024" step="1"
+                    value="{{ settings.buffer_cache_mb }}" oninput="updateBufferEstimate()">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_stall_timeout">Stall timeout (s)</label>
+                <input type="number" id="buffer_stall_timeout" class="s-input" min="15" max="600" step="1"
+                    value="{{ settings.buffer_stall_timeout }}" oninput="updateBufferEstimate()">
+            </div>
+        </div>
+        <p id="buffer-estimate" style="font-size:0.8rem;color:var(--text-sec);margin-top:0.7rem"></p>
+        {% if buffer_health and buffer_health.policy %}
+        <p style="font-size:0.8rem;color:var(--text-sec);margin-top:0.4rem">
+            Live: profile <strong>{{ buffer_health['policy']['profile'] }}</strong> ·
+            speed EWMA <strong>{{ buffer_health['speed_mbps'] }} Mbps</strong> ({{ buffer_health['speed_samples'] }} samples) ·
+            cache <strong>{{ (buffer_health['cache']['size_bytes'] / 1048576) | round(1) }} / {{ (buffer_health['cache']['budget_bytes'] / 1048576) | round(0) }} MiB</strong>
+            ({{ buffer_health['cache']['hits'] }} hits / {{ buffer_health['cache']['misses'] }} misses) ·
+            chunks fetched {{ buffer_health['metrics']['chunks_fetched'] }}, failed {{ buffer_health['metrics']['chunks_failed'] }},
+            floods {{ buffer_health['metrics']['floods_seen'] }}, workers shed {{ buffer_health['metrics']['workers_shed'] }},
+            stalls {{ buffer_health['metrics']['stall_timeouts'] }}
+        </p>
+        {% endif %}
+    </div>
+</div>
+
 <style>
 .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
 .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
@@ -1656,6 +1726,37 @@ function toggleWebdavPwdVisibility() {
     }
 }
 
+const BUFFER_PRESETS = {
+    conservative: { readahead: 8,  workers: 2, cache: 16  },
+    balanced:     { readahead: 16, workers: 4, cache: 48  },
+    aggressive:   { readahead: 32, workers: 8, cache: 128 },
+};
+function toggleBufferFields() {
+    const on = document.getElementById('buffer_enabled').checked;
+    document.getElementById('buffer-fields').style.display = on ? '' : 'none';
+}
+function applyBufferProfile() {
+    const profile = document.getElementById('buffer_profile').value;
+    const preset = BUFFER_PRESETS[profile];
+    const fields = ['buffer_readahead_mb', 'buffer_workers', 'buffer_cache_mb'];
+    if (preset) {
+        document.getElementById('buffer_readahead_mb').value = preset.readahead;
+        document.getElementById('buffer_workers').value = preset.workers;
+        document.getElementById('buffer_cache_mb').value = preset.cache;
+    }
+    fields.forEach(id => { document.getElementById(id).disabled = !!preset; });
+    updateBufferEstimate();
+}
+function updateBufferEstimate() {
+    const el = document.getElementById('buffer-estimate');
+    if (!el) return;
+    const r = parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 0;
+    const w = parseInt(document.getElementById('buffer_workers').value, 10) || 0;
+    const c = parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0;
+    el.textContent = `≈ ${r} MiB read-ahead · ${w} workers across your bot clients · ${c} MiB chunk cache`;
+}
+document.addEventListener('DOMContentLoaded', () => { applyBufferProfile(); toggleBufferFields(); });
+
 async function saveSettings() {
     const btn   = document.getElementById('save-btn');
     const label = document.getElementById('save-label');
@@ -1740,6 +1841,13 @@ async function saveSettings() {
         announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
+        buffer_enabled:                document.getElementById('buffer_enabled').checked,
+        buffer_profile:                document.getElementById('buffer_profile').value,
+        buffer_adaptive:               document.getElementById('buffer_adaptive').checked,
+        buffer_readahead_mb:           parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 16,
+        buffer_workers:                parseInt(document.getElementById('buffer_workers').value, 10) || 4,
+        buffer_cache_mb:               parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0,
+        buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value, 10) || 90,
     };
     const dsEl = document.getElementById('default_streaming');
     if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
@@ -1875,6 +1983,15 @@ function renderSettings(s) {
     document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
     document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
     document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
+    document.getElementById('buffer_enabled').checked = (s.buffer_enabled ?? true);
+    document.getElementById('buffer_profile').value = s.buffer_profile || 'balanced';
+    document.getElementById('buffer_adaptive').checked = (s.buffer_adaptive ?? true);
+    document.getElementById('buffer_readahead_mb').value = (s.buffer_readahead_mb ?? 16);
+    document.getElementById('buffer_workers').value = (s.buffer_workers ?? 4);
+    document.getElementById('buffer_cache_mb').value = (s.buffer_cache_mb ?? 48);
+    document.getElementById('buffer_stall_timeout').value = (s.buffer_stall_timeout ?? 90);
+    toggleBufferFields();
+    applyBufferProfile();
     togglePosterProvider();
     toggleFanartShuffle();
     document.getElementById('upstream_repo').value = s.upstream_repo || '';

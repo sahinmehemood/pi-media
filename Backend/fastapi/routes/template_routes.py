@@ -262,11 +262,18 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
         titles = {}
     settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
 
+    try:
+        from Backend.helper.stream_buffer import snapshot as _buffer_snapshot
+
+        buffer_health = _buffer_snapshot()
+    except Exception:
+        buffer_health = {}
     ctx = _base_context(request)
     ctx.update({
         "current_user": get_current_user(request),
         "settings": settings,
         "userbot_configured": botmod.Userbot is not None,
         "formatter_presets": PRESETS,
+        "buffer_health": buffer_health,
     })
     return templates.TemplateResponse("settings.html", ctx)

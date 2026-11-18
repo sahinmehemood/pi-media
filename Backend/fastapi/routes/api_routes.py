@@ -1797,7 +1797,7 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["session_secret"]
 
     #----- Type coercion and validation
-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
+    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
     for key in bool_keys:
         if key in payload:
             payload[key] = bool(payload[key])
@@ -1844,6 +1844,30 @@ async def update_settings_api(payload: dict) -> dict:
             payload["fanart_shuffle_interval"] = max(0, int(payload["fanart_shuffle_interval"]))
         except (ValueError, TypeError):
             payload["fanart_shuffle_interval"] = 5
+
+    #----- Streaming buffer: strict validation (no silent coercion — an
+    #----- integer setting must arrive as an integer; ranges clamp)
+    if "buffer_profile" in payload:
+        if payload["buffer_profile"] not in ("conservative", "balanced", "aggressive", "custom"):
+            raise HTTPException(status_code=400, detail="buffer_profile must be conservative, balanced, aggressive or custom")
+    _buffer_int_ranges = {
+        "buffer_workers": (1, 16),
+        "buffer_readahead_mb": (2, 256),
+        "buffer_cache_mb": (0, 1024),
+        "buffer_stall_timeout": (15, 600),
+    }
+    for _key, (_lo, _hi) in _buffer_int_ranges.items():
+        if _key in payload:
+            _v = payload[_key]
+            if isinstance(_v, bool):
+                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
+            if isinstance(_v, float) and _v.is_integer():
+                _v = int(_v)
+            elif isinstance(_v, str) and _v.strip().lstrip("-").isdigit():
+                _v = int(_v.strip())
+            if not isinstance(_v, int):
+                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
+            payload[_key] = max(_lo, min(_hi, _v))
 
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
