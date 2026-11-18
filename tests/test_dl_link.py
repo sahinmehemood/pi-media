@@ -32,9 +32,11 @@ class FakeUser:
 
 
 class FakeMedia:
-    def __init__(self, file_name="TDH - S3 E27.mkv", file_size=989_000_000):
+    def __init__(self, file_name="TDH - S3 E27.mkv", file_size=989_000_000,
+                 file_unique_id="UNIQ1"):
         self.file_name = file_name
         self.file_size = file_size
+        self.file_unique_id = file_unique_id
 
 
 class FakeMessage:
@@ -59,9 +61,10 @@ class BotCommand:
 
 
 class FakeUserbot:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, history=None):
         self.calls = []
         self.fail = fail
+        self.history = history or []
 
     async def get_chat(self, username):
         self.calls.append(("get_chat", username))
@@ -74,6 +77,11 @@ class FakeUserbot:
         if self.fail:
             raise RuntimeError("boom")
         return SimpleNamespace(id=999)
+
+    async def get_chat_history(self, chat_id, limit=100):
+        self.calls.append(("get_chat_history", chat_id))
+        for m in self.history:
+            yield m
 
 
 class FakeClient:
@@ -280,8 +288,8 @@ def test_peer_warmup_by_username_once():
             msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
             await dl.dl_auto_link(client, msg)
             assert len(msg.replies) == 1
-        assert STUBS.botmod.Userbot.calls == [("get_chat", "reonthebot")], \
-            STUBS.botmod.Userbot.calls
+        warm = [c for c in STUBS.botmod.Userbot.calls if c[0] in ("get_chat", "get_users")]
+        assert warm == [("get_chat", "reonthebot")], warm
     run(main())
 
 
@@ -292,7 +300,8 @@ def test_peer_warmup_failure_still_links():
         msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
         await dl.dl_auto_link(FakeClient(), msg)
         assert len(msg.replies) == 1 and "/dl/TOK-111/" in msg.replies[0]
-        methods = [m for m, _u in STUBS.botmod.Userbot.calls]
+        methods = [m for m, _u in STUBS.botmod.Userbot.calls
+                   if m in ("get_chat", "get_users")]
         assert methods == ["get_chat", "get_users"], methods
     run(main())
 
@@ -317,6 +326,47 @@ def test_dl_menu_skips_when_already_present():
         msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
         await dl.dl_auto_link(client, msg)
         assert client.commands_set == []
+    run(main())
+
+
+def test_msg_id_resolved_in_userbot_view_by_unique_id():
+    async def main():
+        reset()
+        # Same file, but the userbot's DM numbers it 15, not 42.
+        twin = FakeMessage(mid=15, user=FakeUser(OWNER), document=FakeMedia())
+        STUBS.botmod.Userbot = FakeUserbot(history=[twin])
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(FakeClient(), msg)
+        assert len(msg.replies) == 1
+        assert STUBS.captured == [{"chat_id": 999, "msg_id": 15, "global": True}], \
+            STUBS.captured
+    run(main())
+
+
+def test_msg_id_resolved_by_name_and_size_fallback():
+    async def main():
+        reset()
+        twin = FakeMessage(mid=16, user=FakeUser(OWNER),
+                           document=FakeMedia(file_unique_id="OTHER"))
+        STUBS.botmod.Userbot = FakeUserbot(history=[twin])
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(FakeClient(), msg)
+        assert STUBS.captured == [{"chat_id": 999, "msg_id": 16, "global": True}], \
+            STUBS.captured
+    run(main())
+
+
+def test_msg_id_falls_back_to_bot_side_id():
+    async def main():
+        reset()
+        other = FakeMessage(mid=17, user=FakeUser(OWNER),
+                            document=FakeMedia(file_name="x.mkv", file_size=1,
+                                                file_unique_id="ZZZ"))
+        STUBS.botmod.Userbot = FakeUserbot(history=[other])
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(FakeClient(), msg)
+        assert STUBS.captured == [{"chat_id": 999, "msg_id": 42, "global": True}], \
+            STUBS.captured
     run(main())
 
 

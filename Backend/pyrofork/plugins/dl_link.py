@@ -23,6 +23,10 @@ Two pieces of glue live here because they cannot be upstream edits:
   resolves this bot by username once, which stores the peer (with its
   access hash) in the userbot session; the streamer's numeric-id
   lookups then work, including after restarts.
+* Message-id resolution — bot-side and user-side message ids in a DM
+  can differ, so the payload's msg_id is resolved in the userbot's own
+  view by matching the file in its chat history (file_unique_id, then
+  name+size), never assumed equal to the bot-side id.
 * Command menu — /dl is merged into the bot's command list at runtime
   (existing commands preserved), so it shows up in Telegram's menu.
 """
@@ -54,10 +58,18 @@ def link_payload(bot_id: int, msg_id: int) -> dict:
     """Encoded /dl payload: the DM message, via the global (userbot) route.
 
     chat_id is the bot's own user id: from the userbot account's point of
-    view, its private chat with this bot is addressed by the bot's id,
-    and message ids are shared by both parties of the chat.
+    view, its private chat with this bot is addressed by the bot's id.
+    msg_id must be the id in the USERBOT's view of the chat — in bot DMs
+    the two sides' message numbering can differ, so send_link resolves
+    it by matching the file (see _resolve_userbot_msg_id).
     """
     return {"chat_id": int(bot_id), "msg_id": int(msg_id), "global": True}
+
+
+def media_unique_id(message):
+    """The file_unique_id of a document/video message, else None."""
+    media = getattr(message, "document", None) or getattr(message, "video", None)
+    return getattr(media, "file_unique_id", None) if media is not None else None
 
 
 def build_link(base_url: str, token: str, encoded: str, name: str) -> str:
@@ -118,6 +130,33 @@ async def _warm_userbot_peer(client: Client) -> None:
             continue
 
 
+async def _resolve_userbot_msg_id(bot_id: int, target: Message) -> int:
+    """The id of `target`'s file in the userbot's view of the DM.
+
+    Bot-side and user-side message ids in a DM can differ (observed live:
+    the bot's msg 11 was a text message for the userbot, which answered
+    the stream request with "No supported media found"). So scan the
+    userbot's recent history of this chat and match the file itself —
+    file_unique_id first, then name+size. Falls back to the bot-side id
+    when nothing matches (e.g. a file older than the scan window).
+    """
+    userbot = getattr(botmod, "Userbot", None)
+    if userbot is None:
+        return target.id
+    unique = media_unique_id(target)
+    media = media_of(target)
+    fallback = None
+    try:
+        async for m in userbot.get_chat_history(bot_id, limit=100):
+            if unique is not None and media_unique_id(m) == unique:
+                return m.id
+            if fallback is None and media is not None and media_of(m) == media:
+                fallback = m.id
+    except Exception:
+        return target.id
+    return fallback if fallback is not None else target.id
+
+
 async def _ensure_dl_command(client: Client) -> None:
     """Merge /dl into the bot's command menu, keeping existing commands."""
     global _command_registered
@@ -167,7 +206,8 @@ async def send_link(client: Client, message: Message, target: Message) -> None:
         me = await client.get_me()
         bot_id = me.id
 
-    encoded = await encode_string(link_payload(bot_id, target.id))
+    msg_id = await _resolve_userbot_msg_id(bot_id, target)
+    encoded = await encode_string(link_payload(bot_id, msg_id))
     base_url = SettingsManager.current().base_url
     link = build_link(base_url, token, encoded, name)
 
