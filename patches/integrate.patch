@@ -309,10 +309,10 @@ index 2a5a120..ef302eb 100644
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
 diff --git a/Backend/helper/pyro.py b/Backend/helper/pyro.py
-index 0a0418f..56875a2 100644
+index 0a0418f..a8e0b59 100644
 --- a/Backend/helper/pyro.py
 +++ b/Backend/helper/pyro.py
-@@ -338,6 +338,10 @@ async def restart_notification():
+@@ -338,6 +338,11 @@ async def restart_notification():
  commands = [
      BotCommand("start", "🚀 Start the bot"),
      BotCommand("set", "🎬 Manually add IMDb metadata"),
@@ -320,6 +320,7 @@ index 0a0418f..56875a2 100644
 +    # The list must live here: setup_bot_commands() wipes and rewrites it at
 +    # every startup, so a plugin registering itself at runtime loses the race.
 +    BotCommand("dl", "🔗 Stream/download link for a file"),
++    BotCommand("check", "🩺 Pre-flight check for a file's link"),
  ]
  
  
