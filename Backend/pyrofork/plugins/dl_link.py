@@ -14,6 +14,17 @@ itself is protected by that same personal token.
 
 This file is a pyrofork plugin (auto-loaded from this package by the
 primary bot client). It adds no edits to any upstream file.
+
+Two pieces of glue live here because they cannot be upstream edits:
+
+* Peer warm-up — the global streamer reads the DM through the userbot
+  session, and pyrogram raises PEER_ID_INVALID for a peer that session
+  has never cached. Before the first link is issued, the userbot
+  resolves this bot by username once, which stores the peer (with its
+  access hash) in the userbot session; the streamer's numeric-id
+  lookups then work, including after restarts.
+* Command menu — /dl is merged into the bot's command list at runtime
+  (existing commands preserved), so it shows up in Telegram's menu.
 """
 
 from urllib.parse import quote
@@ -81,6 +92,52 @@ async def resolve_token(user_id: int, user_name: str):
     return None
 
 
+#----- Runtime glue: userbot peer warm-up + /dl in the command menu
+_peer_warmed = False
+_command_registered = False
+
+
+async def _warm_userbot_peer(client: Client) -> None:
+    """Let the userbot 'meet' this bot so the global streamer can read DMs.
+
+    Once per process; best-effort — link issuing proceeds either way.
+    """
+    global _peer_warmed
+    if _peer_warmed:
+        return
+    _peer_warmed = True
+    userbot = getattr(botmod, "Userbot", None)
+    username = getattr(getattr(client, "me", None), "username", None)
+    if userbot is None or not username:
+        return
+    for method in ("get_chat", "get_users"):
+        try:
+            await getattr(userbot, method)(username)
+            return
+        except Exception:
+            continue
+
+
+async def _ensure_dl_command(client: Client) -> None:
+    """Merge /dl into the bot's command menu, keeping existing commands."""
+    global _command_registered
+    if _command_registered:
+        return
+    _command_registered = True
+    try:
+        from pyrogram.types import BotCommand
+
+        existing = await client.get_bot_commands() or []
+        if any(getattr(c, "command", None) == "dl" for c in existing):
+            return
+        await client.set_bot_commands([
+            *existing,
+            BotCommand("dl", "Stream/download link — reply to a file with /dl, or just send a file"),
+        ])
+    except Exception:
+        pass
+
+
 async def send_link(client: Client, message: Message, target: Message) -> None:
     """Reply to `message` with the /dl link for the media in `target`."""
     user = message.from_user
@@ -97,6 +154,8 @@ async def send_link(client: Client, message: Message, target: Message) -> None:
             quote=True,
         )
         return
+
+    await _warm_userbot_peer(client)
 
     media = media_of(target)
     if media is None:
@@ -128,6 +187,7 @@ async def send_link(client: Client, message: Message, target: Message) -> None:
 @Client.on_message(filters.private & (filters.document | filters.video), group=11)
 async def dl_auto_link(client: Client, message: Message):
     try:
+        await _ensure_dl_command(client)
         await send_link(client, message, message)
     except Exception as e:
         LOGGER.warning(f"[DL] auto-link failed for message {message.id}: {e}")
@@ -136,6 +196,7 @@ async def dl_auto_link(client: Client, message: Message):
 #----- /dl: reply to any file in this chat to get (or re-get) its link
 @Client.on_message(filters.command("dl") & filters.private, group=11)
 async def dl_command(client: Client, message: Message):
+    await _ensure_dl_command(client)
     target = message.reply_to_message
     if target is None or media_of(target) is None:
         await message.reply_text(

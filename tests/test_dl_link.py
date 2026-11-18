@@ -52,12 +52,48 @@ class FakeMessage:
         return None
 
 
+class BotCommand:
+    def __init__(self, command, description):
+        self.command = command
+        self.description = description
+
+
+class FakeUserbot:
+    def __init__(self, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    async def get_chat(self, username):
+        self.calls.append(("get_chat", username))
+        if self.fail:
+            raise RuntimeError("boom")
+        return SimpleNamespace(id=999)
+
+    async def get_users(self, username):
+        self.calls.append(("get_users", username))
+        if self.fail:
+            raise RuntimeError("boom")
+        return SimpleNamespace(id=999)
+
+
 class FakeClient:
-    def __init__(self, bot_id=999):
-        self.me = SimpleNamespace(id=bot_id)
+    def __init__(self, bot_id=999, commands=None):
+        self.me = SimpleNamespace(id=bot_id, username="reonthebot")
+        self.commands = commands if commands is not None else [
+            BotCommand("start", "Start the bot"),
+            BotCommand("set", "Manually add IMDb metadata"),
+        ]
+        self.commands_set = []
 
     async def get_me(self):
         return self.me
+
+    async def get_bot_commands(self):
+        return list(self.commands)
+
+    async def set_bot_commands(self, commands):
+        self.commands_set.append(list(commands))
+        self.commands = list(commands)
 
 
 def install_stubs():
@@ -82,6 +118,7 @@ def install_stubs():
     )
     pyro_types = types.ModuleType("pyrogram.types")
     pyro_types.Message = object
+    pyro_types.BotCommand = BotCommand
     sys.modules["pyrogram"] = pyro
     sys.modules["pyrogram.types"] = pyro_types
 
@@ -106,7 +143,7 @@ def install_stubs():
 
     pyrofork = types.ModuleType("Backend.pyrofork")
     botmod = types.ModuleType("Backend.pyrofork.bot")
-    botmod.Userbot = object()  # configured by default
+    botmod.Userbot = FakeUserbot()  # configured by default
 
     helper = types.ModuleType("Backend.helper")
     encrypt = types.ModuleType("Backend.helper.encrypt")
@@ -151,9 +188,11 @@ dl = load_module("dl_link_under_test", ROOT / "Backend/pyrofork/plugins/dl_link.
 def reset():
     STUBS.db_state["by_user"].clear()
     STUBS.captured.clear()
-    STUBS.botmod.Userbot = object()
+    STUBS.botmod.Userbot = FakeUserbot()
     STUBS.settings.subscription = False
     STUBS.settings.base_url = "https://example.test"
+    dl._peer_warmed = False
+    dl._command_registered = False
 
 
 def test_handlers_registered():
@@ -230,6 +269,54 @@ def test_dl_command_on_replied_video():
         assert len(msg.replies) == 1
         assert "/dl/TOK-111/ENC123/file_77" in msg.replies[0]
         assert STUBS.captured == [{"chat_id": 999, "msg_id": 77, "global": True}]
+    run(main())
+
+
+def test_peer_warmup_by_username_once():
+    async def main():
+        reset()
+        client = FakeClient()
+        for _ in range(2):
+            msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+            await dl.dl_auto_link(client, msg)
+            assert len(msg.replies) == 1
+        assert STUBS.botmod.Userbot.calls == [("get_chat", "reonthebot")], \
+            STUBS.botmod.Userbot.calls
+    run(main())
+
+
+def test_peer_warmup_failure_still_links():
+    async def main():
+        reset()
+        STUBS.botmod.Userbot = FakeUserbot(fail=True)
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(FakeClient(), msg)
+        assert len(msg.replies) == 1 and "/dl/TOK-111/" in msg.replies[0]
+        methods = [m for m, _u in STUBS.botmod.Userbot.calls]
+        assert methods == ["get_chat", "get_users"], methods
+    run(main())
+
+
+def test_dl_added_to_command_menu_once():
+    async def main():
+        reset()
+        client = FakeClient()
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(client, msg)
+        await dl.dl_auto_link(client, FakeMessage(user=FakeUser(OWNER), document=FakeMedia()))
+        assert len(client.commands_set) == 1
+        merged = [c.command for c in client.commands_set[0]]
+        assert merged == ["start", "set", "dl"], merged
+    run(main())
+
+
+def test_dl_menu_skips_when_already_present():
+    async def main():
+        reset()
+        client = FakeClient(commands=[BotCommand("start", "s"), BotCommand("dl", "d")])
+        msg = FakeMessage(user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(client, msg)
+        assert client.commands_set == []
     run(main())
 
 
