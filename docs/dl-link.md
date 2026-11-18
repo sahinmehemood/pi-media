@@ -8,11 +8,24 @@ download link back. No channel posting, no indexing, no library entry.
 - **New file:** send or forward any document/video to the bot in DM.
   It replies with the link automatically.
 - **Older file:** reply to the file message with `/dl`.
+- **Diagnostics:** reply to a file with `/check` for a staged
+  pre-flight of the whole link path: access, userbot presence, peer
+  resolution, message resolution in the userbot's view, file
+  properties (size/DC/type), a live 1 MiB probe fetch through the
+  buffer engine (time-to-first-chunk + throughput), the current
+  buffer policy/metrics, and a verdict (healthy / slow / degraded /
+  broken, naming the failing stage).
 
 The reply contains the file name, its size, and a `/dl/<token>/…` link
 that plays in browsers and players (VLC, MX Player, mpv) and supports
 range requests (seeking/resume), like every other link this server
 issues.
+
+The `/dl` and `/check` menu entries live in upstream's bot-command
+list (`Backend/helper/pyro.py`, part of the integration patch):
+`setup_bot_commands()` wipes and rewrites that list at every startup,
+so it is the only place a menu entry survives a restart. The handlers
+themselves are entirely in the plugin.
 
 ## How it works
 

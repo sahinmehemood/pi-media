@@ -2,7 +2,10 @@
 
 Send (or forward) a document/video to the bot in a private chat and it
 replies with a ready-to-use /dl link; reply to any older file with /dl
-to get its link. The link points at the message through the existing
+to get its link; reply with /check to run a staged pre-flight of the
+whole link path (access, userbot, message resolution, file properties,
+and a live probe fetch through the buffer engine). The link points at
+the message through the existing
 "global" stream route, which serves it via the Userbot session — the
 userbot account is a party to the DM, so it can read the file — and
 through the streaming buffer engine. Nothing is indexed and nothing is
@@ -35,6 +38,8 @@ one-line seam in the integration patch). The handler is the plugin;
 the menu is upstream's to own.
 """
 
+import asyncio
+import time
 from urllib.parse import quote
 
 from pyrogram import Client, enums, filters
@@ -133,19 +138,17 @@ async def _warm_userbot_peer(client: Client) -> None:
             continue
 
 
-async def _resolve_userbot_msg_id(bot_id: int, target: Message) -> int:
-    """The id of `target`'s file in the userbot's view of the DM.
+async def _scan_userbot_view(bot_id: int, target: Message):
+    """The id of `target`'s file in the userbot's view of the DM, or None.
 
     Bot-side and user-side message ids in a DM can differ (observed live:
-    the bot's msg 11 was a text message for the userbot, which answered
-    the stream request with "No supported media found"). So scan the
-    userbot's recent history of this chat and match the file itself —
-    file_unique_id first, then name+size. Falls back to the bot-side id
-    when nothing matches (e.g. a file older than the scan window).
+    the bot's msg 11 was the userbot's msg 21832). So scan the userbot's
+    recent history of this chat and match the file itself —
+    file_unique_id first, then name+size.
     """
     userbot = getattr(botmod, "Userbot", None)
     if userbot is None:
-        return target.id
+        return None
     unique = media_unique_id(target)
     media = media_of(target)
     fallback = None
@@ -156,8 +159,15 @@ async def _resolve_userbot_msg_id(bot_id: int, target: Message) -> int:
             if fallback is None and media is not None and media_of(m) == media:
                 fallback = m.id
     except Exception:
-        return target.id
-    return fallback if fallback is not None else target.id
+        return None
+    return fallback
+
+
+async def _resolve_userbot_msg_id(bot_id: int, target: Message) -> int:
+    """_scan_userbot_view with the bot-side id as the last-resort fallback
+    (e.g. a file older than the scan window)."""
+    found = await _scan_userbot_view(bot_id, target)
+    return found if found is not None else target.id
 
 
 async def send_link(client: Client, message: Message, target: Message) -> None:
@@ -231,3 +241,173 @@ async def dl_command(client: Client, message: Message):
         await send_link(client, message, target)
     except Exception as e:
         LOGGER.warning(f"[DL] /dl failed for message {target.id}: {e}")
+
+
+#----- /check: Link Doctor — pre-flight diagnostics for a DM file
+PROBE_TIMEOUT_S = 20.0
+
+
+async def _peer_check(client: Client) -> bool:
+    """Can the userbot resolve this bot as a peer right now?"""
+    userbot = getattr(botmod, "Userbot", None)
+    username = getattr(getattr(client, "me", None), "username", None)
+    if userbot is None or not username:
+        return False
+    for method in ("get_chat", "get_users"):
+        try:
+            await getattr(userbot, method)(username)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def _probe_first_chunk(file_id, bot_id: int, msg_id: int):
+    """Time-to-first-chunk through the real buffer engine -> (ms, mbps).
+
+    Runs one 1 MiB part through BufferedByteStreamer on the userbot —
+    the exact path a DM link streams through — then abandons the
+    generator, exactly like a player disconnecting early.
+    """
+    from Backend.helper.buffered_streamer import BufferedByteStreamer
+    from Backend.pyrofork.bot import USERBOT_CLIENT_INDEX
+
+    streamer = BufferedByteStreamer(botmod.Userbot, USERBOT_CLIENT_INDEX)
+    chunk_size = 1024 * 1024
+    gen = await streamer.prefetch_stream(
+        file_id=file_id, client_index=USERBOT_CLIENT_INDEX,
+        offset=0, first_part_cut=0, last_part_cut=chunk_size,
+        part_count=1, chunk_size=chunk_size, prefetch=1, parallelism=1,
+        stream_id=None, meta={"title": "link-doctor probe", "doctor": True},
+        request=None, chat_id=bot_id, message_id=msg_id,
+    )
+    start = time.monotonic()
+    try:
+        chunk = await asyncio.wait_for(gen.__anext__(), timeout=PROBE_TIMEOUT_S)
+        ms = (time.monotonic() - start) * 1000.0
+        mbps = (len(chunk) * 8) / max(ms / 1000.0, 1e-9) / 1_000_000
+        return ms, mbps
+    finally:
+        try:
+            await gen.aclose()
+        except Exception:
+            pass
+
+
+async def run_check(client: Client, message: Message, target: Message) -> None:
+    """Reply to `message` with a staged health report for `target`'s file."""
+    user = message.from_user
+    user_id = user.id if user else message.chat.id
+    user_name = (user.first_name or user.username or f"User {user_id}") if user else f"User {user_id}"
+
+    token = await resolve_token(user_id, user_name)
+    if token is None:
+        return  # not authorised: stay silent, exactly like /dl does
+
+    media = media_of(target)
+    if media is None:
+        return
+    name, _size = media
+    lines = [f"🩺 <b>Link check</b> — <code>{name}</code>", "✓ Access: token valid"]
+    failures = []
+    degraded = []
+
+    if botmod.Userbot is None:
+        lines.append("✗ Userbot: not configured — DM links cannot stream")
+        lines.append("\n<b>Verdict: broken</b> — no userbot on this server.")
+        await message.reply_text("\n".join(lines), quote=True,
+                                 parse_mode=enums.ParseMode.HTML)
+        return
+    ub_name = getattr(getattr(botmod.Userbot, "me", None), "username", None)
+    lines.append(f"✓ Userbot: configured{f' (@{ub_name})' if ub_name else ''}")
+
+    if await _peer_check(client):
+        lines.append("✓ Peer: userbot can reach this bot")
+    else:
+        lines.append("✗ Peer: userbot cannot resolve this bot")
+        failures.append("peer resolution")
+
+    bot_id = client.me.id if getattr(client, "me", None) else None
+    if not bot_id:
+        bot_id = (await client.get_me()).id
+
+    found = await _scan_userbot_view(bot_id, target)
+    if found is not None:
+        lines.append(f"✓ Message: found in the userbot's view (id {found})")
+        msg_id = found
+    else:
+        lines.append("⚠ Message: not matched in the userbot's recent view — "
+                     "the link would carry the bot-side id, which is unreliable")
+        degraded.append("message not matched in userbot view")
+        msg_id = target.id
+
+    file_id = None
+    try:
+        from Backend.helper.pyro import get_file_ids
+
+        file_id = await get_file_ids(botmod.Userbot, bot_id, msg_id)
+        lines.append(f"✓ File: {human_size(file_id.file_size)} · DC{file_id.dc_id}"
+                     f" · {getattr(file_id, 'mime_type', '') or 'unknown type'}")
+    except Exception as e:
+        lines.append(f"✗ File properties: {type(e).__name__}: {e}")
+        failures.append("file lookup")
+
+    probe_ms = None
+    if file_id is not None:
+        try:
+            probe_ms, probe_mbps = await _probe_first_chunk(file_id, bot_id, msg_id)
+            lines.append(f"✓ Probe: first chunk in {probe_ms:.0f} ms (~{probe_mbps:.0f} Mbps)")
+        except asyncio.TimeoutError:
+            lines.append(f"✗ Probe: no data within {PROBE_TIMEOUT_S:.0f}s — the session "
+                         "is likely flood-penalised or the DC is unreachable")
+            failures.append("probe timeout")
+        except Exception as e:
+            lines.append(f"✗ Probe: {type(e).__name__}: {e}")
+            failures.append("probe fetch")
+
+    try:
+        from Backend.helper import stream_buffer as sb
+
+        pol = sb.get_policy()
+        snap = sb.METRICS.snapshot()
+        lines.append(f"Buffer: {pol.profile} · workers {pol.workers} · "
+                     f"per-client cap {pol.per_client_cap} · cache {pol.cache_mb} MB · "
+                     f"floods {snap['floods_seen']} · stalls {snap['stall_timeouts']}")
+    except Exception:
+        pass
+
+    if failures:
+        verdict = f"<b>Verdict: broken</b> — failing stage: {', '.join(failures)}."
+    elif degraded:
+        verdict = f"<b>Verdict: degraded</b> — {', '.join(degraded)}."
+    elif probe_ms is not None and probe_ms < 500:
+        verdict = "<b>Verdict: healthy</b> — should start instantly."
+    elif probe_ms is not None and probe_ms < 2000:
+        verdict = "<b>Verdict: healthy</b> — normal start expected."
+    elif probe_ms is not None:
+        verdict = "<b>Verdict: slow</b> — link works, but expect a slow start."
+    else:
+        verdict = "<b>Verdict: unknown</b> — probe did not run."
+    lines.append(f"\n{verdict}")
+
+    await message.reply_text("\n".join(lines), quote=True,
+                             parse_mode=enums.ParseMode.HTML,
+                             disable_web_page_preview=True)
+
+
+#----- /check: reply to any file in this chat to pre-flight its link path
+@Client.on_message(filters.command("check") & filters.private, group=11)
+async def dl_check_command(client: Client, message: Message):
+    target = message.reply_to_message
+    if target is None or media_of(target) is None:
+        await message.reply_text(
+            "Reply to a file in this chat with /check and I'll pre-flight it: "
+            "access, userbot, message resolution, file properties, and a live "
+            "probe fetch through the buffer engine.",
+            quote=True,
+        )
+        return
+    try:
+        await run_check(client, message, target)
+    except Exception as e:
+        LOGGER.warning(f"[DL] /check failed for message {target.id}: {e}")

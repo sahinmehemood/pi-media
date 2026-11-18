@@ -86,6 +86,7 @@ def test_dl_link_plugin_is_seamless():
     # The /dl menu entry lives in upstream's commands list instead.
     pyro = read("Backend/helper/pyro.py")
     assert 'BotCommand("dl"' in pyro
+    assert 'BotCommand("check"' in pyro
     assert "diff --git a/Backend/helper/pyro.py" in patch
 
 

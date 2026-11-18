@@ -342,6 +342,7 @@ commands = [
     # The list must live here: setup_bot_commands() wipes and rewrites it at
     # every startup, so a plugin registering itself at runtime loses the race.
     BotCommand("dl", "🔗 Stream/download link for a file"),
+    BotCommand("check", "🩺 Pre-flight check for a file's link"),
 ]
 
 

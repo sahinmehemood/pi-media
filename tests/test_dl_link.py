@@ -152,6 +152,7 @@ def install_stubs():
     pyrofork = types.ModuleType("Backend.pyrofork")
     botmod = types.ModuleType("Backend.pyrofork.bot")
     botmod.Userbot = FakeUserbot()  # configured by default
+    botmod.USERBOT_CLIENT_INDEX = -1
 
     helper = types.ModuleType("Backend.helper")
     encrypt = types.ModuleType("Backend.helper.encrypt")
@@ -179,14 +180,54 @@ def install_stubs():
         error=lambda *a, **k: None,
     )
 
+    #----- Link Doctor stubs: file-id lookup, probe streamer, buffer state
+    doctor = SimpleNamespace(file_ids_error=None, probe_mode="ok")
+    pyro_helper = types.ModuleType("Backend.helper.pyro")
+
+    async def get_file_ids(client, chat_id, message_id):
+        if doctor.file_ids_error is not None:
+            raise doctor.file_ids_error
+        return SimpleNamespace(file_size=989_000_000, dc_id=5,
+                               mime_type="video/x-matroska")
+
+    pyro_helper.get_file_ids = get_file_ids
+
+    bs_mod = types.ModuleType("Backend.helper.buffered_streamer")
+
+    class FakeBufferedStreamer:
+        def __init__(self, client, index):
+            self.client = client
+            self.index = index
+
+        async def prefetch_stream(self, **kwargs):
+            async def gen():
+                if doctor.probe_mode == "hang":
+                    import asyncio
+                    await asyncio.sleep(60)
+                if doctor.probe_mode == "error":
+                    raise RuntimeError("dc unreachable")
+                yield b"x" * 1024
+            return gen()
+
+    bs_mod.BufferedByteStreamer = FakeBufferedStreamer
+
+    sb_mod = types.ModuleType("Backend.helper.stream_buffer")
+    sb_mod.get_policy = lambda: SimpleNamespace(
+        profile="balanced", workers=4, per_client_cap=4, cache_mb=48)
+    sb_mod.METRICS = SimpleNamespace(
+        snapshot=lambda: {"floods_seen": 0, "stall_timeouts": 0})
+
     sys.modules.update({
         "Backend": backend, "Backend.db": db, "Backend.config": config,
         "Backend.pyrofork": pyrofork, "Backend.pyrofork.bot": botmod,
         "Backend.helper": helper, "Backend.helper.encrypt": encrypt,
         "Backend.helper.settings_manager": sm, "Backend.logger": logger_mod,
+        "Backend.helper.pyro": pyro_helper,
+        "Backend.helper.buffered_streamer": bs_mod,
+        "Backend.helper.stream_buffer": sb_mod,
     })
     return SimpleNamespace(db_state=state, captured=captured, botmod=botmod,
-                           settings=current, Client=Client)
+                           settings=current, Client=Client, doctor=doctor)
 
 
 STUBS = install_stubs()
@@ -199,12 +240,15 @@ def reset():
     STUBS.botmod.Userbot = FakeUserbot()
     STUBS.settings.subscription = False
     STUBS.settings.base_url = "https://example.test"
+    STUBS.doctor.file_ids_error = None
+    STUBS.doctor.probe_mode = "ok"
     dl._peer_warmed = False
+    dl.PROBE_TIMEOUT_S = 20.0
 
 
 def test_handlers_registered():
     names = [fn.__name__ for _f, _g, fn in STUBS.Client.handlers]
-    assert names == ["dl_auto_link", "dl_command"], names
+    assert names == ["dl_auto_link", "dl_command", "dl_check_command"], names
 
 
 def test_pure_helpers():
@@ -343,6 +387,80 @@ def test_msg_id_falls_back_to_bot_side_id():
         await dl.dl_auto_link(FakeClient(), msg)
         assert STUBS.captured == [{"chat_id": 999, "msg_id": 42, "global": True}], \
             STUBS.captured
+    run(main())
+
+
+def _check_pair(history=None):
+    target = FakeMessage(mid=42, user=FakeUser(OWNER), document=FakeMedia())
+    msg = FakeMessage(mid=43, user=FakeUser(OWNER), reply_to=target)
+    if history is not None:
+        STUBS.botmod.Userbot = FakeUserbot(history=history)
+    return msg
+
+
+def test_check_usage_without_reply():
+    async def main():
+        reset()
+        msg = FakeMessage(user=FakeUser(OWNER))
+        await dl.dl_check_command(FakeClient(), msg)
+        assert len(msg.replies) == 1 and "pre-flight" in msg.replies[0]
+    run(main())
+
+
+def test_check_stranger_gets_silence():
+    async def main():
+        reset()
+        target = FakeMessage(mid=42, user=FakeUser(555), document=FakeMedia())
+        msg = FakeMessage(mid=43, user=FakeUser(555), reply_to=target)
+        await dl.dl_check_command(FakeClient(), msg)
+        assert msg.replies == []
+    run(main())
+
+
+def test_check_healthy_report():
+    async def main():
+        reset()
+        twin = FakeMessage(mid=15, user=FakeUser(OWNER), document=FakeMedia())
+        msg = _check_pair(history=[twin])
+        await dl.dl_check_command(FakeClient(), msg)
+        assert len(msg.replies) == 1
+        text = msg.replies[0]
+        for needle in ("id 15", "DC5", "Probe", "Buffer: balanced", "healthy"):
+            assert needle in text, (needle, text)
+    run(main())
+
+
+def test_check_userbot_missing_reports_broken():
+    async def main():
+        reset()
+        msg = _check_pair()
+        STUBS.botmod.Userbot = None
+        await dl.dl_check_command(FakeClient(), msg)
+        assert len(msg.replies) == 1
+        assert "not configured" in msg.replies[0] and "broken" in msg.replies[0]
+    run(main())
+
+
+def test_check_probe_timeout_reports_broken():
+    async def main():
+        reset()
+        STUBS.doctor.probe_mode = "hang"
+        dl.PROBE_TIMEOUT_S = 0.2
+        msg = _check_pair(history=[])
+        await dl.dl_check_command(FakeClient(), msg)
+        assert len(msg.replies) == 1
+        assert "no data within" in msg.replies[0] and "broken" in msg.replies[0]
+    run(main())
+
+
+def test_check_file_lookup_failure_reports_broken():
+    async def main():
+        reset()
+        STUBS.doctor.file_ids_error = RuntimeError("dead reference")
+        msg = _check_pair(history=[])
+        await dl.dl_check_command(FakeClient(), msg)
+        assert len(msg.replies) == 1
+        assert "File properties" in msg.replies[0] and "broken" in msg.replies[0]
     run(main())
 
 
