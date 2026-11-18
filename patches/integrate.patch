@@ -1,0 +1,461 @@
+diff --git a/Backend/__main__.py b/Backend/__main__.py
+index 4b43288..4128675 100644
+--- a/Backend/__main__.py
++++ b/Backend/__main__.py
+@@ -34,6 +34,14 @@ async def start_services():
+         await asyncio.sleep(1.2)
+ 
+         await SettingsManager.initialize(db)
++
++        #----- Streaming buffer plugin: load the policy from saved settings
++        try:
++            from Backend.helper.stream_buffer import refresh_policy
++
++            refresh_policy(SettingsManager.current().to_dict())
++        except Exception as exc:
++            LOGGER.warning(f"Streaming buffer policy init failed (defaults apply): {exc}")
+         app.add_middleware(SessionMiddleware, secret_key=SettingsManager.current().session_secret or secrets.token_hex(32))
+         await asyncio.sleep(0.5)
+ 
+diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
+index 7d42083..86ed823 100644
+--- a/Backend/fastapi/routes/api_routes.py
++++ b/Backend/fastapi/routes/api_routes.py
+@@ -1797,7 +1797,7 @@ async def update_settings_api(payload: dict) -> dict:
+         del payload["session_secret"]
+ 
+     #----- Type coercion and validation
+-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
++    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
+     for key in bool_keys:
+         if key in payload:
+             payload[key] = bool(payload[key])
+@@ -1845,6 +1845,30 @@ async def update_settings_api(payload: dict) -> dict:
+         except (ValueError, TypeError):
+             payload["fanart_shuffle_interval"] = 5
+ 
++    #----- Streaming buffer: strict validation (no silent coercion — an
++    #----- integer setting must arrive as an integer; ranges clamp)
++    if "buffer_profile" in payload:
++        if payload["buffer_profile"] not in ("conservative", "balanced", "aggressive", "custom"):
++            raise HTTPException(status_code=400, detail="buffer_profile must be conservative, balanced, aggressive or custom")
++    _buffer_int_ranges = {
++        "buffer_workers": (1, 16),
++        "buffer_readahead_mb": (2, 256),
++        "buffer_cache_mb": (0, 1024),
++        "buffer_stall_timeout": (15, 600),
++    }
++    for _key, (_lo, _hi) in _buffer_int_ranges.items():
++        if _key in payload:
++            _v = payload[_key]
++            if isinstance(_v, bool):
++                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
++            if isinstance(_v, float) and _v.is_integer():
++                _v = int(_v)
++            elif isinstance(_v, str) and _v.strip().lstrip("-").isdigit():
++                _v = int(_v.strip())
++            if not isinstance(_v, int):
++                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
++            payload[_key] = max(_lo, min(_hi, _v))
++
+     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
+         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
+ 
+diff --git a/Backend/fastapi/routes/stream_routes.py b/Backend/fastapi/routes/stream_routes.py
+index 1ec874f..acd8dde 100644
+--- a/Backend/fastapi/routes/stream_routes.py
++++ b/Backend/fastapi/routes/stream_routes.py
+@@ -16,6 +16,7 @@ from Backend import db
+ from Backend.fastapi.security.tokens import verify_token
+ from Backend.helper.bounded import BoundedDict
+ from Backend.helper.analytics import client_ip_from, record_stream_start
++from Backend.helper.buffered_streamer import BufferedByteStreamer
+ from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
+ from Backend.helper.encrypt import decode_string
+ from Backend.helper.pyro import get_thumb_download_target
+@@ -125,7 +126,7 @@ def get_parallel_prefetch(client_count: int) -> tuple[int, int]:
+ #----- Reuse (or lazily create) the cached ByteStreamer for a client index
+ def _get_streamer(tg_client, index: int) -> ByteStreamer:
+     if tg_client not in _streamer_by_client:
+-        _streamer_by_client[tg_client] = ByteStreamer(tg_client, index)
++        _streamer_by_client[tg_client] = BufferedByteStreamer(tg_client, index)
+     return _streamer_by_client[tg_client]
+ 
+ 
+@@ -448,7 +449,7 @@ def _get_userbot_streamer() -> ByteStreamer:
+     if botmod.Userbot is None:
+         return None
+     if _userbot_streamer is None or _userbot_streamer.client is not botmod.Userbot:
+-        _userbot_streamer = ByteStreamer(botmod.Userbot, USERBOT_CLIENT_INDEX)
++        _userbot_streamer = BufferedByteStreamer(botmod.Userbot, USERBOT_CLIENT_INDEX)
+     return _userbot_streamer
+ 
+ 
+diff --git a/Backend/fastapi/routes/stremio_routes.py b/Backend/fastapi/routes/stremio_routes.py
+index 1dc8c44..aca7a37 100644
+--- a/Backend/fastapi/routes/stremio_routes.py
++++ b/Backend/fastapi/routes/stremio_routes.py
+@@ -42,10 +42,6 @@ ADDON_NAME = "Telegram"
+ ADDON_VERSION = __version__
+ PAGE_SIZE = 15
+ 
+-def _donation():
+-    text = "Enjoying Telegram Stremio?\nTap to support the developer"
+-    return {"name": "❤️ Support", "title": text, "description": text, "externalUrl": "https://donate.weebzonex.workers.dev"}
+-
+ async def _external_meta_for_id(id: str, parsed: dict, media_type: str) -> Optional[dict]:
+     """Resolve basic metadata from TMDB or Cinemeta when an item is not in the database.
+     This prevents Stremio/Nuvio from crashing with 'Could not load details' on un-cached items."""
+@@ -2261,7 +2257,7 @@ async def get_streams(
+             streams = filtered
+ 
+     if not streams:
+-        return {"streams": [_donation()]}
++        return {"streams": []}
+ 
+     ascending = config.get("quality_sort") == "asc"
+     if is_combined:
+@@ -2282,7 +2278,6 @@ async def get_streams(
+         if name_count[s["name"]] > 1 and SettingsManager.current().stream_formatter == "default":
+             seen[s["name"]] = seen.get(s["name"], 0) + 1
+             s["name"] = f"{s['name']} ({seen[s['name']]})"
+-    streams.append(_donation())
+     return {"streams": streams}
+ 
+ #----- Configure/install landing page rendered as HTML for a token
+diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
+index c53ee43..96e5b27 100644
+--- a/Backend/fastapi/routes/template_routes.py
++++ b/Backend/fastapi/routes/template_routes.py
+@@ -262,11 +262,18 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+         titles = {}
+     settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
+ 
++    try:
++        from Backend.helper.stream_buffer import snapshot as _buffer_snapshot
++
++        buffer_health = _buffer_snapshot()
++    except Exception:
++        buffer_health = {}
+     ctx = _base_context(request)
+     ctx.update({
+         "current_user": get_current_user(request),
+         "settings": settings,
+         "userbot_configured": botmod.Userbot is not None,
+         "formatter_presets": PRESETS,
++        "buffer_health": buffer_health,
+     })
+     return templates.TemplateResponse("settings.html", ctx)
+diff --git a/Backend/fastapi/templates/base.html b/Backend/fastapi/templates/base.html
+index 55027ba..6de2450 100644
+--- a/Backend/fastapi/templates/base.html
++++ b/Backend/fastapi/templates/base.html
+@@ -532,7 +532,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
+     </div>
+     <p class="label-caps px-1 mb-2">Theme</p>
+     <div class="theme-opts mb-3" data-theme-picker></div>
+-    <a href="https://donate.weebzonex.workers.dev" target="_blank" rel="noopener" class="menu-row"><i class="fa-solid fa-heart"></i>Support the project</a>
+     <a href="/logout" class="menu-row danger"><i class="fa-solid fa-arrow-right-from-bracket"></i>Log out</a>
+ </div>
+ 
+@@ -562,7 +561,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
+         {% for href, label, icon, prefix in nav[dock_count:] %}
+         <a href="{{ href }}" class="sheet-link" {% if is_active(prefix) %}aria-current="page"{% endif %}><i class="fa-solid {{ icon }}"></i>{{ label }}</a>
+         {% endfor %}
+-        <a href="https://donate.weebzonex.workers.dev" target="_blank" rel="noopener" class="sheet-link"><i class="fa-solid fa-heart"></i>Support</a>
+     </div>
+     <p class="label-caps mb-2">Theme</p>
+     <div class="theme-opts mb-4" data-theme-picker></div>
+diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
+index 2a5a120..ef302eb 100644
+--- a/Backend/fastapi/templates/settings.html
++++ b/Backend/fastapi/templates/settings.html
+@@ -693,6 +693,76 @@
+     {% endif %}
+ </div>
+ 
++<div class="settings-card">
++    <h2><i class="fa-solid fa-gauge-high"></i> Streaming Buffer</h2>
++    <label class="toggle-wrap">
++        <input type="checkbox" class="toggle-input" id="buffer_enabled"
++            {% if settings.buffer_enabled %}checked{% endif %} onchange="toggleBufferFields()">
++        <span class="toggle-track"></span>
++        <span class="toggle-label">
++            <strong>Enable streaming buffer</strong>
++            <span style="color:var(--text-sec);font-size:0.8rem;display:block">
++                Adaptive prefetch, multi-client scheduling, flood shielding and a chunk cache for
++                Stremio playback and /dl links. Off = upstream streaming behaviour, unchanged.
++            </span>
++        </span>
++    </label>
++    <div id="buffer-fields" style="{% if not settings.buffer_enabled %}display:none{% endif %}">
++        <div class="sess-grid">
++            <div>
++                <label class="s-label" for="buffer_profile">Profile</label>
++                <select id="buffer_profile" class="s-input" onchange="applyBufferProfile()">
++                    <option value="conservative" {% if settings.buffer_profile == 'conservative' %}selected{% endif %}>Conservative — lowest memory, fewest workers</option>
++                    <option value="balanced" {% if settings.buffer_profile == 'balanced' %}selected{% endif %}>Balanced — recommended</option>
++                    <option value="aggressive" {% if settings.buffer_profile == 'aggressive' %}selected{% endif %}>Aggressive — fastest links, more RAM</option>
++                    <option value="custom" {% if settings.buffer_profile == 'custom' %}selected{% endif %}>Custom — set the values below</option>
++                </select>
++            </div>
++            <div>
++                <label class="s-label" for="buffer_adaptive">Adaptive window</label>
++                <label class="toggle-wrap">
++                    <input type="checkbox" class="toggle-input" id="buffer_adaptive"
++                        {% if settings.buffer_adaptive %}checked{% endif %}>
++                    <span class="toggle-track"></span>
++                    <span class="toggle-label">Grow/shrink concurrency live from measured speed and FloodWaits</span>
++                </label>
++            </div>
++            <div>
++                <label class="s-label" for="buffer_readahead_mb">Read-ahead (MiB)</label>
++                <input type="number" id="buffer_readahead_mb" class="s-input" min="2" max="256" step="1"
++                    value="{{ settings.buffer_readahead_mb }}" oninput="updateBufferEstimate()">
++            </div>
++            <div>
++                <label class="s-label" for="buffer_workers">Workers</label>
++                <input type="number" id="buffer_workers" class="s-input" min="1" max="16" step="1"
++                    value="{{ settings.buffer_workers }}" oninput="updateBufferEstimate()">
++            </div>
++            <div>
++                <label class="s-label" for="buffer_cache_mb">Chunk cache (MiB)</label>
++                <input type="number" id="buffer_cache_mb" class="s-input" min="0" max="1024" step="1"
++                    value="{{ settings.buffer_cache_mb }}" oninput="updateBufferEstimate()">
++            </div>
++            <div>
++                <label class="s-label" for="buffer_stall_timeout">Stall timeout (s)</label>
++                <input type="number" id="buffer_stall_timeout" class="s-input" min="15" max="600" step="1"
++                    value="{{ settings.buffer_stall_timeout }}" oninput="updateBufferEstimate()">
++            </div>
++        </div>
++        <p id="buffer-estimate" style="font-size:0.8rem;color:var(--text-sec);margin-top:0.7rem"></p>
++        {% if buffer_health and buffer_health.policy %}
++        <p style="font-size:0.8rem;color:var(--text-sec);margin-top:0.4rem">
++            Live: profile <strong>{{ buffer_health['policy']['profile'] }}</strong> ·
++            speed EWMA <strong>{{ buffer_health['speed_mbps'] }} Mbps</strong> ({{ buffer_health['speed_samples'] }} samples) ·
++            cache <strong>{{ (buffer_health['cache']['size_bytes'] / 1048576) | round(1) }} / {{ (buffer_health['cache']['budget_bytes'] / 1048576) | round(0) }} MiB</strong>
++            ({{ buffer_health['cache']['hits'] }} hits / {{ buffer_health['cache']['misses'] }} misses) ·
++            chunks fetched {{ buffer_health['metrics']['chunks_fetched'] }}, failed {{ buffer_health['metrics']['chunks_failed'] }},
++            floods {{ buffer_health['metrics']['floods_seen'] }}, workers shed {{ buffer_health['metrics']['workers_shed'] }},
++            stalls {{ buffer_health['metrics']['stall_timeouts'] }}
++        </p>
++        {% endif %}
++    </div>
++</div>
++
+ <style>
+ .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
+ .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
+@@ -1656,6 +1726,37 @@ function toggleWebdavPwdVisibility() {
+     }
+ }
+ 
++const BUFFER_PRESETS = {
++    conservative: { readahead: 8,  workers: 2, cache: 16  },
++    balanced:     { readahead: 16, workers: 4, cache: 48  },
++    aggressive:   { readahead: 32, workers: 8, cache: 128 },
++};
++function toggleBufferFields() {
++    const on = document.getElementById('buffer_enabled').checked;
++    document.getElementById('buffer-fields').style.display = on ? '' : 'none';
++}
++function applyBufferProfile() {
++    const profile = document.getElementById('buffer_profile').value;
++    const preset = BUFFER_PRESETS[profile];
++    const fields = ['buffer_readahead_mb', 'buffer_workers', 'buffer_cache_mb'];
++    if (preset) {
++        document.getElementById('buffer_readahead_mb').value = preset.readahead;
++        document.getElementById('buffer_workers').value = preset.workers;
++        document.getElementById('buffer_cache_mb').value = preset.cache;
++    }
++    fields.forEach(id => { document.getElementById(id).disabled = !!preset; });
++    updateBufferEstimate();
++}
++function updateBufferEstimate() {
++    const el = document.getElementById('buffer-estimate');
++    if (!el) return;
++    const r = parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 0;
++    const w = parseInt(document.getElementById('buffer_workers').value, 10) || 0;
++    const c = parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0;
++    el.textContent = `≈ ${r} MiB read-ahead · ${w} workers across your bot clients · ${c} MiB chunk cache`;
++}
++document.addEventListener('DOMContentLoaded', () => { applyBufferProfile(); toggleBufferFields(); });
++
+ async function saveSettings() {
+     const btn   = document.getElementById('save-btn');
+     const label = document.getElementById('save-label');
+@@ -1740,6 +1841,13 @@ async function saveSettings() {
+         announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
+         skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
+         delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
++        buffer_enabled:                document.getElementById('buffer_enabled').checked,
++        buffer_profile:                document.getElementById('buffer_profile').value,
++        buffer_adaptive:               document.getElementById('buffer_adaptive').checked,
++        buffer_readahead_mb:           parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 16,
++        buffer_workers:                parseInt(document.getElementById('buffer_workers').value, 10) || 4,
++        buffer_cache_mb:               parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0,
++        buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value, 10) || 90,
+     };
+     const dsEl = document.getElementById('default_streaming');
+     if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
+@@ -1875,6 +1983,15 @@ function renderSettings(s) {
+     document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
+     document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
+     document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
++    document.getElementById('buffer_enabled').checked = (s.buffer_enabled ?? true);
++    document.getElementById('buffer_profile').value = s.buffer_profile || 'balanced';
++    document.getElementById('buffer_adaptive').checked = (s.buffer_adaptive ?? true);
++    document.getElementById('buffer_readahead_mb').value = (s.buffer_readahead_mb ?? 16);
++    document.getElementById('buffer_workers').value = (s.buffer_workers ?? 4);
++    document.getElementById('buffer_cache_mb').value = (s.buffer_cache_mb ?? 48);
++    document.getElementById('buffer_stall_timeout').value = (s.buffer_stall_timeout ?? 90);
++    toggleBufferFields();
++    applyBufferProfile();
+     togglePosterProvider();
+     toggleFanartShuffle();
+     document.getElementById('upstream_repo').value = s.upstream_repo || '';
+diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
+index 5ba6a9f..327eda9 100644
+--- a/Backend/helper/settings_manager.py
++++ b/Backend/helper/settings_manager.py
+@@ -62,6 +62,14 @@ _DEFAULTS: Dict[str, Any] = {
+     "fanart_shuffle": False,
+     "fanart_shuffle_interval": 5,
+     "fanart_low_res_poster": True,
++    #----- Streaming buffer (see Backend/helper/stream_buffer.py)
++    "buffer_enabled": True,
++    "buffer_profile": "balanced",
++    "buffer_adaptive": True,
++    "buffer_readahead_mb": 16,
++    "buffer_workers": 4,
++    "buffer_cache_mb": 48,
++    "buffer_stall_timeout": 90,
+ }
+ 
+ 
+@@ -304,6 +312,47 @@ class Settings:
+         except (ValueError, TypeError):
+             return 5
+ 
++    #----- Streaming buffer (mirrors the clamps in stream_buffer.build_policy)
++    @property
++    def buffer_enabled(self) -> bool:
++        return bool(self._d.get("buffer_enabled", True))
++
++    @property
++    def buffer_adaptive(self) -> bool:
++        return bool(self._d.get("buffer_adaptive", True))
++
++    @property
++    def buffer_profile(self) -> str:
++        return str(self._d.get("buffer_profile") or "balanced").strip().lower()
++
++    @property
++    def buffer_readahead_mb(self) -> int:
++        try:
++            return max(2, min(256, int(self._d.get("buffer_readahead_mb", 16))))
++        except (ValueError, TypeError):
++            return 16
++
++    @property
++    def buffer_workers(self) -> int:
++        try:
++            return max(1, min(16, int(self._d.get("buffer_workers", 4))))
++        except (ValueError, TypeError):
++            return 4
++
++    @property
++    def buffer_cache_mb(self) -> int:
++        try:
++            return max(0, min(1024, int(self._d.get("buffer_cache_mb", 48))))
++        except (ValueError, TypeError):
++            return 48
++
++    @property
++    def buffer_stall_timeout(self) -> int:
++        try:
++            return max(15, min(600, int(self._d.get("buffer_stall_timeout", 90))))
++        except (ValueError, TypeError):
++            return 90
++
+     #----- Lists
+     @property
+     def auth_channels(self) -> List[str]:
+@@ -518,4 +567,23 @@ class SettingsManager:
+         if old.get("global_search") != new.get("global_search") and "global_search" not in results:
+             results["global_search"] = "enabled" if new.get("global_search") else "disabled"
+ 
++        #----- Streaming buffer changed: rebuild the policy, resize the cache
++        buffer_keys = {
++            "buffer_enabled", "buffer_profile", "buffer_adaptive",
++            "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
++            "buffer_stall_timeout",
++        }
++        if any(old.get(k) != new.get(k) for k in buffer_keys):
++            try:
++                from Backend.helper.stream_buffer import refresh_policy
++
++                policy = refresh_policy(new)
++                results["buffer"] = (
++                    f"policy rebuilt — profile={policy.profile}, "
++                    f"workers={policy.workers}, cache={policy.cache_mb} MiB"
++                )
++            except Exception as exc:
++                LOGGER.error(f"SettingsManager reinit buffer: {exc}")
++                results["buffer"] = f"error: {exc}"
++
+         return results
+diff --git a/README.md b/README.md
+index 91eca63..b4d8631 100644
+--- a/README.md
++++ b/README.md
+@@ -6,10 +6,6 @@
+   A powerful, self-hosted <b>Telegram Stremio Media Server</b> built with <b>FastAPI</b>, <b>MongoDB</b>, and <b>PyroFork</b> — turn your Telegram channels into a private streaming library you watch in <b>Stremio</b> / <b>Nuvio</b>.
+ </p>
+ 
+-<p align="center">
+-  <a href="https://donate.weebzonex.workers.dev"><img src="https://img.shields.io/badge/❤️%20Donate-Support%20the%20developer-e11d48" alt="Donate" /></a>
+-</p>
+-
+ <p align="center">
+   <img src="https://img.shields.io/badge/UV%20Package%20Manager-2B7A77?logo=uv&logoColor=white" alt="UV Package Manager" />
+   <img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white" alt="Python" />
+@@ -1011,13 +1007,6 @@ Your server is a standard **Stremio-style addon**, so it works in any compatible
+ 
+ ---
+ 
+-## ❤️ Support the project
+-
+-If Telegram-Stremio is useful to you, you can support its development here:
+-**[donate.weebzonex.workers.dev](https://donate.weebzonex.workers.dev)**
+-
+----
+-
+ ## 🏅 Contributors
+ 
+ Everyone who has contributed code, updated automatically:
+diff --git a/docs/index.html b/docs/index.html
+index e0bc5a2..6788430 100644
+--- a/docs/index.html
++++ b/docs/index.html
+@@ -238,7 +238,6 @@
+     <nav>
+       <a href="setup.html">Setup guide</a>
+       <a href="https://github.com/weebzone/Telegram-Stremio">GitHub</a>
+-      <a href="https://donate.weebzonex.workers.dev">Support the project</a>
+     </nav>
+   </div>
+ </footer>
+diff --git a/docs/setup.html b/docs/setup.html
+index 6872be5..0d98a6f 100644
+--- a/docs/setup.html
++++ b/docs/setup.html
+@@ -311,7 +311,6 @@ Friends S03 1080p.mkv              ← whole Season 3</pre><button class="copy"
+     <nav>
+       <a href="./">Home</a>
+       <a href="https://github.com/weebzone/Telegram-Stremio">GitHub</a>
+-      <a href="https://donate.weebzonex.workers.dev">Support the project</a>
+     </nav>
+   </div>
+ </footer>
