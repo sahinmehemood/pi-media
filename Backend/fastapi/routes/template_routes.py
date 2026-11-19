@@ -379,8 +379,11 @@ async def librarian_page(request: Request, _: bool = Depends(require_auth)):
             except Exception:
                 pass
         w = waiting.get(stripped, 0)
+        scan = (counts.get("scan_by_channel") or {}).get(stripped, {})
         rows.append({"id": str(ch), "name": name, "waiting": w,
                      "fixed": fixed_by.get(stripped, 0),
+                     "indexed": scan.get("indexed", 0),
+                     "unindexed": scan.get("unindexed", 0),
                      "located_pct": (round(100 * located_by.get(stripped, 0) / w)
                                      if w else None)})
     ctx["lib_channels"] = rows

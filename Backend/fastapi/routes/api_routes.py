@@ -3196,14 +3196,16 @@ async def librarian_action_api(payload: dict) -> dict:
     action = str(payload.get("action") or "")
     if action == "state":
         return {"status": "success", "state": librarian.ACTION_STATE}
-    if action in ("sweep", "audit", "locator"):
+    if action == "stop":
+        return librarian.request_stop()
+    if action in ("sweep", "audit", "locator", "scan"):
         if not SettingsManager.current().librarian_enabled:
             return {"status": "error",
                     "message": "Librarian is disabled — enable it in Settings first."}
         channel = payload.get("channel")
-        if action == "locator" and not channel:
+        if action in ("locator", "scan") and not channel:
             return {"status": "error",
-                    "message": "The locator needs a channel to walk."}
+                    "message": f"The {action} needs a channel to walk."}
         return librarian.start_action(action, channel)
     if action == "rollback":
         return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
@@ -3255,7 +3257,8 @@ async def librarian_bot_packet_api(request: Request) -> dict:
         limit = int(raw_limit) if raw_limit else None
     except ValueError:
         limit = None
-    return await librarian.get_packet(channel, limit)
+    scope = request.query_params.get("scope") or "waiting"
+    return await librarian.get_packet(channel, limit, scope)
 
 
 async def librarian_bot_proposals_api(request: Request) -> dict:

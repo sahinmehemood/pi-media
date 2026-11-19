@@ -66,6 +66,8 @@ def main() -> int:
     p = sub.add_parser("packet")
     p.add_argument("--channel", required=True)
     p.add_argument("--limit", type=int, default=30)
+    p.add_argument("--scope", default="waiting",
+                   choices=["waiting", "indexed", "unindexed", "all"])
     p = sub.add_parser("search")
     p.add_argument("--q", required=True)
     p.add_argument("--type", default="any")
@@ -80,7 +82,7 @@ def main() -> int:
     if args.cmd == "status":
         out = call("GET", "/api/librarian/status")
     elif args.cmd == "packet":
-        out = call("GET", f"/api/librarian/packet?channel={args.channel}&limit={args.limit}")
+        out = call("GET", f"/api/librarian/packet?channel={args.channel}&limit={args.limit}&scope={args.scope}")
     elif args.cmd == "search":
         from urllib.parse import quote
         out = call("GET", f"/api/librarian/search?q={quote(args.q)}&type={args.type}")

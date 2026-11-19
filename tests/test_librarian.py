@@ -308,6 +308,78 @@ def test_record_reject_upserts_without_duplicating():
     assert fake.docs["uid1"]["skip_msg_ids"] == [900]
 
 
+def test_record_scan_entry_new_and_existing():
+    lib = load_lib()
+    fake = _FakeColl()
+    post = {"chat_id": -1004395609351, "msg_id": 42, "caption": "Show E01",
+            "file_name": "Show E01.mkv", "size": 100, "height": 1080}
+    match = {"title": "Show", "media_type": "tv", "season": 1,
+             "episode": 1, "quality": "1080p"}
+    # A brand-new indexed file enters as indexed — never as waiting.
+    run(lib._record_scan_entry(fake, "s1", post, "indexed", match))
+    doc = fake.docs["s1"]
+    assert doc["status"] == "indexed" and doc["scan_status"] == "indexed"
+    assert doc["current_match"]["title"] == "Show"
+    # A reject keeps its workflow status when a scan refreshes it.
+    fake.docs["s2"] = {"_id": "s2", "status": "open", "caption": "old",
+                       "file_name": "", "history": []}
+    run(lib._record_scan_entry(fake, "s2", post, "unindexed", None))
+    doc = fake.docs["s2"]
+    assert doc["status"] == "open"
+    assert doc["scan_status"] == "unindexed"
+    assert doc["scan_msg_id"] == 42
+    # A fixed file stays fixed.
+    fake.docs["s3"] = {"_id": "s3", "status": "fixed", "history": []}
+    run(lib._record_scan_entry(fake, "s3", post, "indexed", match))
+    assert fake.docs["s3"]["status"] == "fixed"
+
+
+def test_packet_scope_selects_scanned_files():
+    lib = load_lib()
+    ledger, locator, packets = _FakeColl(), _FakeColl(), _FakeColl()
+    base = {"chat_id": -1004395609351, "caption": "Show E01",
+            "file_name": "Show E01.mkv"}
+    ledger.docs["w1"] = {"_id": "w1", "status": "open", "first_seen": 1.0,
+                         **base}
+    ledger.docs["i1"] = {"_id": "i1", "status": "indexed", "first_seen": 2.0,
+                         "scan_status": "indexed",
+                         "current_match": {"title": "Show",
+                                            "media_type": "tv"}, **base}
+    ledger.docs["u1"] = {"_id": "u1", "status": "unindexed",
+                         "first_seen": 3.0, "scan_status": "unindexed",
+                         **base}
+    saved = _wire(lib, ledger=ledger, locator=locator, packets=packets)
+    try:
+        chan = -1004395609351
+        pkt = run(lib.get_packet(chan, 10))
+        assert [i["key"] for i in pkt["items"]] == ["w1"]
+        assert pkt["scope"] == "waiting"
+        pkt = run(lib.get_packet(chan, 10, "indexed"))
+        assert [i["key"] for i in pkt["items"]] == ["i1"]
+        assert pkt["items"][0]["current_match"]["title"] == "Show"
+        pkt = run(lib.get_packet(chan, 10, "all"))
+        assert sorted(i["key"] for i in pkt["items"]) == ["i1", "u1", "w1"]
+        pkt = run(lib.get_packet(chan, 10, "bogus"))
+        assert [i["key"] for i in pkt["items"]] == ["w1"]
+        assert pkt["scope"] == "waiting"
+    finally:
+        _unwire(lib, saved)
+
+
+def test_request_stop_flags_running_action():
+    lib = load_lib()
+    st = lib.ACTION_STATE
+    old = dict(st)
+    try:
+        st.update({"running": False, "kind": ""})
+        assert lib.request_stop()["status"] == "error"
+        st.update({"running": True, "kind": "scan", "stop_requested": False})
+        assert lib.request_stop()["status"] == "success"
+        assert st["stop_requested"] is True
+    finally:
+        st.update(old)
+
+
 # ---------------------------------------------------------------------------
 # Packet
 # ---------------------------------------------------------------------------

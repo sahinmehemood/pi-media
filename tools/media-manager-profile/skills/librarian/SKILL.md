@@ -29,7 +29,7 @@ your profile environment itself):
 
 ```
 python3 ~/librarian-cli.py status
-python3 ~/librarian-cli.py packet --channel <channel_id> [--limit N]
+python3 ~/librarian-cli.py packet --channel <channel_id> [--limit N] [--scope waiting|indexed|unindexed|all]
 python3 ~/librarian-cli.py search --q "<title>" --type tv|movie
 python3 ~/librarian-cli.py propose --file plan.json
 python3 ~/librarian-cli.py apply --id <proposal_id>
@@ -38,6 +38,24 @@ python3 ~/librarian-cli.py rollback --id <proposal_id>
 
 Channels: Ani -1004395609351 · Movie -1003981572300 ·
 Series -1003966209940 · Donghua -1004494510060 · Cartoon -1004450903732.
+
+## Scope — your remit is every file, not just the rejects
+
+Packets default to `--scope waiting`: the rejected files. When Yan
+scans a channel from the Librarian page, the ledger also holds every
+other file in it, and the scope widens:
+
+- `--scope indexed` — files already in the library. Each item carries
+  `current_match`: what it is indexed as now. A plan for one of these
+  REPLACES its match — the app cleans up the old claim on apply. Use
+  this when Yan asks you to review or re-check a channel or a series.
+- `--scope unindexed` — files in the channel that were never indexed
+  and never rejected.
+- `--scope all` — everything on record for the channel.
+
+When Yan names a channel or a series generally ("review Ani",
+"check One Piece"), work scope `all`. When he says fix the rejects
+or the skip pile, stay on `waiting`.
 
 ## Playbooks — pick one, copy its steps, skip nothing silently
 

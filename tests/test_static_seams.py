@@ -323,7 +323,8 @@ def test_librarian_seams():
     assert "'/admin/librarian'" in base_html
     # The v4 page is a control panel, not the Phase 1 tables.
     page = read("Backend/fastapi/templates/librarian.html")
-    assert "Locate originals" in page
+    assert "Scan channel" in page
+    assert 'id="lib-stop"' in page
     assert "lib_counts.waiting" in page
     assert "Runs & proposals" not in page
     # v4.1 visibility: per-file before/after + Telegram deep links.

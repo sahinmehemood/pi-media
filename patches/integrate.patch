@@ -137,7 +137,7 @@ index 9ae7925..384ced5 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..2a07053 100644
+index e6d9542..6e39653 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -521,7 +521,7 @@ index e6d9542..2a07053 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3124,185 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3124,188 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -597,14 +597,16 @@ index e6d9542..2a07053 100644
 +    action = str(payload.get("action") or "")
 +    if action == "state":
 +        return {"status": "success", "state": librarian.ACTION_STATE}
-+    if action in ("sweep", "audit", "locator"):
++    if action == "stop":
++        return librarian.request_stop()
++    if action in ("sweep", "audit", "locator", "scan"):
 +        if not SettingsManager.current().librarian_enabled:
 +            return {"status": "error",
 +                    "message": "Librarian is disabled — enable it in Settings first."}
 +        channel = payload.get("channel")
-+        if action == "locator" and not channel:
++        if action in ("locator", "scan") and not channel:
 +            return {"status": "error",
-+                    "message": "The locator needs a channel to walk."}
++                    "message": f"The {action} needs a channel to walk."}
 +        return librarian.start_action(action, channel)
 +    if action == "rollback":
 +        return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
@@ -656,7 +658,8 @@ index e6d9542..2a07053 100644
 +        limit = int(raw_limit) if raw_limit else None
 +    except ValueError:
 +        limit = None
-+    return await librarian.get_packet(channel, limit)
++    scope = request.query_params.get("scope") or "waiting"
++    return await librarian.get_packet(channel, limit, scope)
 +
 +
 +async def librarian_bot_proposals_api(request: Request) -> dict:
@@ -787,7 +790,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..6d3fad6 100644
+index c53ee43..6415ea1 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -851,7 +854,7 @@ index c53ee43..6d3fad6 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -262,11 +316,72 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +316,75 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -918,8 +921,11 @@ index c53ee43..6d3fad6 100644
 +            except Exception:
 +                pass
 +        w = waiting.get(stripped, 0)
++        scan = (counts.get("scan_by_channel") or {}).get(stripped, {})
 +        rows.append({"id": str(ch), "name": name, "waiting": w,
 +                     "fixed": fixed_by.get(stripped, 0),
++                     "indexed": scan.get("indexed", 0),
++                     "unindexed": scan.get("unindexed", 0),
 +                     "located_pct": (round(100 * located_by.get(stripped, 0) / w)
 +                                     if w else None)})
 +    ctx["lib_channels"] = rows

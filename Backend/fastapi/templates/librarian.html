@@ -61,13 +61,14 @@
   <div class="row-item">
     <div class="row-main">
       <div class="row-title">{{ ch.name }}</div>
-      <div class="row-meta">{{ ch.waiting }} waiting · {{ ch.fixed }} fixed</div>
+      <div class="row-meta">{{ ch.waiting }} waiting · {{ ch.fixed }} fixed{% if ch.indexed %} · {{ ch.indexed }} indexed on record{% endif %}{% if ch.unindexed %} · {{ ch.unindexed }} unindexed on record{% endif %}</div>
     </div>
-    <button class="btn-ui btn-ghost" onclick="libAction('locator', '{{ ch.id }}', this)"><i class="fa-solid fa-location-crosshairs"></i> Locate originals</button>
+    <button class="btn-ui btn-ghost" onclick="libAction('scan', '{{ ch.id }}', this)"><i class="fa-solid fa-magnifying-glass"></i> Scan channel</button>
   </div>
   {% endfor %}
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem;align-items:center">
     <button class="btn-ui btn-ghost" onclick="libAction('sweep', null, this)"><i class="fa-solid fa-broom"></i> Harvest skip pile</button>
+    <button class="btn-ui btn-danger" id="lib-stop" style="display:none" onclick="libStop(this)"><i class="fa-solid fa-stop"></i> Stop</button>
     <span id="lib-state" class="muted" style="font-size:.8rem"></span>
   </div>
 
@@ -152,16 +153,29 @@
     alert(res.ok ? ('Rolled back ' + (res.rolled_back ?? 0) + ' file(s).') : (res.message || 'Rollback failed.'));
     location.reload();
   }
+  async function libStop(btn) {
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'stop'});
+    const el = document.getElementById('lib-state');
+    if (el) el.textContent = res.message || 'Stop requested.';
+    pollState();
+  }
   let pollTimer = null;
   async function pollState() {
     const el = document.getElementById('lib-state');
     if (!el) return;
     const res = await libPost({action: 'state'});
     const st = res.state || {};
+    const stopBtn = document.getElementById('lib-stop');
     if (st.running) {
-      el.textContent = 'Running: ' + st.kind + '…';
+      let txt = 'Running: ' + st.kind + '…';
+      if (st.progress) txt += ' ' + (st.progress.read || 0) + ' messages read, ' + (st.progress.files || 0) + ' files found';
+      if (st.stop_requested) txt += ' (stopping…)';
+      el.textContent = txt;
+      if (stopBtn) { stopBtn.style.display = ''; stopBtn.disabled = false; }
       pollTimer = setTimeout(pollState, 3000);
     } else if (st.result || st.error) {
+      if (stopBtn) stopBtn.style.display = 'none';
       el.textContent = st.error ? ('Error: ' + st.error)
         : ('Done: ' + st.kind + ' — ' + JSON.stringify(st.result));
       setTimeout(() => location.reload(), 1500);

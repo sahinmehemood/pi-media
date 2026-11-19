@@ -524,6 +524,169 @@ async def run_locator(channel_id) -> dict:
             "files": len(seen), "ledger_items_located": located}
 
 
+async def _library_index_for_channel(channel_id) -> dict:
+    """{(stripped_chat, msg_id): {title, media_type, season, episode,
+    quality}} for every library entry whose file lives in this channel.
+    DB-only (the telegram entry ids decode locally)."""
+    from Backend import db as _db
+    from Backend.helper.encrypt import decode_string
+    target = _norm_chat(channel_id)
+    index: dict = {}
+    dbs = getattr(_db, "dbs", None) or {}
+    for name, sdb in dbs.items():
+        if name == "tracking" or sdb is None:
+            continue
+        for coll_name, mtype in (("movie", "movie"), ("tv", "tv")):
+            try:
+                async for doc in sdb[coll_name].find(
+                        {}, {"title": 1, "telegram": 1, "seasons": 1}):
+                    title = doc.get("title") or "?"
+                    slots = [(None, None, doc.get("telegram") or [])]
+                    for season in doc.get("seasons") or []:
+                        for ep in season.get("episodes") or []:
+                            slots.append((season.get("season"),
+                                          ep.get("episode"),
+                                          ep.get("telegram") or []))
+                    for s_no, e_no, entries in slots:
+                        for entry in entries:
+                            enc = entry.get("id")
+                            if not enc:
+                                continue
+                            try:
+                                decoded = await decode_string(enc)
+                            except Exception:
+                                continue
+                            chat = _norm_chat((decoded or {}).get("chat_id"))
+                            msg = (decoded or {}).get("msg_id")
+                            if chat != target or msg is None:
+                                continue
+                            index[(chat, msg)] = {
+                                "title": title, "media_type": mtype,
+                                "season": s_no, "episode": e_no,
+                                "quality": entry.get("quality"),
+                            }
+            except Exception as e:
+                LOGGER.warning(f"[Librarian] library index failed "
+                               f"({name}.{coll_name}): {e}")
+    return index
+
+
+async def _record_scan_entry(coll, uid: str, post: dict,
+                             scan_status: str, match) -> None:
+    """Ledger upsert for one scanned file. Scan facts are refreshed on
+    every scan; an existing entry's workflow status is NEVER touched —
+    only brand-new entries take the scan status (indexed / unindexed),
+    so rejects keep flowing through the waiting queue untouched."""
+    now = time.time()
+    set_fields = {
+        "scan_status": scan_status,
+        "current_match": match,
+        "scan_chat_id": post["chat_id"],
+        "scan_msg_id": post["msg_id"],
+        "caption": post["caption"],
+        "file_name": post["file_name"],
+        "size": post["size"],
+        "height": post["height"],
+        "scanned_at": now,
+        "updated_at": now,
+    }
+    on_insert = {
+        "key": uid,
+        "file_unique_id": uid,
+        "chat_id": post["chat_id"],
+        "msg_id": post["msg_id"],
+        "origin": "channel-scan",
+        "origin_hint": "",
+        "status": scan_status,
+        "reason": "",
+        "reason_code": scan_status,
+        "parse": None,
+        "bits": name_bits(post["caption"], post["file_name"]),
+        "first_seen": now,
+    }
+    await coll.update_one({"_id": uid},
+                          {"$set": set_fields, "$setOnInsert": on_insert},
+                          upsert=True)
+
+
+async def run_channel_scan(channel_id) -> dict:
+    """Walk one source channel with the userbot and record EVERY media
+    file in the ledger: already-indexed files (with what they are
+    indexed as) and unindexed ones, alongside the rejects the ledger
+    already holds. Also refreshes the locator map, like run_locator.
+    Read-only on Telegram. Stoppable from the page: the walk checks
+    ACTION_STATE['stop_requested'] as it goes and keeps whatever it
+    has recorded when stopped."""
+    channel_id = _full_chat(channel_id)
+    if channel_id is None:
+        return {"ok": False, "message": "Bad channel id."}
+    ledger = _ledger_coll()
+    if ledger is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    from Backend.pyrofork import bot as botmod
+    userbot = getattr(botmod, "Userbot", None)
+    if userbot is None:
+        return {"ok": False, "message": "Userbot is not configured."}
+    lib_index = await _library_index_for_channel(channel_id)
+    seen: dict[str, dict] = {}
+    read = 0
+    stopped = False
+    try:
+        async for m in userbot.get_chat_history(channel_id):
+            read += 1
+            if read % 100 == 0:
+                if ACTION_STATE.get("stop_requested"):
+                    stopped = True
+                    break
+                ACTION_STATE["progress"] = {
+                    "read": read, "files": len(seen), "channel": channel_id}
+                await asyncio.sleep(0.05)
+            fields = _media_fields(m)
+            uid = fields.get("file_unique_id")
+            if not uid:
+                continue
+            # Newest-first walk: later sightings are older posts, so the
+            # last write wins and ends up the ORIGINAL post (locator rule).
+            seen[uid] = {
+                "chat_id": channel_id, "msg_id": m.id,
+                "caption": m.caption or "",
+                "file_name": fields["file_name"],
+                "size": fields["size"], "height": fields["height"],
+            }
+    except Exception as e:
+        return {"ok": False, "message": f"Channel scan failed: {e}"}
+    loc_coll = _locator_coll()
+    if loc_coll is not None:
+        for uid, post in seen.items():
+            try:
+                await loc_coll.replace_one(
+                    {"_id": uid}, {"_id": uid, **post,
+                                   "updated_at": time.time()}, upsert=True)
+            except Exception:
+                pass
+    stripped = _norm_chat(channel_id)
+    indexed = unindexed = 0
+    for uid, post in seen.items():
+        match = lib_index.get((stripped, post["msg_id"]))
+        scan_status = "indexed" if match else "unindexed"
+        if match:
+            indexed += 1
+        else:
+            unindexed += 1
+        try:
+            await _record_scan_entry(ledger, uid, post, scan_status, match)
+        except Exception as e:
+            LOGGER.warning(f"[Librarian] scan entry failed: {e}")
+    ACTION_STATE["progress"] = {"read": read, "files": len(seen),
+                                "channel": channel_id}
+    LOGGER.info(f"[Librarian] scan channel {channel_id}: {read} read, "
+                f"{len(seen)} files, {indexed} indexed, "
+                f"{unindexed} unindexed, stopped={stopped}")
+    return {"ok": True, "channel": channel_id, "messages_read": read,
+            "files": len(seen), "indexed": indexed,
+            "unindexed": unindexed, "stopped": stopped}
+
+
 async def _located_map(keys: list[str]) -> dict:
     coll = _locator_coll()
     if coll is None or not keys:
@@ -600,7 +763,16 @@ def _group_stem(stem: str) -> str:
     return " ".join(tokens) or (stem or "(single)")
 
 
-async def get_packet(channel_id, limit: int = None) -> dict:
+_PACKET_SCOPES = {
+    "waiting": ["open", "unresolved"],
+    "indexed": ["indexed"],
+    "unindexed": ["unindexed"],
+    "all": ["open", "unresolved", "indexed", "unindexed"],
+}
+
+
+async def get_packet(channel_id, limit: int = None,
+                     scope: str = "waiting") -> dict:
     """The next batch of unprocessed failed files for ONE channel, with the
     context the Media Manager needs to decide well: each item's original
     post (via the locator), the titles already indexed from this channel,
@@ -625,10 +797,11 @@ async def get_packet(channel_id, limit: int = None) -> dict:
             limit = 60
     limit = max(1, min(200, int(limit)))
     stripped = _norm_chat(channel_id)
+    statuses = _PACKET_SCOPES.get(scope) or _PACKET_SCOPES["waiting"]
     candidates: list[dict] = []
     try:
         cursor = ledger.find(
-            {"status": {"$in": ["open", "unresolved"]}}).sort("first_seen", 1)
+            {"status": {"$in": statuses}}).sort("first_seen", 1)
         async for doc in cursor:
             candidates.append(dict(doc))
     except Exception as e:
@@ -663,6 +836,8 @@ async def get_packet(channel_id, limit: int = None) -> dict:
             "chat_id": item_chat,
             "msg_id": (loc or {}).get("msg_id") or doc.get("msg_id"),
             "skip_msg_ids": doc.get("skip_msg_ids") or [],
+            "scan_status": doc.get("scan_status"),
+            "current_match": doc.get("current_match"),
         })
     # Runs hint: group the batch by naming stem (a hint for the bot's
     # grouping, never a decision — the bot still resolves each run).
@@ -713,6 +888,7 @@ async def get_packet(channel_id, limit: int = None) -> dict:
             pass
     return {
         "ok": True, "channel": channel_id, "packet_id": packet_id,
+        "scope": scope if scope in _PACKET_SCOPES else "waiting",
         "items": items, "runs_hint": runs_hint,
         "indexed_titles": title_index.get(stripped, []),
         "aliases": aliases,
@@ -1430,6 +1606,7 @@ async def panel_counts() -> dict:
            "proposals_pending": 0, "edits_today": await _edits_today(),
            "waiting_by_channel": {}, "fixed_by_channel": {},
            "located_by_channel": {}, "by_reason": {},
+           "scan_by_channel": {},
            "dismissed": base.get("by_status", {}).get("dismissed", 0)}
     out["waiting"] = sum(base.get("by_status", {}).get(s, 0)
                          for s in ("open", "unresolved"))
@@ -1464,6 +1641,15 @@ async def panel_counts() -> dict:
                 if chat:
                     k = str(_norm_chat(chat))
                     out["fixed_by_channel"][k] = out["fixed_by_channel"].get(k, 0) + 1
+            async for d in ledger.find(
+                    {"scan_status": {"$in": ["indexed", "unindexed"]}},
+                    {"chat_id": 1, "scan_chat_id": 1, "scan_status": 1}):
+                chat = d.get("scan_chat_id") or d.get("chat_id")
+                if chat:
+                    k = str(_norm_chat(chat))
+                    bucket = out["scan_by_channel"].setdefault(
+                        k, {"indexed": 0, "unindexed": 0})
+                    bucket[d["scan_status"]] += 1
         except Exception:
             pass
     pcoll = _proposals_coll()
@@ -1483,7 +1669,18 @@ async def panel_counts() -> dict:
 ACTION_STATE = {
     "running": False, "kind": "", "started_at": None,
     "finished_at": None, "result": None, "error": None,
+    "stop_requested": False, "progress": None,
 }
+
+
+def request_stop() -> dict:
+    """Cooperative stop for a running background action (the walk checks
+    the flag as it goes and exits with whatever it has recorded)."""
+    if not ACTION_STATE["running"]:
+        return {"status": "error", "message": "Nothing is running."}
+    ACTION_STATE["stop_requested"] = True
+    return {"status": "success",
+            "message": f"Stop requested for {ACTION_STATE['kind']}."}
 async def run_backlog_sweep() -> dict:
     """Harvest the skip pile into the ledger: one entry per UNIQUE file
     (all copy message ids recorded), origin marked backlog-sweep. Read
@@ -1643,7 +1840,8 @@ async def run_suspect_audit() -> dict:
 async def _run_action(kind: str, channel=None) -> None:
     ACTION_STATE.update({"running": True, "kind": kind,
                          "started_at": time.time(), "finished_at": None,
-                         "result": None, "error": None})
+                         "result": None, "error": None,
+                         "stop_requested": False, "progress": None})
     try:
         if kind == "sweep":
             result = await run_backlog_sweep()
@@ -1651,6 +1849,8 @@ async def _run_action(kind: str, channel=None) -> None:
             result = await run_suspect_audit()
         elif kind == "locator":
             result = await run_locator(channel)
+        elif kind == "scan":
+            result = await run_channel_scan(channel)
         else:
             result = {"ok": False, "message": f"Unknown action: {kind}"}
         ACTION_STATE["result"] = result
