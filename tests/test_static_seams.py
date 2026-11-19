@@ -262,6 +262,47 @@ def test_hermes_bot_seams():
     assert "await _meet_peer(bot)" in routes
 
 
+def test_librarian_seams():
+    routes = read("Backend/fastapi/routes/api_routes.py")
+    main_py = read("Backend/fastapi/main.py")
+    templates = read("Backend/fastapi/routes/template_routes.py")
+    skip = read("Backend/helper/skip_channel.py")
+    scan = read("Backend/helper/scan_manager.py")
+    sm = read("Backend/helper/settings_manager.py")
+    settings_html = read("Backend/fastapi/templates/settings.html")
+    base_html = read("Backend/fastapi/templates/base.html")
+
+    # Ledger hook: both ingest paths funnel through route_to_skip_channel;
+    # the scan path tags its origin, the live path keeps the default.
+    assert "record_from_message" in skip
+    assert 'origin: str = "live-fail"' in skip
+    assert 'origin="scan-fail"' in scan
+    # Settings: defaults + live properties for every Librarian key.
+    for key in ("librarian_enabled", "librarian_dry_run",
+                "librarian_auto_apply_tier_a", "librarian_digest",
+                "librarian_edit_budget_per_day", "librarian_channels",
+                "librarian_api_token"):
+        assert f'"{key}"' in sm, key
+        assert f"def {key}" in sm, key
+    for key in ("librarian_enabled", "librarian_dry_run",
+                "librarian_auto_apply_tier_a", "librarian_digest",
+                "librarian_edit_budget_per_day", "librarian_api_token"):
+        assert f'id="{key}"' in settings_html, key
+    assert 'id="librarian_channels_items"' in settings_html
+    assert "collectList('librarian_channels')" in settings_html
+    assert "'librarian_channels'" in settings_html  # channelLists validation
+    # API validation + actions + token-guarded bot endpoints.
+    assert '"librarian_digest" in payload' in routes
+    assert "librarian_action_api" in routes
+    assert "librarian_bot_status_api" in routes
+    assert "x-librarian-token" in routes
+    # Routes + page + nav.
+    assert '"/admin/librarian"' in main_py
+    assert '"/api/librarian/status"' in main_py
+    assert "def librarian_page" in templates
+    assert "'/admin/librarian'" in base_html
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

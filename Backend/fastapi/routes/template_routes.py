@@ -338,3 +338,22 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
         "prewarm_health": prewarm_health,
     })
     return templates.TemplateResponse("settings.html", ctx)
+
+
+
+#----- Librarian: reject ledger + resolution proposals (Phase 1)
+async def librarian_page(request: Request, _: bool = Depends(require_auth)):
+    from Backend.helper import librarian
+
+    ctx = _base_context(request)
+    ctx["current_user"] = get_current_user(request)
+    status = (request.query_params.get("status") or "").strip()
+    reason = (request.query_params.get("reason") or "").strip()
+    ctx["lib_status"] = status
+    ctx["lib_reason"] = reason
+    ctx["lib_counts"] = await librarian.ledger_counts()
+    ctx["lib_runs"] = await librarian.list_runs(limit=60)
+    ctx["lib_items"] = await librarian.list_ledger(status=status, reason=reason, limit=120)
+    ctx["lib_state"] = librarian.ACTION_STATE
+    ctx["librarian_enabled"] = SettingsManager.current().librarian_enabled
+    return templates.TemplateResponse("librarian.html", ctx)

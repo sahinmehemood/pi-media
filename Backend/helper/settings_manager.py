@@ -93,6 +93,13 @@ _DEFAULTS: Dict[str, Any] = {
     "prewarm_trigger_pct": 70,
     "prewarm_daily_budget_mb": 2048,
     "prewarm_only_charging": False,
+    "librarian_enabled": False,
+    "librarian_dry_run": True,
+    "librarian_auto_apply_tier_a": False,
+    "librarian_digest": "manual",
+    "librarian_edit_budget_per_day": 50,
+    "librarian_channels": [],
+    "librarian_api_token": "",
 }
 
 
@@ -467,6 +474,43 @@ class Settings:
     @property
     def prewarm_only_charging(self) -> bool:
         return bool(self._d.get("prewarm_only_charging", False))
+
+    #----- Librarian (Hermes curation — docs/librarian/DESIGN.md).
+    #----- Read live on every use, so changes apply without a restart.
+    #----- librarian_channels empty means every auth channel is in
+    #----- scope; a non-empty list restricts curation to those.
+    @property
+    def librarian_enabled(self) -> bool:
+        return bool(self._d.get("librarian_enabled", False))
+
+    @property
+    def librarian_dry_run(self) -> bool:
+        return bool(self._d.get("librarian_dry_run", True))
+
+    @property
+    def librarian_auto_apply_tier_a(self) -> bool:
+        return bool(self._d.get("librarian_auto_apply_tier_a", False))
+
+    @property
+    def librarian_digest(self) -> str:
+        value = str(self._d.get("librarian_digest") or "manual").strip().lower()
+        return value if value in ("manual", "daily", "weekly") else "manual"
+
+    @property
+    def librarian_edit_budget_per_day(self) -> int:
+        value = self._d.get("librarian_edit_budget_per_day", 50)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 50
+        return max(0, min(10000, value))
+
+    @property
+    def librarian_channels(self) -> list:
+        value = self._d.get("librarian_channels")
+        return list(value) if isinstance(value, list) else []
+
+    @property
+    def librarian_api_token(self) -> str:
+        return str(self._d.get("librarian_api_token") or "").strip()
 
     #----- Lists
     @property

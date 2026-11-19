@@ -1940,6 +1940,24 @@ async def update_settings_api(payload: dict) -> dict:
         if isinstance(_v, bool) or not isinstance(_v, int):
             raise HTTPException(status_code=400, detail="'dl_expire_days' must be an integer.")
         payload["dl_expire_days"] = max(0, min(3650, _v))
+    if "librarian_enabled" in payload:
+        payload["librarian_enabled"] = bool(payload["librarian_enabled"])
+    if "librarian_dry_run" in payload:
+        payload["librarian_dry_run"] = bool(payload["librarian_dry_run"])
+    if "librarian_auto_apply_tier_a" in payload:
+        payload["librarian_auto_apply_tier_a"] = bool(payload["librarian_auto_apply_tier_a"])
+    if "librarian_digest" in payload:
+        _v = str(payload["librarian_digest"] or "manual").strip().lower()
+        if _v not in ("manual", "daily", "weekly"):
+            raise HTTPException(status_code=400, detail="'librarian_digest' must be manual, daily or weekly.")
+        payload["librarian_digest"] = _v
+    if "librarian_edit_budget_per_day" in payload:
+        _v = payload["librarian_edit_budget_per_day"]
+        if isinstance(_v, bool) or not isinstance(_v, int):
+            raise HTTPException(status_code=400, detail="'librarian_edit_budget_per_day' must be an integer.")
+        payload["librarian_edit_budget_per_day"] = max(0, min(10000, _v))
+    if "librarian_api_token" in payload:
+        payload["librarian_api_token"] = str(payload["librarian_api_token"] or "").strip()
 
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
@@ -2010,6 +2028,14 @@ async def update_settings_api(payload: dict) -> dict:
             if c:
                 cleaned.append(c)
         payload["manual_channels"] = cleaned
+
+    if "librarian_channels" in payload:
+        cleaned = []
+        for channel in payload["librarian_channels"]:
+            c = _validate_channel_id(channel, "librarian channel")
+            if c:
+                cleaned.append(c)
+        payload["librarian_channels"] = cleaned
 
     if "announcement_channel" in payload and payload["announcement_channel"]:
         payload["announcement_channel"] = _validate_channel_id(
@@ -3140,3 +3166,59 @@ async def update_manager_rollback_api() -> dict:
     from Backend.helper import update_manager as um
 
     return _um_start("rollback", um.do_rollback)
+
+
+
+#----- Librarian (Hermes curation — Phase 1: ledger, funnel, gate).
+#----- Admin actions run in the background (sweep/audit/funnel state is
+#----- polled by the Librarian page); the bot-facing status/queue pair
+#----- is guarded by the dedicated Librarian API token from Settings.
+async def librarian_action_api(payload: dict) -> dict:
+    from Backend.helper import librarian
+
+    action = str(payload.get("action") or "")
+    if action == "state":
+        return {"status": "success", "state": librarian.ACTION_STATE}
+    if action in ("sweep", "audit", "funnel"):
+        if not SettingsManager.current().librarian_enabled:
+            return {"status": "error",
+                    "message": "Librarian is disabled — enable it in Settings first."}
+        return librarian.start_action(action)
+    if action == "regen_token":
+        import secrets
+
+        token = secrets.token_urlsafe(32)
+        await SettingsManager.update(db, {"librarian_api_token": token})
+        return {"status": "success", "token": token,
+                "message": "New Librarian API token generated and saved."}
+    return {"status": "error", "message": f"Unknown action: {action}"}
+
+
+def _librarian_token_ok(request: Request) -> bool:
+    token = SettingsManager.current().librarian_api_token
+    return bool(token) and request.headers.get("x-librarian-token") == token
+
+
+async def librarian_bot_status_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian
+
+    settings = SettingsManager.current()
+    counts = await librarian.ledger_counts()
+    return {
+        "enabled": settings.librarian_enabled,
+        "dry_run": settings.librarian_dry_run,
+        "digest": settings.librarian_digest,
+        "counts": counts,
+        "action_state": librarian.ACTION_STATE,
+    }
+
+
+async def librarian_bot_queue_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian
+
+    runs = await librarian.list_runs(limit=100)
+    return {"runs": runs}

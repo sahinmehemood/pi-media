@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}Librarian - Telegram Stremio{% endblock %}
+
+{% block content %}
+<style>
+  .glass-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .muted { color: var(--text-sec); }
+  .btn-ui { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border-radius: 9999px; padding: .45rem .9rem; font-size: .82rem; font-weight: 500; border: 1px solid transparent; white-space: nowrap; transition: background-color .18s var(--ease), transform .12s var(--ease); cursor: pointer; }
+  .btn-ui:active { transform: scale(.97); }
+  .btn-ui.btn-on { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); border-color: color-mix(in srgb, var(--primary) 35%, transparent); }
+  .btn-ui.btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+  .btn-ui[disabled] { opacity: .45; cursor: default; }
+  .chip { display: inline-block; padding: .1rem .5rem; border-radius: 9999px; font-size: .72rem; border: 1px solid var(--border); background: var(--bg); }
+  .tier-a { background: color-mix(in srgb, #22c55e 18%, transparent); border-color: color-mix(in srgb, #22c55e 40%, transparent); }
+  .tier-b { background: color-mix(in srgb, #eab308 16%, transparent); border-color: color-mix(in srgb, #eab308 40%, transparent); }
+  .tier-c { background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+  table.lib { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  table.lib th, table.lib td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.lib th { color: var(--text-sec); font-weight: 600; font-size: .74rem; text-transform: uppercase; letter-spacing: .03em; }
+  .mono { font-family: ui-monospace, monospace; font-size: .76rem; word-break: break-all; }
+</style>
+
+<div style="max-width:1100px;margin:0 auto;padding:1.25rem">
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:.25rem"><i class="fa-solid fa-book-open"></i> Librarian</h1>
+  <p class="muted" style="margin-bottom:1rem">
+    Every file the metadata pipeline rejected — recorded with its reason, clustered into runs,
+    and matched deterministically (L0–L2) through a server-side verification gate.
+    <strong>Phase 1 is report-only: nothing here edits or applies anything.</strong>
+    {% if not librarian_enabled %}<br><strong>Librarian is disabled</strong> — enable it in
+    <a href="/admin/settings">Settings → Librarian</a> to record new rejections and run actions.{% endif %}
+  </p>
+
+  <div class="glass-card" style="padding:1rem;margin-bottom:1rem">
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.6rem">
+      <strong>{{ lib_counts.get('total', 0) }}</strong><span class="muted">ledger files</span>
+      {% for k, v in (lib_counts.get('by_status') or {}).items() %}
+        <span class="chip">{{ k }}: {{ v }}</span>
+      {% endfor %}
+      <span style="flex:1"></span>
+      <strong>{{ lib_counts.get('runs', 0) }}</strong><span class="muted">runs</span>
+      {% for k, v in (lib_counts.get('runs_by_tier') or {}).items() %}
+        <span class="chip tier-{{ k|lower }}">Tier {{ k }}: {{ v }}</span>
+      {% endfor %}
+    </div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem">
+      {% for k, v in (lib_counts.get('by_reason') or {}).items() %}
+        <span class="chip">{{ k }}: {{ v }}</span>
+      {% endfor %}
+    </div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+      <button class="btn-ui btn-on" id="lib-sweep" onclick="libAction('sweep')"><i class="fa-solid fa-broom"></i> Backlog sweep (skip pile)</button>
+      <button class="btn-ui btn-ghost" id="lib-audit" onclick="libAction('audit')"><i class="fa-solid fa-magnifying-glass"></i> Suspect audit</button>
+      <button class="btn-ui btn-ghost" id="lib-funnel" onclick="libAction('funnel')"><i class="fa-solid fa-filter"></i> Run funnel L0–L2</button>
+      <span class="muted" id="lib-state" style="font-size:.8rem"></span>
+    </div>
+  </div>
+
+  <h2 style="font-size:1.1rem;font-weight:700;margin:.5rem 0">Runs &amp; proposals</h2>
+  {% if lib_runs %}
+  <div class="glass-card" style="padding:.5rem .75rem;margin-bottom:1rem;overflow-x:auto">
+    <table class="lib">
+      <tr><th>Run</th><th>Episodes</th><th>Proposal</th><th>Gate</th><th>Tier</th></tr>
+      {% for r in lib_runs %}
+      <tr>
+        <td><strong>{{ r.stem or '(single)' }}</strong><br>
+          <span class="muted">{{ r.chat_id if r.chat_id is not none else 'unknown channel' }} · {{ r.item_count }} file(s)</span></td>
+        <td>{% if r.episodes %}{{ r.episodes[0] }}–{{ r.episodes[-1] }}{% if r.missing_episodes %} <span class="muted">(missing {{ r.missing_episodes|join(', ') }})</span>{% endif %}{% else %}—{% endif %}</td>
+        <td>{% if r.proposal %}
+            <strong>{{ r.proposal.title }}</strong> <span class="muted">{{ r.proposal.year or '' }} · {{ r.proposal.media_type or '' }}</span><br>
+            <span class="mono">{{ r.proposal.layer }} · {{ r.proposal.provider or '' }} · tmdb {{ r.proposal.tmdb_id or '—' }} · imdb {{ r.proposal.imdb_id or '—' }}</span>
+          {% else %}<span class="muted">no deterministic proposal — needs L3/Yan</span>{% endif %}</td>
+        <td>{% if r.gate %}{% for c in r.gate.checks %}
+            <span class="chip" title="{{ c.detail }}">{{ c.name }}: {{ '✓' if c.ok else ('?' if c.ok is none else '✗') }}</span>
+          {% endfor %}{% else %}—{% endif %}</td>
+        <td><span class="chip tier-{{ r.tier|lower }}"><strong>{{ r.tier }}</strong></span></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="muted" style="margin-bottom:1rem">No runs yet — run the backlog sweep, then the funnel.</p>
+  {% endif %}
+
+  <h2 style="font-size:1.1rem;font-weight:700;margin:.5rem 0">Reject ledger</h2>
+  <form method="get" action="/admin/librarian" style="display:flex;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap">
+    <select name="status" class="s-input" style="max-width:180px">
+      <option value="">All statuses</option>
+      {% for s in ['open', 'proposed', 'unresolved'] %}
+      <option value="{{ s }}" {% if lib_status == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <select name="reason" class="s-input" style="max-width:220px">
+      <option value="">All reasons</option>
+      {% for k in (lib_counts.get('by_reason') or {}).keys() %}
+      <option value="{{ k }}" {% if lib_reason == k %}selected{% endif %}>{{ k }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn-ui btn-ghost" type="submit">Filter</button>
+  </form>
+  {% if lib_items %}
+  <div class="glass-card" style="padding:.5rem .75rem;overflow-x:auto">
+    <table class="lib">
+      <tr><th>File</th><th>Origin</th><th>Reason</th><th>Status</th></tr>
+      {% for it in lib_items %}
+      <tr>
+        <td><span class="mono">{{ (it.caption or it.file_name or '(no caption)')[:90] }}</span><br>
+          <span class="muted">{{ it.file_name or '' }}{% if it.skip_msg_ids %} · {{ it.skip_msg_ids|length }} skip copy(ies){% endif %}</span></td>
+        <td>{{ it.origin }}{% if it.origin_hint %}<br><span class="muted">{{ it.origin_hint }}</span>{% endif %}<br>
+          <span class="muted">{{ it.chat_id if it.chat_id is not none else '—' }}</span></td>
+        <td><span class="chip">{{ it.reason_code }}</span><br><span class="muted">{{ (it.reason or '')[:110] }}</span></td>
+        <td>{{ it.status }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No ledger entries match. The ledger fills from the backlog sweep and from new rejections while the Librarian is enabled.</p>
+  {% endif %}
+</div>
+
+<script>
+async function libAction(kind) {
+  const state = document.getElementById('lib-state');
+  state.textContent = 'Starting ' + kind + '…';
+  try {
+    const res = await fetch('/api/admin/librarian/action', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: kind})
+    });
+    const data = await res.json();
+    if (data.status !== 'success') { state.textContent = data.message || 'Failed to start.'; return; }
+    pollLibState();
+  } catch (e) { state.textContent = 'Request failed: ' + e; }
+}
+async function pollLibState() {
+  const state = document.getElementById('lib-state');
+  try {
+    const res = await fetch('/api/admin/librarian/action', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'state'})
+    });
+    const data = await res.json();
+    const s = data.state || {};
+    if (s.running) {
+      state.textContent = 'Running: ' + s.kind + '…';
+      setTimeout(pollLibState, 3000);
+    } else if (s.kind) {
+      state.textContent = (s.error ? ('Failed: ' + s.error) : ('Done: ' + s.kind + ' — reloading…'));
+      setTimeout(() => location.reload(), 1200);
+    }
+  } catch (e) { /* page state is informational only */ }
+}
+{% if lib_state and lib_state.running %}pollLibState();{% endif %}
+</script>
+{% endblock %}

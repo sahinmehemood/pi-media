@@ -71,6 +71,9 @@ from Backend.fastapi.routes.api_routes import (
     get_tools_channels_api,
     bot_admin_scan_api,
     dl_index_action_api,
+    librarian_action_api,
+    librarian_bot_queue_api,
+    librarian_bot_status_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
     update_manager_check_api,
@@ -131,6 +134,7 @@ from Backend.fastapi.routes.template_routes import (
     admin_access_page,
     admin_dashboard_page,
     dl_index_page,
+    librarian_page,
     admin_requests_page,
     admin_subscriptions_page,
     public_request_page,
@@ -307,6 +311,22 @@ async def admin_dl_index(request: Request, _: bool = Depends(require_auth)):
 @app.post("/api/admin/dl-index/action")
 async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
     return await dl_index_action_api(payload)
+
+@app.get("/admin/librarian", response_class=HTMLResponse)
+async def admin_librarian(request: Request, _: bool = Depends(require_auth)):
+    return await librarian_page(request, _)
+
+@app.post("/api/admin/librarian/action")
+async def librarian_action(payload: dict, _: bool = Depends(require_auth)):
+    return await librarian_action_api(payload)
+
+@app.get("/api/librarian/status")
+async def librarian_status(request: Request):
+    return await librarian_bot_status_api(request)
+
+@app.get("/api/librarian/queue")
+async def librarian_queue(request: Request):
+    return await librarian_bot_queue_api(request)
 
 @app.get("/media/manage", response_class=HTMLResponse)
 async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
