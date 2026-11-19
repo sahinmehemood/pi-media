@@ -555,18 +555,24 @@ async def _channel_title_index() -> dict:
 
 
 async def _l2_coherence(run: dict, title_index: dict) -> Optional[dict]:
-    """L2b: channel coherence — the run's own channel already carries a
-    title whose initials spell the abbreviation stem (BTTH problem).
-    Only a UNIQUE match proposes; ambiguity escalates."""
+    """L2b: channel coherence — the library already carries a title
+    whose initials spell the abbreviation stem (the BTTH problem).
+    Scoped to the run's own channel when its origin is known; backlog
+    items with unknown origin search every channel but still require
+    the matching TITLE to be unique. Ambiguity escalates."""
     chat = _norm_chat(run.get("chat_id"))
-    if chat is None:
+    if chat is not None:
+        pools = [title_index.get(chat) or {}]
+    else:
+        pools = list(title_index.values())
+    by_title: dict[str, dict] = {}
+    for titles in pools:
+        for rec in titles.values():
+            if stem_title_match(run.get("stem") or "", rec["title"]):
+                by_title[rec["title"]] = rec
+    if len(by_title) != 1:
         return None
-    titles = title_index.get(chat) or {}
-    matches = [rec for norm, rec in titles.items()
-               if stem_title_match(run.get("stem") or "", rec["title"])]
-    if len(matches) != 1:
-        return None
-    proposal = dict(matches[0])
+    proposal = dict(next(iter(by_title.values())))
     proposal["layer"] = "L2"
     proposal["provider"] = "library"
     return proposal
