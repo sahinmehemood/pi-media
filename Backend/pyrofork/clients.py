@@ -64,6 +64,20 @@ async def stop_client(client_id: int) -> None:
             LOGGER.warning(f"Error stopping Client {client_id}: {e}")
 
 
+def _collect_started(results) -> dict:
+    """Map client_id -> client from start_client results. Failures
+    come back as None (already logged) and are skipped — one bad bot
+    login must never take the whole app down."""
+    started = {}
+    for item in results:
+        if not item:
+            continue
+        client_id, client = item
+        if client:
+            started[client_id] = client
+    return started
+
+
 #----- Bring up the main client plus every configured extra client
 async def initialize_clients() -> None:
     multi_clients[0], work_loads[0] = StreamBot, 0
@@ -84,7 +98,7 @@ async def initialize_clients() -> None:
     tasks = [create_task(start_client(i, token)) for i, token in all_tokens.items()]
     results = await gather(*tasks)
 
-    started = {client_id: client for client_id, client in results if client}
+    started = _collect_started(results)
     multi_clients.update(started)
     for client_id, token in all_tokens.items():
         if client_id in started:
@@ -112,7 +126,7 @@ async def reload_multi_token_clients() -> dict:
     if to_start:
         tasks = [create_task(start_client(cid, tok)) for cid, tok in to_start.items()]
         results = await gather(*tasks)
-        started = {cid: client for cid, client in results if client}
+        started = _collect_started(results)
         multi_clients.update(started)
         for cid, tok in to_start.items():
             if cid in started:

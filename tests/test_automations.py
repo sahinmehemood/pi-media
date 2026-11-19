@@ -159,7 +159,7 @@ def test_run_job_records_history():
         assert c["last_status"] == "ok" and c["last_run"] > 0
         view = run(mod.jobs_view())
         ids = [j["id"] for j in view]
-        assert ids == ["harvest", "audit", "stats"]
+        assert ids == ["harvest", "audit", "stats", "preidentify", "scan_all"]
         assert run(mod.run_job("nope"))["ok"] is False
     finally:
         mod._execute = orig_execute

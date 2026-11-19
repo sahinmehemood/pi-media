@@ -56,6 +56,20 @@ JOB_DEFS: list[dict] = [
      "description": "Recompute the Librarian page counts so the "
                     "page always opens instantly.",
      "default_enabled": True, "default_schedule": "hourly"},
+    {"id": "preidentify", "kind": "preidentify",
+     "title": "Pre-identify waiting files",
+     "description": "The app's own first pass: attaches candidate "
+                    "identities (taught aliases first, then provider "
+                    "search) so the bot starts from evidence instead "
+                    "of a blank page. Candidates never edit anything "
+                    "by themselves.",
+     "default_enabled": False, "default_schedule": "off"},
+    {"id": "scan_all", "kind": "scan_all",
+     "title": "Scan all channels (new posts only)",
+     "description": "Incremental scan of every Librarian channel — "
+                    "walks only posts newer than each channel's last "
+                    "scan, so repeat scans stay fast.",
+     "default_enabled": False, "default_schedule": "off"},
 ]
 
 _RUNNING: set[str] = set()
@@ -224,6 +238,27 @@ async def _execute(d: dict) -> tuple[str, str]:
         counts = await librarian.panel_counts()
         return "ok", (f"{counts.get('waiting', 0)} waiting, "
                       f"{counts.get('fixed', 0)} fixed")
+    if d["kind"] == "preidentify":
+        res = await librarian.run_preidentify()
+        if not res.get("ok"):
+            return "error", str(res.get("message") or "Sweep failed.")[:300]
+        return "ok", (f"{res.get('checked', 0)} checked, "
+                      f"{res.get('attached', 0)} candidates attached")
+    if d["kind"] == "scan_all":
+        from Backend.helper.settings_manager import SettingsManager
+        settings = SettingsManager.current()
+        channels = settings.librarian_channels or settings.auth_channels
+        if librarian.ACTION_STATE.get("running"):
+            return "skipped", "The Librarian was busy with another job."
+        done = 0
+        total_files = 0
+        for channel in channels:
+            res = await librarian.run_channel_scan(channel)
+            if res.get("ok"):
+                done += 1
+                total_files += int(res.get("files") or 0)
+        return "ok", (f"{done}/{len(channels)} channels scanned, "
+                      f"{total_files} files recorded")
     # Librarian actions share one single-flight runner with the page.
     if librarian.ACTION_STATE.get("running"):
         return "skipped", "The Librarian was busy with another job."

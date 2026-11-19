@@ -929,3 +929,238 @@ def test_submit_schedules_auto_apply_only_when_permitted():
             del settings.librarian_auto_apply
         entry.metadata = None
         _unwire(lib, saved)
+
+
+# ---------------------------------------------------------------------
+# L4/L5/L6 — policies, bot state, watermark, pre-identify, proposals
+# ---------------------------------------------------------------------
+def test_resolve_channel_policy_defaults_and_overrides():
+    lib = load_lib()
+    p = lib.resolve_channel_policy(None, -1001)
+    assert p == {"auto": "inherit",
+                 "scopes": {"waiting": "allow", "indexed": "allow",
+                            "unindexed": "allow"}}
+    stored = {"-1001": {"auto": "safe",
+                        "scopes": {"indexed": "deny", "waiting": "ask",
+                                   "bogus": "deny"}}}
+    p = lib.resolve_channel_policy(stored, -1001)
+    assert p["auto"] == "safe"
+    assert p["scopes"] == {"waiting": "ask", "indexed": "deny",
+                           "unindexed": "allow"}
+    p = lib.resolve_channel_policy(stored, -1002)
+    assert p["auto"] == "inherit" and p["scopes"]["indexed"] == "allow"
+    p = lib.resolve_channel_policy({"-1001": {"auto": "wild"}}, -1001)
+    assert p["auto"] == "inherit"
+
+
+def test_packet_excludes_denied_scope_and_ready_needs_candidate():
+    lib = load_lib()
+    ledger, locator, packets = _FakeColl(), _FakeColl(), _FakeColl()
+    base = {"chat_id": -1004395609351, "caption": "Show E01",
+            "file_name": "Show E01.mkv"}
+    ledger.docs["w1"] = {"_id": "w1", "status": "open", "first_seen": 1.0,
+                         **base}
+    ledger.docs["w2"] = {"_id": "w2", "status": "open", "first_seen": 2.0,
+                         "candidate": {"title": "Show", "confidence": "high",
+                                       "source": "alias"}, **base}
+    ledger.docs["i1"] = {"_id": "i1", "status": "indexed", "first_seen": 3.0,
+                         "scan_status": "indexed", **base}
+    saved = _wire(lib, ledger=ledger, locator=locator, packets=packets)
+    settings = lib._stubs["settings"]
+    chan = -1004395609351
+    try:
+        settings.librarian_channel_policies = {
+            str(chan): {"auto": "inherit", "scopes": {
+                "waiting": "allow", "indexed": "deny",
+                "unindexed": "allow"}}}
+        pkt = run(lib.get_packet(chan, 10, "all"))
+        assert sorted(i["key"] for i in pkt["items"]) == ["w1", "w2"], pkt
+        pkt = run(lib.get_packet(chan, 10, "ready"))
+        assert [i["key"] for i in pkt["items"]] == ["w2"]
+        assert pkt["items"][0]["candidate"]["title"] == "Show"
+    finally:
+        if hasattr(settings, "librarian_channel_policies"):
+            del settings.librarian_channel_policies
+        _unwire(lib, saved)
+
+
+def test_bot_state_blocks_packet_and_submit():
+    lib = load_lib()
+    ledger, proposals, saved = _seed_proposal_env(lib)
+    settings = lib._stubs["settings"]
+    try:
+        settings.librarian_bot_state = "killed"
+        pkt = run(lib.get_packet(-100111, 10))
+        assert pkt["ok"] is False and "killed" in pkt["message"]
+        res = run(lib.submit_proposal(_plan()))
+        assert res["ok"] is False and "killed" in res["message"]
+        settings.librarian_bot_state = "paused"
+        pkt = run(lib.get_packet(-100111, 10))
+        assert pkt["ok"] is True and pkt["paused"] is True
+        assert pkt["items"] == []
+        res = run(lib.submit_proposal(_plan()))
+        assert res["ok"] is False and "paused" in res["message"]
+    finally:
+        if hasattr(settings, "librarian_bot_state"):
+            del settings.librarian_bot_state
+        _unwire(lib, saved)
+
+
+def test_submit_refuses_denied_scope():
+    lib = load_lib()
+    ledger, proposals, saved = _seed_proposal_env(lib)
+    settings = lib._stubs["settings"]
+    try:
+        settings.librarian_channel_policies = {
+            "-100111": {"auto": "inherit", "scopes": {
+                "waiting": "deny", "indexed": "allow",
+                "unindexed": "allow"}}}
+        res = run(lib.submit_proposal(_plan()))
+        assert res["ok"] is False and "denies the waiting scope" in res["message"], res
+    finally:
+        if hasattr(settings, "librarian_channel_policies"):
+            del settings.librarian_channel_policies
+        _unwire(lib, saved)
+
+
+def test_auto_apply_effective_levels_per_channel():
+    lib = load_lib()
+    items = [{"key": "k1"}]
+    plain = {"k1": {"caption": "Some Show S02E05", "file_name": "",
+                    "chat_id": -100111}}
+    special = {"k1": {"caption": "Some Show SP1 E01", "file_name": "",
+                      "chat_id": -100111}}
+    pol = {"-100111": lib.resolve_channel_policy(
+        {"-100111": {"auto": "off", "scopes": {}}}, -100111)}
+    assert lib._auto_apply_eligible("all", items, plain, pol) is False
+    pol = {"-100111": lib.resolve_channel_policy(
+        {"-100111": {"auto": "all", "scopes": {"waiting": "ask"}}}, -100111)}
+    assert lib._auto_apply_eligible("off", items, plain, pol) is False
+    pol = {"-100111": lib.resolve_channel_policy(
+        {"-100111": {"auto": "all", "scopes": {}}}, -100111)}
+    assert lib._auto_apply_eligible("off", items, special, pol) is True
+    pol = {"-100111": lib.resolve_channel_policy(
+        {"-100111": {"auto": "safe", "scopes": {}}}, -100111)}
+    assert lib._auto_apply_eligible("all", items, special, pol) is False
+    assert lib._auto_apply_eligible("all", items, plain, pol) is True
+
+
+def test_scan_watermark_stops_at_seen_messages():
+    import sys as _sys
+    import types as _types
+    lib = load_lib()
+    ledger, locator = _FakeColl(), _FakeColl()
+    scan_state = _FakeColl()
+    saved = _wire(lib, ledger=ledger, locator=locator)
+    orig_scan_coll = lib._scan_state_coll
+    orig_index = lib._library_index_for_channel
+    lib._scan_state_coll = lambda: scan_state
+
+    async def _no_index(channel):
+        return {}
+
+    lib._library_index_for_channel = _no_index
+
+    class _Media:
+        def __init__(self, uid):
+            self.file_unique_id = uid
+            self.file_name = f"{uid}.mkv"
+            self.file_size = 100
+            self.height = 1080
+
+    class _Msg:
+        def __init__(self, mid, uid):
+            self.id = mid
+            self.caption = f"Show E{mid}"
+            self.video = _Media(uid)
+            self.document = None
+            self.audio = None
+            self.animation = None
+            self.photo = None
+
+    walked = []
+
+    class _UB:
+        async def get_chat_history(self, chat_id):
+            for mid in (50, 49, 48, 47):
+                walked.append(mid)
+                yield _Msg(mid, f"u{mid}")
+
+    botmod = _sys.modules["Backend.pyrofork.bot"]
+    orig_ub = botmod.Userbot
+    botmod.Userbot = _UB()
+    try:
+        res = run(lib.run_channel_scan(-1004395609351))
+        assert res["ok"] is True and res["files"] == 4, res
+        assert res["watermark"] == 50 and res["incremental"] is False
+        assert scan_state.docs["-1004395609351"]["last_msg_id"] == 50
+        walked.clear()
+        res = run(lib.run_channel_scan(-1004395609351))
+        assert res["ok"] is True and res["messages_read"] == 0, res
+        assert res["incremental"] is True and walked == [50]
+    finally:
+        botmod.Userbot = orig_ub
+        lib._scan_state_coll = orig_scan_coll
+        lib._library_index_for_channel = orig_index
+        _unwire(lib, saved)
+
+
+def test_preidentify_alias_candidate_and_clear():
+    lib = load_lib()
+    ledger, alias = _FakeColl(), _FakeColl()
+    ledger.docs["w1"] = {"_id": "w1", "status": "open", "first_seen": 1.0,
+                         "chat_id": -1004395609351,
+                         "caption": "Some Show S02E05 1080p",
+                         "file_name": "Some Show S02E05.mkv"}
+    alias.docs["-1004395609351:some show"] = {
+        "_id": "-1004395609351:some show", "title": "Some Show",
+        "tmdb_id": 42, "imdb_id": "tt1234567", "media_type": "tv"}
+    saved = _wire(lib, ledger=ledger, alias=alias)
+    try:
+        res = run(lib.run_preidentify())
+        assert res == {"ok": True, "checked": 1, "attached": 1}, res
+        cand = ledger.docs["w1"]["candidate"]
+        assert cand["confidence"] == "high" and cand["tmdb_id"] == 42
+        assert cand["season"] == 2 and cand["episode"] == 5
+        rows = run(lib.list_preidentified())
+        assert len(rows) == 1 and rows[0]["key"] == "w1"
+        out = run(lib.clear_candidate("w1"))
+        assert out["ok"] is True and "candidate" not in ledger.docs["w1"]
+        out = run(lib.clear_candidate("nope"))
+        assert out["ok"] is False
+    finally:
+        _unwire(lib, saved)
+
+
+def test_proposal_reject_and_lazy_expiry():
+    import time as _time
+    lib = load_lib()
+    ledger, proposals = _FakeColl(), _FakeColl()
+    ledger.docs["k1"] = {"_id": "k1", "status": "open",
+                         "proposal_id": "p_old", "caption": "Show E01"}
+    ledger.docs["k2"] = {"_id": "k2", "status": "open",
+                         "proposal_id": "p_new", "caption": "Show E02"}
+    proposals.docs["p_old"] = {
+        "_id": "p_old", "status": "pending", "label": "old",
+        "created_at": _time.time() - 49 * 3600,
+        "items": [{"key": "k1", "new_caption": "X"}]}
+    proposals.docs["p_new"] = {
+        "_id": "p_new", "status": "pending", "label": "new",
+        "created_at": _time.time(),
+        "items": [{"key": "k2", "new_caption": "Y"}]}
+    saved = _wire(lib, ledger=ledger, proposals=proposals)
+    try:
+        out = run(lib.list_proposals())
+        by_id = {p["_id"]: p for p in out}
+        assert by_id["p_old"]["status"] == "expired"
+        assert proposals.docs["p_old"]["status"] == "expired"
+        assert ledger.docs["k1"]["proposal_id"] is None
+        assert by_id["p_new"]["status"] == "pending"
+        res = run(lib.reject_proposal("p_new"))
+        assert res["ok"] is True
+        assert proposals.docs["p_new"]["status"] == "rejected"
+        assert ledger.docs["k2"]["proposal_id"] is None
+        res = run(lib.reject_proposal("p_new"))
+        assert res["ok"] is False
+    finally:
+        _unwire(lib, saved)

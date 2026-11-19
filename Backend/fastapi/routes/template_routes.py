@@ -411,4 +411,40 @@ async def librarian_fragment(request: Request, name: str,
         from Backend.helper import automations
         ctx["lib_jobs"] = await automations.jobs_view()
         ctx["lib_schedule_labels"] = automations.SCHEDULE_LABELS
+    elif name == "agent":
+        import time as _time
+
+        activity = await librarian.bot_activity()
+        last_seen = float(activity.get("last_seen") or 0)
+        age = _time.time() - last_seen if last_seen else None
+        if age is None:
+            presence = "never seen"
+        elif age < 120:
+            presence = "online now"
+        elif age < 3600:
+            presence = "idle"
+        else:
+            presence = "away"
+        ctx["lib_bot"] = {
+            "state": settings.librarian_bot_state,
+            "activity": activity,
+            "last_seen": last_seen,
+            "presence": presence,
+            "counts": await librarian.panel_counts(),
+            "auto_apply": settings.librarian_auto_apply,
+            "dry_run": settings.librarian_dry_run,
+        }
+        stored = settings.librarian_channel_policies
+        titles = settings.channel_titles or {}
+        ctx["lib_policy_rows"] = [
+            {"id": ch,
+             "name": titles.get(str(ch)) or str(ch),
+             "policy": librarian.resolve_channel_policy(stored, ch)}
+            for ch in settings.auth_channels]
+        ctx["lib_pending"] = [
+            p for p in await librarian.list_proposals(limit=15)
+            if p.get("status") == "pending"]
+        ctx["lib_fixes"] = await librarian.list_audit(limit=10)
+    elif name == "preidentified":
+        ctx["lib_preidentified"] = await librarian.list_preidentified()
     return templates.TemplateResponse(f"librarian/_{name}.html", ctx)

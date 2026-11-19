@@ -3213,6 +3213,42 @@ async def librarian_action_api(payload: dict) -> dict:
         return await librarian.delete_alias(str(payload.get("alias_id") or ""))
     if action == "dismiss":
         return await librarian.dismiss_item(str(payload.get("key") or ""))
+    if action == "approve":
+        return await librarian.apply_proposal(
+            str(payload.get("proposal_id") or ""), approver="yan-page")
+    if action == "reject":
+        return await librarian.reject_proposal(
+            str(payload.get("proposal_id") or ""))
+    if action == "candidate_clear":
+        return await librarian.clear_candidate(str(payload.get("key") or ""))
+    if action == "bot_state":
+        state = str(payload.get("state") or "").strip().lower()
+        if state not in ("active", "paused", "killed"):
+            return {"status": "error", "message": "Unknown bot state."}
+        await SettingsManager.update(db, {"librarian_bot_state": state})
+        return {"ok": True, "state": state,
+                "message": f"Media Manager is now {state}."}
+    if action == "policies":
+        channel = str(payload.get("channel") or "")
+        if not channel:
+            return {"status": "error", "message": "A channel is required."}
+        auto = str(payload.get("auto") or "inherit")
+        if auto not in librarian.POLICY_AUTO_LEVELS:
+            return {"status": "error", "message": "Unknown auto level."}
+        scopes = {}
+        raw_scopes = payload.get("scopes") or {}
+        for s in librarian.POLICY_SCOPES:
+            value = str(raw_scopes.get(s) or "allow")
+            if value not in librarian.POLICY_SCOPE_LEVELS:
+                return {"status": "error",
+                        "message": f"Unknown level for scope {s}."}
+            scopes[s] = value
+        stored = dict(SettingsManager.current().librarian_channel_policies)
+        stored[channel] = {"auto": auto, "scopes": scopes}
+        await SettingsManager.update(
+            db, {"librarian_channel_policies": stored})
+        return {"ok": True, "message": "Channel policy saved.",
+                "policy": librarian.resolve_channel_policy(stored, channel)}
     if action == "job_run":
         from Backend.helper import automations
         return automations.run_now(str(payload.get("job") or ""))
@@ -3251,12 +3287,14 @@ async def librarian_bot_status_api(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
     from Backend.helper import librarian
 
+    await librarian.record_bot_activity("status")
     settings = SettingsManager.current()
     return {
         "enabled": settings.librarian_enabled,
         "dry_run": settings.librarian_dry_run,
         "auto_apply": settings.librarian_auto_apply,
         "digest": settings.librarian_digest,
+        "bot_state": settings.librarian_bot_state,
         "counts": await librarian.panel_counts(),
         "action_state": librarian.ACTION_STATE,
     }
@@ -3276,6 +3314,7 @@ async def librarian_bot_packet_api(request: Request) -> dict:
     except ValueError:
         limit = None
     scope = request.query_params.get("scope") or "waiting"
+    await librarian.record_bot_activity("packet")
     return await librarian.get_packet(channel, limit, scope)
 
 
@@ -3285,6 +3324,7 @@ async def librarian_bot_proposals_api(request: Request) -> dict:
     from Backend.helper import librarian
 
     payload = await request.json()
+    await librarian.record_bot_activity("proposals")
     return await librarian.submit_proposal(payload)
 
 
@@ -3294,6 +3334,11 @@ async def librarian_bot_apply_api(request: Request) -> dict:
     from Backend.helper import librarian
 
     payload = await request.json()
+    await librarian.record_bot_activity("apply")
+    if librarian.bot_state() == "killed":
+        return {"ok": False,
+                "message": "The bot is stopped (killed) from the "
+                           "Librarian page — applies are refused."}
     return await librarian.apply_proposal(
         str(payload.get("proposal_id") or ""),
         approver=str(payload.get("approver") or "yan"))

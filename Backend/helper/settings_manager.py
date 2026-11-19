@@ -98,6 +98,8 @@ _DEFAULTS: Dict[str, Any] = {
     "librarian_auto_apply_tier_a": False,
     "librarian_auto_apply": "",
     "librarian_modules": {},
+    "librarian_channel_policies": {},
+    "librarian_bot_state": "active",
     "librarian_digest": "manual",
     "librarian_edit_budget_per_day": 50,
     "librarian_channels": [],
@@ -515,6 +517,22 @@ class Settings:
         bool). Merged over the registry defaults by the page handler."""
         raw = self._d.get("librarian_modules") or {}
         return raw if isinstance(raw, dict) else {}
+
+    @property
+    def librarian_channel_policies(self) -> dict:
+        """Per-channel permission matrix for the Media Manager:
+        {channel_id: {"auto": inherit|off|safe|all, "scopes":
+        {"waiting"|"indexed"|"unindexed": allow|ask|deny}}}."""
+        raw = self._d.get("librarian_channel_policies") or {}
+        return raw if isinstance(raw, dict) else {}
+
+    @property
+    def librarian_bot_state(self) -> str:
+        """The Hermes agent panel's master control for the Media
+        Manager: active | paused (no new work) | killed (no bot API
+        work at all until Yan restarts it)."""
+        value = str(self._d.get("librarian_bot_state") or "active").strip().lower()
+        return value if value in ("active", "paused", "killed") else "active"
 
     @property
     def librarian_digest(self) -> str:

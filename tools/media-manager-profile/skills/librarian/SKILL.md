@@ -29,7 +29,7 @@ your profile environment itself):
 
 ```
 python3 ~/librarian-cli.py status
-python3 ~/librarian-cli.py packet --channel <channel_id> [--limit N] [--scope waiting|indexed|unindexed|all]
+python3 ~/librarian-cli.py packet --channel <channel_id> [--limit N] [--scope waiting|ready|indexed|unindexed|all]
 python3 ~/librarian-cli.py search --q "<title>" --type tv|movie
 python3 ~/librarian-cli.py propose --file plan.json
 python3 ~/librarian-cli.py apply --id <proposal_id>
@@ -51,11 +51,24 @@ other file in it, and the scope widens:
   this when Yan asks you to review or re-check a channel or a series.
 - `--scope unindexed` — files in the channel that were never indexed
   and never rejected.
+- `--scope ready` — waiting files the app has already pre-identified:
+  each item carries a `candidate` (title, IDs, confidence, source).
+  A candidate is the app's homework, not its decision — verify it
+  like any other evidence before it goes in a plan. Start here when
+  it is non-empty: these are the fastest verified wins.
 - `--scope all` — everything on record for the channel.
 
 When Yan names a channel or a series generally ("review Ani",
 "check One Piece"), work scope `all`. When he says fix the rejects
 or the skip pile, stay on `waiting`.
+
+Two server controls can answer you instead of a packet, and both are
+Yan's word, not errors: **paused** (no new work right now — say so
+and stop) and **killed** (the bot is stopped from the Librarian page
+— report it and stop). Yan can also deny a scope per channel: denied
+files simply never appear in your packets, and a proposal containing
+one is refused — never argue with a policy refusal; work what you
+are given.
 
 ## Playbooks — pick one, copy its steps, skip nothing silently
 

@@ -611,14 +611,26 @@ async def _record_scan_entry(coll, uid: str, post: dict,
     invalidate_counts()
 
 
-async def run_channel_scan(channel_id) -> dict:
+def _scan_state_coll():
+    tracking = _tracking()
+    return tracking["scan_state"] if tracking is not None else None
+
+
+async def run_channel_scan(channel_id, incremental: bool = True) -> dict:
     """Walk one source channel with the userbot and record EVERY media
     file in the ledger: already-indexed files (with what they are
     indexed as) and unindexed ones, alongside the rejects the ledger
     already holds. Also refreshes the locator map, like run_locator.
     Read-only on Telegram. Stoppable from the page: the walk checks
     ACTION_STATE['stop_requested'] as it goes and keeps whatever it
-    has recorded when stopped."""
+    has recorded when stopped.
+
+    Incremental (the default): the walk stops at the channel's stored
+    watermark — the newest message id a previous scan reached — so a
+    repeat scan only walks new posts. The watermark advances to the
+    newest message seen; because the walk is newest-first and the
+    region below the old watermark was covered by earlier scans, the
+    covered range stays contiguous even when a walk is stopped."""
     channel_id = _full_chat(channel_id)
     if channel_id is None:
         return {"ok": False, "message": "Bad channel id."}
@@ -629,12 +641,26 @@ async def run_channel_scan(channel_id) -> dict:
     userbot = getattr(botmod, "Userbot", None)
     if userbot is None:
         return {"ok": False, "message": "Userbot is not configured."}
+    watermark = 0
+    if incremental:
+        scoll = _scan_state_coll()
+        if scoll is not None:
+            try:
+                sdoc = await scoll.find_one({"_id": str(channel_id)})
+                watermark = int((sdoc or {}).get("last_msg_id") or 0)
+            except Exception:
+                watermark = 0
     lib_index = await _library_index_for_channel(channel_id)
     seen: dict[str, dict] = {}
     read = 0
     stopped = False
+    max_msg_id = 0
     try:
         async for m in userbot.get_chat_history(channel_id):
+            if watermark and m.id <= watermark:
+                break
+            if m.id > max_msg_id:
+                max_msg_id = m.id
             read += 1
             if read % 100 == 0:
                 if ACTION_STATE.get("stop_requested"):
@@ -679,6 +705,16 @@ async def run_channel_scan(channel_id) -> dict:
             await _record_scan_entry(ledger, uid, post, scan_status, match)
         except Exception as e:
             LOGGER.warning(f"[Librarian] scan entry failed: {e}")
+    if max_msg_id > watermark:
+        scoll = _scan_state_coll()
+        if scoll is not None:
+            try:
+                await scoll.update_one(
+                    {"_id": str(channel_id)},
+                    {"$set": {"last_msg_id": max_msg_id,
+                              "updated_at": time.time()}}, upsert=True)
+            except Exception:
+                pass
     ACTION_STATE["progress"] = {"read": read, "files": len(seen),
                                 "channel": channel_id}
     LOGGER.info(f"[Librarian] scan channel {channel_id}: {read} read, "
@@ -686,7 +722,130 @@ async def run_channel_scan(channel_id) -> dict:
                 f"{unindexed} unindexed, stopped={stopped}")
     return {"ok": True, "channel": channel_id, "messages_read": read,
             "files": len(seen), "indexed": indexed,
-            "unindexed": unindexed, "stopped": stopped}
+            "unindexed": unindexed, "stopped": stopped,
+            "incremental": bool(watermark), "watermark": max_msg_id}
+
+
+# ---------------------------------------------------------------------
+# Pre-identification (L5): the app's own deterministic first pass over
+# waiting files. A taught alias for the file's stem gives a
+# high-confidence candidate; otherwise a provider search on the
+# cleaned stem, kept only when it resolves to exactly one strong
+# match. Candidates are EVIDENCE for the bot (they ride along in
+# packets and in the "ready" scope) — never decisions: the bot still
+# confirms every one through the gate before anything is edited.
+# ---------------------------------------------------------------------
+async def _preidentify_one(doc) -> Optional[dict]:
+    bits = name_bits(doc.get("caption") or "", doc.get("file_name") or "")
+    stem = bits.get("stem") or ""
+    chat = doc.get("chat_id")
+    if stem and chat is not None:
+        alias = await lookup_alias(chat, stem)
+        if alias and (alias.get("tmdb_id") or alias.get("imdb_id")):
+            return {"title": alias.get("title") or "",
+                    "tmdb_id": alias.get("tmdb_id"),
+                    "imdb_id": alias.get("imdb_id"),
+                    "media_type": alias.get("media_type"),
+                    "year": bits.get("year"),
+                    "season": bits.get("season"),
+                    "episode": bits.get("episode"),
+                    "confidence": "high", "source": "alias",
+                    "at": time.time()}
+    if len(stem) >= 4:
+        try:
+            from Backend.helper.metadata.entry import search_any_candidates
+            if not callable(search_any_candidates):
+                raise TypeError("candidate search unavailable")
+            results = await search_any_candidates(
+                stem.replace(".", " "), year=bits.get("year"), limit=5)
+        except Exception:
+            results = []
+        strong = [r for r in (results or []) if r.get("title")]
+        pick = None
+        if len(strong) == 1:
+            pick = strong[0]
+        elif bits.get("year") and strong:
+            same_year = [r for r in strong
+                         if str(r.get("year") or "") == str(bits["year"])]
+            if len(same_year) == 1:
+                pick = same_year[0]
+        if pick:
+            return {"title": pick.get("title") or "",
+                    "tmdb_id": pick.get("tmdb_id"),
+                    "imdb_id": pick.get("imdb_id"),
+                    "media_type": pick.get("media_type"),
+                    "year": bits.get("year"),
+                    "season": bits.get("season"),
+                    "episode": bits.get("episode"),
+                    "confidence": "medium",
+                    "source": f"search:{pick.get('source')}",
+                    "at": time.time()}
+    return None
+
+
+async def run_preidentify(limit: int = 40) -> dict:
+    """One sweep: attach candidates to up to `limit` waiting files
+    that have none yet. Idempotent — files with a candidate (or a
+    live proposal) are skipped."""
+    ledger = _ledger_coll()
+    if ledger is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    checked = attached = 0
+    try:
+        cursor = ledger.find(
+            {"status": {"$in": ["open", "unresolved"]}}).sort("first_seen", 1)
+        async for doc in cursor:
+            if checked >= max(1, int(limit)):
+                break
+            if doc.get("candidate") or doc.get("proposal_id"):
+                continue
+            checked += 1
+            cand = await _preidentify_one(doc)
+            if cand:
+                await ledger.update_one(
+                    {"_id": doc["_id"]}, {"$set": {"candidate": cand}})
+                attached += 1
+    except Exception as e:
+        return {"ok": False, "message": f"Pre-identify sweep failed: {e}"}
+    LOGGER.info(f"[Librarian] pre-identify: {checked} checked, "
+                f"{attached} candidates attached")
+    return {"ok": True, "checked": checked, "attached": attached}
+
+
+async def list_preidentified(limit: int = 60) -> list[dict]:
+    """Waiting files that carry a server-attached candidate — the
+    bot's head start, and Yan's review list on the page."""
+    ledger = _ledger_coll()
+    if ledger is None:
+        return []
+    out = []
+    try:
+        cursor = ledger.find(
+            {"status": {"$in": ["open", "unresolved"]},
+             "candidate": {"$exists": True}}).sort("first_seen", 1)
+        async for doc in cursor:
+            out.append({"key": doc["_id"],
+                        "caption": (doc.get("caption") or "").split("\n")[0],
+                        "chat_id": doc.get("chat_id"),
+                        "candidate": doc.get("candidate")})
+            if len(out) >= max(1, min(200, int(limit))):
+                break
+    except Exception as e:
+        LOGGER.warning(f"[Librarian] pre-identified list failed: {e}")
+    return out
+
+
+async def clear_candidate(key: str) -> dict:
+    """Drop a wrong server candidate so the file goes back to a
+    clean slate (and a later sweep may try again)."""
+    ledger = _ledger_coll()
+    if ledger is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    if await ledger.find_one({"_id": key}) is None:
+        return {"ok": False, "message": "No such file."}
+    await ledger.update_one({"_id": key},
+                            {"$unset": {"candidate": ""}})
+    return {"ok": True, "message": "Candidate cleared."}
 
 
 async def _located_map(keys: list[str]) -> dict:
@@ -767,6 +926,7 @@ def _group_stem(stem: str) -> str:
 
 _PACKET_SCOPES = {
     "waiting": ["open", "unresolved"],
+    "ready": ["open", "unresolved"],
     "indexed": ["indexed"],
     "unindexed": ["unindexed"],
     "all": ["open", "unresolved", "indexed", "unindexed"],
@@ -791,6 +951,19 @@ async def get_packet(channel_id, limit: int = None,
     ledger = _ledger_coll()
     if ledger is None:
         return {"ok": False, "message": "Tracking DB unavailable."}
+    state = bot_state()
+    if state == "killed":
+        return {"ok": False,
+                "message": "The Media Manager is stopped (killed) from "
+                           "the Librarian page. No work until Yan "
+                           "restarts it there."}
+    if state == "paused":
+        return {"ok": True, "paused": True, "channel": channel_id,
+                "scope": scope, "items": [], "runs_hint": [],
+                "packet_id": None,
+                "message": "The bot is paused from the Librarian page "
+                           "— no new work right now."}
+    policy = resolve_channel_policy(_policies_stored(), channel_id)
     if not limit:
         try:
             from Backend.helper.settings_manager import SettingsManager
@@ -820,6 +993,10 @@ async def get_packet(channel_id, limit: int = None,
             continue
         if doc.get("proposal_id"):
             continue
+        if _policy_denied(policy, doc):
+            continue
+        if scope == "ready" and not doc.get("candidate"):
+            continue
         caption = (loc or {}).get("caption") or doc.get("caption") or ""
         file_name = (loc or {}).get("file_name") or doc.get("file_name") or ""
         bits = name_bits(caption, file_name)
@@ -840,6 +1017,7 @@ async def get_packet(channel_id, limit: int = None,
             "skip_msg_ids": doc.get("skip_msg_ids") or [],
             "scan_status": doc.get("scan_status"),
             "current_match": doc.get("current_match"),
+            "candidate": doc.get("candidate"),
         })
     # Runs hint: group the batch by naming stem (a hint for the bot's
     # grouping, never a decision — the bot still resolves each run).
@@ -911,26 +1089,44 @@ def _plan_stamp_ok(new_caption: str) -> Optional[str]:
         return None
 
 
+def _effective_auto_level(level: str, policy: dict | None, doc) -> str:
+    """One item's auto-apply level: the channel policy's override
+    wins over the global ladder, and an "ask" scope never
+    auto-applies."""
+    eff = level
+    if policy:
+        if policy.get("auto") not in (None, "inherit"):
+            eff = policy["auto"]
+        if policy["scopes"].get(_item_scope(doc)) == "ask":
+            return "off"
+    return eff
+
+
 def _auto_apply_eligible(level: str, items: list[dict],
-                         originals: dict) -> bool:
+                         originals: dict, policies: dict | None = None) -> bool:
     """The automation ladder, decided server-side (the Settings page is
     the bot's permission slip — the bot cannot grant itself more):
     - "all": any gate-passed plan may apply unattended.
     - "safe": gate-passed plans whose originals carry NO special
       marker (no SP / OVA / special arcs) may apply unattended.
     - anything else ("off"): never.
-    The gate has already verified every item's identity and numbering;
-    while the specials policy is on guard it also refuses SP->season
-    mappings, so a special can only ever auto-apply as a verified
-    season-0 special under "all", never as a disguised season."""
+    Per-channel policies (L4) override the level per item: a channel
+    set to "off" or an item in an "ask" scope blocks the whole plan's
+    auto-apply. The gate has already verified every item's identity
+    and numbering; while the specials policy is on guard it also
+    refuses SP->season mappings, so a special can only ever
+    auto-apply as a verified season-0 special under "all", never as
+    a disguised season."""
     if not items:
-        return False
-    if level == "all":
-        return True
-    if level != "safe":
         return False
     for it in items:
         od = originals.get(it.get("key")) or {}
+        policy = (policies or {}).get(str(od.get("chat_id")))
+        eff = _effective_auto_level(level, policy, od)
+        if eff == "all":
+            continue
+        if eff != "safe":
+            return False
         bits = name_bits(od.get("caption") or "", od.get("file_name") or "")
         if bits.get("special") is not None:
             return False
@@ -969,6 +1165,11 @@ async def submit_proposal(payload: dict) -> dict:
     from Backend.helper.settings_manager import SettingsManager
     if not SettingsManager.current().librarian_enabled:
         return {"ok": False, "message": "Librarian is disabled in Settings."}
+    state = bot_state()
+    if state != "active":
+        return {"ok": False,
+                "message": f"The bot is {state} from the Librarian page "
+                           "— proposals are not accepted right now."}
     coll = _proposals_coll()
     if coll is None:
         return {"ok": False, "message": "Tracking DB unavailable."}
@@ -978,6 +1179,7 @@ async def submit_proposal(payload: dict) -> dict:
     channel = _full_chat(payload.get("channel"))
     if channel is None:
         return {"ok": False, "message": "Bad channel id."}
+    policy = resolve_channel_policy(_policies_stored(), channel)
     ledger = _ledger_coll()
     # Pairing guard: items may reference a packet by NUMBER. The server
     # resolves the number to the file itself, and the bot must echo the
@@ -1017,6 +1219,12 @@ async def submit_proposal(payload: dict) -> dict:
         doc = await ledger.find_one({"_id": key}) if ledger is not None else None
         if doc is None:
             return {"ok": False, "message": f"Unknown ledger item: {key}"}
+        if _policy_denied(policy, doc):
+            return {"ok": False,
+                    "message": f"Item {it.get('n', key)}: Yan's channel "
+                               f"policy denies the {_item_scope(doc)} "
+                               "scope for this channel — those files are "
+                               "not yours to fix. Pull a different packet."}
         seen = it.get("seen_caption")
         if packet_id and seen is None:
             return {"ok": False,
@@ -1084,7 +1292,8 @@ async def submit_proposal(payload: dict) -> dict:
                     od = None
                 if od:
                     originals[it["key"]] = od
-        if _auto_apply_eligible(level, clean_items, originals):
+        if _auto_apply_eligible(level, clean_items, originals,
+                                policies={str(channel): policy}):
             auto_level = level
             await coll.update_one({"_id": pid}, {"$set": {
                 "auto_apply": level, "auto_apply_state": "scheduled"}})
@@ -1449,6 +1658,55 @@ async def rollback_proposal(proposal_id: str) -> dict:
     return {"ok": True, "rolled_back": undone}
 
 
+PROPOSAL_EXPIRY_SECONDS = 48 * 3600
+
+
+async def _expire_proposal(coll, ledger, doc) -> bool:
+    """Lazy expiry: a proposal left pending past 48h is stale — the
+    files may have changed under it. Expire it and release its items
+    so they return to packets. Returns True when it expired the doc."""
+    if doc.get("status") != "pending":
+        return False
+    if time.time() - float(doc.get("created_at") or 0) < PROPOSAL_EXPIRY_SECONDS:
+        return False
+    try:
+        await coll.update_one({"_id": doc["_id"]},
+                              {"$set": {"status": "expired"}})
+        if ledger is not None:
+            for it in doc.get("items") or []:
+                await ledger.update_one(
+                    {"_id": it.get("key")},
+                    {"$set": {"proposal_id": None}})
+        invalidate_counts()
+        return True
+    except Exception:
+        return False
+
+
+async def reject_proposal(proposal_id: str) -> dict:
+    """Yan rejecting a pending plan from the page: mark it rejected
+    and release its items back to the pool."""
+    coll = _proposals_coll()
+    if coll is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    doc = await coll.find_one({"_id": proposal_id})
+    if doc is None:
+        return {"ok": False, "message": "No such proposal."}
+    if doc.get("status") != "pending":
+        return {"ok": False,
+                "message": f"Proposal is {doc.get('status')}, not pending."}
+    await coll.update_one({"_id": proposal_id},
+                          {"$set": {"status": "rejected"}})
+    ledger = _ledger_coll()
+    if ledger is not None:
+        for it in doc.get("items") or []:
+            await ledger.update_one({"_id": it.get("key")},
+                                    {"$set": {"proposal_id": None}})
+    invalidate_counts()
+    return {"ok": True, "message": "Proposal rejected; its files are "
+                                   "back in the pool."}
+
+
 async def list_proposals(limit: int = 20) -> list[dict]:
     coll = _proposals_coll()
     if coll is None:
@@ -1459,6 +1717,8 @@ async def list_proposals(limit: int = 20) -> list[dict]:
         cursor = coll.find({}).sort("created_at", -1).limit(max(1, min(50, limit)))
         async for doc in cursor:
             doc = dict(doc)
+            if await _expire_proposal(coll, ledger, doc):
+                doc["status"] = "expired"
             items = doc.get("items") or []
             doc["item_count"] = len(items)
             # Attach each item's current recorded caption so the page can
@@ -1615,6 +1875,8 @@ PAGE_MODULES: list[dict] = [
     {"id": "proposals", "title": "Proposals", "default": True},
     {"id": "activity", "title": "Recent fixes", "default": True},
     {"id": "automations", "title": "Automations", "default": True},
+    {"id": "agent", "title": "Hermes agent", "default": True},
+    {"id": "preidentified", "title": "Pre-identified queue", "default": False},
     {"id": "flagged", "title": "Flagged files", "default": False},
     {"id": "aliases", "title": "Learned aliases", "default": False},
 ]
@@ -1622,7 +1884,7 @@ PAGE_MODULES: list[dict] = [
 # Sections rendered as lazily-loaded fragments (below the fold); the
 # rest render inline with the page shell.
 FRAGMENT_MODULES = ("proposals", "activity", "flagged", "aliases",
-                    "automations")
+                    "automations", "agent", "preidentified")
 
 
 def enabled_modules(stored=None) -> dict:
@@ -1634,6 +1896,100 @@ def enabled_modules(stored=None) -> dict:
             if key in out:
                 out[key] = bool(value)
     return out
+
+
+# ---------------------------------------------------------------------
+# Per-channel policies + bot state (L4/L6): Yan's permission matrix,
+# enforced server-side — never by asking the bot nicely.
+# Stored setting librarian_channel_policies:
+#   {channel_id: {"auto": inherit|off|safe|all,
+#                 "scopes": {"waiting"|"indexed"|"unindexed":
+#                            allow|ask|deny}}}
+# Packets never offer a denied scope; proposals containing a denied
+# scope are refused; auto-apply uses each item's effective level
+# (channel override else the global ladder; an "ask" scope never
+# auto-applies).
+# ---------------------------------------------------------------------
+POLICY_SCOPES = ("waiting", "indexed", "unindexed")
+POLICY_AUTO_LEVELS = ("inherit", "off", "safe", "all")
+POLICY_SCOPE_LEVELS = ("allow", "ask", "deny")
+
+
+def resolve_channel_policy(stored, channel) -> dict:
+    out = {"auto": "inherit",
+           "scopes": {s: "allow" for s in POLICY_SCOPES}}
+    if isinstance(stored, dict):
+        raw = stored.get(str(channel)) or {}
+        if isinstance(raw, dict):
+            if raw.get("auto") in POLICY_AUTO_LEVELS:
+                out["auto"] = raw["auto"]
+            scopes = raw.get("scopes") or {}
+            if isinstance(scopes, dict):
+                for s in POLICY_SCOPES:
+                    if scopes.get(s) in POLICY_SCOPE_LEVELS:
+                        out["scopes"][s] = scopes[s]
+    return out
+
+
+def _policies_stored() -> dict:
+    try:
+        from Backend.helper.settings_manager import SettingsManager
+        raw = getattr(SettingsManager.current(),
+                      "librarian_channel_policies", {}) or {}
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _item_scope(doc) -> str:
+    ss = (doc or {}).get("scan_status")
+    if ss in ("indexed", "unindexed"):
+        return ss
+    return "waiting"
+
+
+def _policy_denied(policy: dict, doc) -> bool:
+    return policy["scopes"].get(_item_scope(doc)) == "deny"
+
+
+def bot_state() -> str:
+    """active | paused | killed — the agent panel's master control."""
+    try:
+        from Backend.helper.settings_manager import SettingsManager
+        value = str(getattr(SettingsManager.current(),
+                            "librarian_bot_state", "active")
+                    or "active").strip().lower()
+        return value if value in ("active", "paused", "killed") else "active"
+    except Exception:
+        return "active"
+
+
+def _activity_coll():
+    tracking = _tracking()
+    return tracking["bot_activity"] if tracking is not None else None
+
+
+async def record_bot_activity(action: str) -> None:
+    """The bot's heartbeat: every bot-API call stamps last_seen, so
+    the agent panel can show whether the Media Manager is alive."""
+    coll = _activity_coll()
+    if coll is None:
+        return
+    try:
+        await coll.update_one({"_id": "mediamanager"}, {"$set": {
+            "last_seen": time.time(), "last_action": action}}, upsert=True)
+    except Exception:
+        pass
+
+
+async def bot_activity() -> dict:
+    coll = _activity_coll()
+    if coll is None:
+        return {}
+    try:
+        return await coll.find_one({"_id": "mediamanager"}) or {}
+    except Exception:
+        return {}
 
 
 _COUNTS_CACHE: dict = {"coll": None, "at": 0.0, "data": None}

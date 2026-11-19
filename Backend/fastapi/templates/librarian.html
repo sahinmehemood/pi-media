@@ -113,6 +113,14 @@
   <div data-frag="automations"><p class="muted" style="margin-top:1.2rem">Loading automations…</p></div>
   {% endif %}
 
+  {% if lib_modules.agent %}
+  <div data-frag="agent"><p class="muted" style="margin-top:1.2rem">Loading agent panel…</p></div>
+  {% endif %}
+
+  {% if lib_modules.preidentified %}
+  <div data-frag="preidentified"><p class="muted" style="margin-top:1.2rem">Loading pre-identified queue…</p></div>
+  {% endif %}
+
   {% endif %}
 </div>
 
@@ -146,6 +154,47 @@
     const res = await libPost({action: 'job_config', job, enabled, schedule});
     if (!res.ok) alert(res.message || 'Could not save the job.');
     setTimeout(() => reloadFrag('automations'), 400);
+  }
+  async function libBotState(state, btn) {
+    if (state === 'killed' && !confirm('Kill the Media Manager? It will refuse all work — packets, proposals and applies — until you start it again here.')) return;
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'bot_state', state});
+    if (!res.ok) alert(res.message || 'Could not change the bot state.');
+    reloadFrag('agent');
+  }
+  async function libPolicySave(channel, btn) {
+    const row = document.querySelector('[data-policy="' + channel + '"]');
+    if (!row) return;
+    const scopes = {};
+    row.querySelectorAll('[data-pol-scope]').forEach(sel => {
+      scopes[sel.getAttribute('data-pol-scope')] = sel.value;
+    });
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'policies', channel,
+      auto: row.querySelector('[data-pol-auto]').value, scopes});
+    if (!res.ok) alert(res.message || 'Could not save the policy.');
+    if (btn) btn.disabled = false;
+    reloadFrag('agent');
+  }
+  async function libApprove(pid, btn) {
+    if (!confirm('Approve and apply this plan now? The bot will edit the captions and re-index the files.')) return;
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'approve', proposal_id: pid});
+    alert(res.ok ? ('Fixed ' + (res.applied ?? 0) + ' file(s).') : (res.message || 'Apply failed.'));
+    reloadFrag('agent'); reloadFrag('proposals');
+  }
+  async function libReject(pid, btn) {
+    if (!confirm('Reject this plan? Its files go back to the pool for a fresh look.')) return;
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'reject', proposal_id: pid});
+    if (!res.ok) alert(res.message || 'Reject failed.');
+    reloadFrag('agent'); reloadFrag('proposals');
+  }
+  async function libCandidateClear(key, btn) {
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'candidate_clear', key});
+    if (res.ok) { const row = btn.closest('.row-item'); if (row) row.remove(); }
+    else { alert(res.message || 'Clear failed.'); if (btn) btn.disabled = false; }
   }
   async function libJobRun(job, btn) {
     if (btn) btn.disabled = true;

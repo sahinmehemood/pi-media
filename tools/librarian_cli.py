@@ -67,7 +67,7 @@ def main() -> int:
     p.add_argument("--channel", required=True)
     p.add_argument("--limit", type=int, default=30)
     p.add_argument("--scope", default="waiting",
-                   choices=["waiting", "indexed", "unindexed", "all"])
+                   choices=["waiting", "ready", "indexed", "unindexed", "all"])
     p = sub.add_parser("search")
     p.add_argument("--q", required=True)
     p.add_argument("--type", default="any")

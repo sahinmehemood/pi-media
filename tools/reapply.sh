@@ -37,6 +37,9 @@ PLUGIN_FILES=(
   Backend/fastapi/templates/librarian/_activity.html
   Backend/fastapi/templates/librarian/_flagged.html
   Backend/fastapi/templates/librarian/_aliases.html
+  Backend/fastapi/templates/librarian/_automations.html
+  Backend/fastapi/templates/librarian/_agent.html
+  Backend/fastapi/templates/librarian/_preidentified.html
   tests/_loader.py
   tests/run_all.py
   tests/test_stream_buffer_core.py
