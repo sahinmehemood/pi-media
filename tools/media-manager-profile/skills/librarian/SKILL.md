@@ -8,6 +8,9 @@ metadata:
     tags: [librarian, telegram, media, workflow, router]
     category: media
     requires_toolsets: [terminal]
+required_environment_variables:
+  - LIBRARIAN_API_URL
+  - LIBRARIAN_API_TOKEN
 ---
 
 # Librarian — router and core workflow
