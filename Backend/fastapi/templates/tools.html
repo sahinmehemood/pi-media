@@ -353,21 +353,17 @@
         </div>
 
         <p class="hint mt-3 mb-4">
-            Promote your bots to admin in the channels they serve, using your session account.
+            Promote your bots — the streaming pool and any registered external bots — to admin in the
+            channels they serve, using your session account.
         </p>
 
-        {% if not userbot_configured or not multi_token_available %}
+        {% if not userbot_configured %}
         <div style="border:1px solid var(--border);background:color-mix(in srgb,var(--bg) 55%,transparent);border-radius:0.9rem;padding:1rem 1.1rem">
             <p class="hint" style="margin:0">
                 <i class="fa-solid fa-circle-info"></i>
-                {% if not userbot_configured %}
                 This tool needs a connected <strong>Telegram user session</strong>. Only a user account can
                 promote bots to admin. Connect one from
                 <a href="/admin/settings" style="color:var(--primary)">Settings → Telegram User Session</a>.
-                {% else %}
-                This tool needs <strong>more than one bot token</strong>. Add extra tokens under
-                <a href="/admin/settings" style="color:var(--primary)">Settings → Multi-Token Clients</a> to enable it.
-                {% endif %}
             </p>
         </div>
         {% else %}
@@ -383,6 +379,14 @@
                 <span><i class="fa-solid fa-lock ba-muted"></i> Can't manage</span>
             </span>
         </div>
+
+        <div class="flex items-center gap-2 flex-wrap mb-2">
+            <input type="text" id="ba-ext-username" class="s-input" placeholder="External bot username — e.g. @mediamanagerthehdbot" style="flex:1;min-width:260px;width:auto">
+            <button class="btn btn-ghost" type="button" onclick="addExternalBot()">
+                <i class="fa-solid fa-plus"></i> Add external bot
+            </button>
+        </div>
+        <p class="hint mb-3">External bots (like the Hermes Media Manager) are promoted as channel admins by your session account. No token is stored for them, and they never join the streaming pool.</p>
 
         <div id="ba-loading" class="hint" style="display:none"><i class="fa-solid fa-spinner fa-spin"></i> Scanning channels &amp; bots…</div>
         <div id="ba-error" class="hint" style="color:var(--danger);display:none"></div>
@@ -404,7 +408,7 @@
                 <input type="checkbox" id="ba-demote-orphans">
                 <span class="min-w-0">
                     <span class="c-name block">Also remove orphan bot-admins</span>
-                    <span class="c-id">Revoke admin from bots that are admin in a channel but are no longer in your token list (they stay as members, not banned).</span>
+                    <span class="c-id">Revoke admin from bots that are admin in a channel but are not in your bot list — pool tokens or registered external bots (they stay as members, not banned).</span>
                 </span>
             </label>
 
@@ -1332,6 +1336,50 @@ async function umAct(action) {
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', umLoad); else umLoad();
 
+async function addExternalBot() {
+    const input = document.getElementById('ba-ext-username');
+    const username = (input.value || '').trim();
+    if (!username) { showToast('Enter a bot username first.', 'error', 'Bot Admin'); return; }
+    try {
+        const res = await fetch('/api/admin/tools/bot-admin/external/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            showToast(data.detail || 'Could not add that bot.', 'error', 'Bot Admin');
+            return;
+        }
+        showToast(data.data && data.data.added ? 'External bot registered.' : 'That bot is already registered.', 'success', 'Bot Admin');
+        input.value = '';
+        loadBotAdmin();
+    } catch (e) {
+        showToast('Could not reach the server.', 'error', 'Bot Admin');
+    }
+}
+
+async function removeExternalBot(ev, userId) {
+    ev.preventDefault(); ev.stopPropagation();
+    if (!confirm('Remove this external bot from the manager? Its existing channel admin rights are not changed.')) return;
+    try {
+        const res = await fetch('/api/admin/tools/bot-admin/external/remove', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            showToast(data.detail || 'Could not remove that bot.', 'error', 'Bot Admin');
+            return;
+        }
+        showToast('External bot removed.', 'success', 'Bot Admin');
+        loadBotAdmin();
+    } catch (e) {
+        showToast('Could not reach the server.', 'error', 'Bot Admin');
+    }
+}
+
 async function loadBotAdmin() {
     const body = document.getElementById('ba-body');
     if (!body) return;
@@ -1368,7 +1416,7 @@ function renderBotAdmin() {
         <label class="chip ba-bot-chip" style="width:auto">
             <input type="checkbox" class="ba-bot-cb" value="${escapeHtmlAttr(String(b.user_id))}" checked>
             <span class="min-w-0">
-                <span class="c-name block">${escapeHtml(b.name)}${b.is_main ? ' <span class="c-id">(main)</span>' : ''}</span>
+                <span class="c-name block">${escapeHtml(b.name)}${b.is_main ? ' <span class="c-id">(main)</span>' : ''}${b.external ? ' <span class="c-id">(external)</span>' : ''}${b.external ? `<span title="Remove external bot" style="cursor:pointer;color:var(--danger);margin-left:0.3rem" onclick="removeExternalBot(event, '${escapeHtmlAttr(String(b.user_id))}')"><i class="fa-solid fa-xmark"></i></span>` : ''}</span>
                 <span class="c-id">${b.username ? '@' + escapeHtml(b.username) : escapeHtml(String(b.user_id))}</span>
             </span>
         </label>
@@ -1440,7 +1488,7 @@ async function applyBotAdmin() {
     if (!botIds.length) { showToast('Select at least one bot to add.', 'error', 'Bot Admin'); return; }
 
     let msg = `Add ${botIds.length} bot(s) as admin to ${channels.length} channel(s)?`;
-    if (demote) msg += '\n\nOrphan bot-admins (not in your token list) will also be demoted.';
+    if (demote) msg += '\n\nOrphan bot-admins (not in your bot list) will also be demoted.';
     if (!confirm(msg)) return;
 
     const btn = document.getElementById('ba-apply-btn');

@@ -73,6 +73,8 @@ from Backend.fastapi.routes.api_routes import (
     dl_index_action_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
+    bot_admin_external_add_api,
+    bot_admin_external_remove_api,
     update_manager_check_api,
     update_manager_deploy_api,
     update_manager_rollback_api,
@@ -827,6 +829,14 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
 @app.get("/api/admin/tools/bot-admin/apply/status")
 async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
     return await bot_admin_apply_status_api()
+
+@app.post("/api/admin/tools/bot-admin/external/add")
+async def tools_bot_admin_external_add(payload: dict, _: bool = Depends(require_auth)):
+    return await bot_admin_external_add_api(payload)
+
+@app.post("/api/admin/tools/bot-admin/external/remove")
+async def tools_bot_admin_external_remove(payload: dict, _: bool = Depends(require_auth)):
+    return await bot_admin_external_remove_api(payload)
 
 @app.get("/api/admin/tools/update-manager/status")
 async def tools_update_manager_status(_: bool = Depends(require_auth)):

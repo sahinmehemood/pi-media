@@ -32,6 +32,11 @@ from Backend.helper.encrypt import decode_string, encode_string
 from Backend.helper.health import run_health_checks
 from Backend.helper.manual_add import resolve_telegram_message, retag_media, stamp_caption_by_ref
 from Backend.helper import own_bots
+from Backend.helper.bot_admin_external import (
+    external_entries as _external_entries,
+    remove_bot as _external_remove,
+    upsert_bot as _external_upsert,
+)
 from Backend.helper.pyro import resolve_video_thumb_url
 from Backend.helper.requests_manager import (
     delete_request,
@@ -2684,6 +2689,21 @@ async def _managed_bots() -> list[dict]:
     return bots
 
 
+async def _all_known_bots() -> list[dict]:
+    """Pool bots + registered external bots, for Bot Admin scan/apply.
+
+    External bots are identity-only registrations (no token in this app),
+    so they can be promoted as channel admins but can never join the
+    streaming pool. An external entry whose user id collides with a pool
+    bot is dropped — the pool entry wins.
+    """
+    managed = await _managed_bots()
+    managed_ids = {b["user_id"] for b in managed}
+    extra = _external_entries(
+        SettingsManager.current().bot_admin_extra_bots, managed_ids)
+    return managed + extra
+
+
 def _bot_served_channels() -> list[dict]:
     s = SettingsManager.current()
     order: list[str] = []
@@ -2803,12 +2823,13 @@ async def bot_admin_scan_api() -> dict:
         return {"status": "error", "reason": "no_session",
                 "message": "Connect your Telegram session from the Settings page to manage channel admins."}
 
-    bots = await _managed_bots()
+    bots = await _all_known_bots()
     if len(bots) <= 1:
         return {"status": "error", "reason": "single_token", "bots": bots,
-                "message": "Add at least one extra bot token (multi-token) to use this tool."}
+                "message": "Add an extra bot token (multi-token) or register an external bot to use this tool."}
 
     channels = _bot_served_channels()
+    # Known = pool + external. External bots are never reported as orphans.
     managed_ids = {b["user_id"] for b in bots}
     out: list[dict] = []
 
@@ -2957,9 +2978,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
     if not isinstance(channel_ids, list) or not channel_ids:
         raise HTTPException(status_code=400, detail="Select at least one channel.")
 
-    bots = await _managed_bots()
+    bots = await _all_known_bots()
     if len(bots) <= 1:
-        raise HTTPException(status_code=400, detail="Need a session string and more than one bot token.")
+        raise HTTPException(status_code=400, detail="Need a session string and at least two bots (pool or external).")
 
     bot_by_id = {str(b["user_id"]): b for b in bots}
     sel_ids = payload.get("bot_ids")
@@ -3000,6 +3021,58 @@ async def bot_admin_apply_status_api() -> dict:
             "error": st["error"],
         },
     }
+
+
+async def bot_admin_external_add_api(payload: dict | None = None) -> dict:
+    """Register an external bot (by username) in the Bot Admin Manager.
+
+    Only the bot's public identity is stored — never a token — so an
+    external bot can be promoted as a channel admin by the userbot but
+    can never become a streaming client.
+    """
+    if botmod.Userbot is None:
+        raise HTTPException(status_code=503, detail="No Telegram session connected. Connect one from Settings.")
+
+    username = str((payload or {}).get("username") or "").strip().lstrip("@").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Enter the bot's username.")
+
+    try:
+        user = await botmod.Userbot.get_users(username)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Could not find @{username} on Telegram.")
+    if isinstance(user, list):
+        user = user[0] if user else None
+    if user is None or not getattr(user, "is_bot", False):
+        raise HTTPException(status_code=400, detail=f"@{username} is not a bot account.")
+
+    managed = await _managed_bots()
+    managed_ids = {b["user_id"] for b in managed}
+    if user.id in managed_ids:
+        raise HTTPException(status_code=400, detail="That bot is already one of your streaming bots.")
+
+    current = SettingsManager.current().bot_admin_extra_bots
+    new_list, added = _external_upsert(current, {
+        "user_id": user.id,
+        "username": getattr(user, "username", None) or username,
+        "name": getattr(user, "first_name", None) or "",
+    })
+    if added:
+        await SettingsManager.update(db, {"bot_admin_extra_bots": new_list})
+
+    entries = _external_entries(new_list, managed_ids)
+    match = next((e for e in entries if e["user_id"] == user.id), None)
+    return {"status": "success", "data": {"bot": match, "added": added}}
+
+
+async def bot_admin_external_remove_api(payload: dict | None = None) -> dict:
+    """Unregister an external bot. Existing channel admin rights the bot
+    already holds are NOT changed — this only removes it from the manager."""
+    current = SettingsManager.current().bot_admin_extra_bots
+    new_list, removed = _external_remove(current, (payload or {}).get("user_id"))
+    if removed:
+        await SettingsManager.update(db, {"bot_admin_extra_bots": new_list})
+    return {"status": "success", "data": {"removed": removed}}
 
 
 # ── Update Manager (Wave 2 Phase D) ────────────────────────────────

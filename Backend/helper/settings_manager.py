@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 import Backend.pyrofork.bot as botmod
 from Backend.config import Telegram
+from Backend.helper.bot_admin_external import sanitize_bots as _sanitize_extra_bots
 from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
 from Backend.helper.prewarm import PROFILES as _PREWARM_PROFILES
 from Backend.helper.prewarm import RANGES as _PREWARM_RANGES
@@ -54,6 +55,8 @@ _DEFAULTS: Dict[str, Any] = {
     #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
     "dl_channel_id": "",
     "dl_expire_days": 0,
+    #----- Bot Admin Manager external bots (identity only, never clients)
+    "bot_admin_extra_bots": [],
     "delete_on_metadata_fail": False,
     "better_poster_enabled": False,
     "better_poster": "",
@@ -181,6 +184,16 @@ class Settings:
     @property
     def announce_new_content(self) -> bool:
         return bool(self._d.get("announce_new_content", False))
+
+    @property
+    def bot_admin_extra_bots(self) -> List[Dict[str, Any]]:
+        """External bots registered in the Bot Admin Manager.
+
+        Identity only (user id / username / name) — these bots hold no
+        token in this app and are never streaming clients; the userbot
+        promotes them as channel admins by user id.
+        """
+        return _sanitize_extra_bots(self._d.get("bot_admin_extra_bots"))
 
     @property
     def delete_on_metadata_fail(self) -> bool:

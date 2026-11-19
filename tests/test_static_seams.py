@@ -229,6 +229,31 @@ def test_template_context_seam():
     assert '"buffer_health": buffer_health' in text
 
 
+def test_bot_admin_external_seams():
+    routes = read("Backend/fastapi/routes/api_routes.py")
+    assert "bot_admin_external_add_api" in routes
+    assert "bot_admin_external_remove_api" in routes
+    assert "_all_known_bots" in routes
+    # Scan and apply must resolve bots through the known set (pool +
+    # external), never the pool alone, so externals are never orphans.
+    assert routes.count("bots = await _all_known_bots()") == 2
+    main = read("Backend/fastapi/main.py")
+    assert "/api/admin/tools/bot-admin/external/add" in main
+    assert "/api/admin/tools/bot-admin/external/remove" in main
+    page = read("Backend/fastapi/templates/tools.html")
+    assert 'id="ba-ext-username"' in page
+    assert "addExternalBot" in page and "removeExternalBot" in page
+    sm = read("Backend/helper/settings_manager.py")
+    assert '"bot_admin_extra_bots"' in sm
+    assert "def bot_admin_extra_bots" in sm
+    helper = read("Backend/helper/bot_admin_external.py")
+    # The registry must stay credential-free and pool-agnostic.
+    assert "multi_clients" not in helper
+    assert "BOT_TOKEN" not in helper
+    tpl = read("Backend/fastapi/routes/template_routes.py")
+    assert '"extra_bots_available"' in tpl or "extra_bots_available" in tpl
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
