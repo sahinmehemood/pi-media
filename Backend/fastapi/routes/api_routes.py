@@ -3236,6 +3236,7 @@ async def librarian_bot_status_api(request: Request) -> dict:
         "enabled": settings.librarian_enabled,
         "dry_run": settings.librarian_dry_run,
         "auto_apply": settings.librarian_auto_apply,
+        "digest": settings.librarian_digest,
         "counts": await librarian.panel_counts(),
         "action_state": librarian.ACTION_STATE,
     }

@@ -137,7 +137,7 @@ index 9ae7925..384ced5 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..7aaf50c 100644
+index e6d9542..2a07053 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -521,7 +521,7 @@ index e6d9542..7aaf50c 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3124,184 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3124,185 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -637,6 +637,7 @@ index e6d9542..7aaf50c 100644
 +        "enabled": settings.librarian_enabled,
 +        "dry_run": settings.librarian_dry_run,
 +        "auto_apply": settings.librarian_auto_apply,
++        "digest": settings.librarian_digest,
 +        "counts": await librarian.panel_counts(),
 +        "action_state": librarian.ACTION_STATE,
 +    }
