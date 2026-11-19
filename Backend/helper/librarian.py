@@ -282,6 +282,7 @@ async def record_reject(fields: dict) -> bool:
         update["$addToSet"] = {"skip_msg_ids": fields["skip_msg_id"]}
     try:
         await coll.update_one({"_id": fields["key"]}, update, upsert=True)
+        invalidate_counts()
         return True
     except Exception as e:
         LOGGER.warning(f"[Librarian] ledger write failed: {e}")
@@ -607,6 +608,7 @@ async def _record_scan_entry(coll, uid: str, post: dict,
     await coll.update_one({"_id": uid},
                           {"$set": set_fields, "$setOnInsert": on_insert},
                           upsert=True)
+    invalidate_counts()
 
 
 async def run_channel_scan(channel_id) -> dict:
@@ -1058,6 +1060,7 @@ async def submit_proposal(payload: dict) -> dict:
     status = "pending" if gate.get("ok") else "gate_failed"
     await coll.update_one({"_id": pid},
                           {"$set": {"gate": gate, "status": status}})
+    invalidate_counts()
     if status == "gate_failed" and ledger is not None:
         # A rejected plan must not strand its items: release them back
         # to the pool so a corrected plan can pick them up.
@@ -1401,6 +1404,7 @@ async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
     status = "applied" if done == len(results) else ("partial" if done else "failed")
     await coll.update_one({"_id": proposal_id}, {"$set": {
         "status": status, "applied_at": time.time(), "results": results}})
+    invalidate_counts()
     return {"ok": True, "status": status, "applied": done,
             "total": len(results), "results": results}
 
@@ -1441,6 +1445,7 @@ async def rollback_proposal(proposal_id: str) -> dict:
         await asyncio.sleep(1)
     await coll.update_one({"_id": proposal_id},
                           {"$set": {"status": "rolled_back"}})
+    invalidate_counts()
     return {"ok": True, "rolled_back": undone}
 
 
@@ -1553,6 +1558,7 @@ async def dismiss_item(key: str) -> dict:
     await coll.update_one({"_id": key}, {"$set": {
         "status": "dismissed", "dismissed_at": time.time(),
         "proposal_id": None}})
+    invalidate_counts()
     return {"ok": True,
             "message": "Dismissed — the bot will not offer this file again."}
 
@@ -1597,7 +1603,35 @@ async def list_flagged(per_reason: int = 8) -> list[dict]:
     return sorted(groups.values(), key=lambda g: -g["count"])
 
 
+_COUNTS_CACHE: dict = {"coll": None, "at": 0.0, "data": None}
+_COUNTS_TTL = 15.0
+
+
+def invalidate_counts() -> None:
+    """Mark the cached panel counts stale (called by every write path)."""
+    _COUNTS_CACHE["at"] = 0.0
+    _COUNTS_CACHE["data"] = None
+
+
 async def panel_counts() -> dict:
+    """The control panel's numbers, cached for a few seconds: the page
+    and the bot's status both read these, and recomputing them scans
+    the whole ledger. Write paths invalidate the cache; the cache is
+    also keyed to the ledger collection so tests that swap collections
+    never see stale numbers."""
+    coll = _ledger_coll()
+    now = time.time()
+    if (coll is not None and _COUNTS_CACHE["coll"] is coll
+            and _COUNTS_CACHE["data"] is not None
+            and now - _COUNTS_CACHE["at"] < _COUNTS_TTL):
+        return _COUNTS_CACHE["data"]
+    out = await _panel_counts_fresh()
+    if coll is not None:
+        _COUNTS_CACHE.update({"coll": coll, "at": now, "data": out})
+    return out
+
+
+async def _panel_counts_fresh() -> dict:
     """The control panel's numbers: waiting per channel, fixed, proposals,
     edits used today."""
     base = await ledger_counts()

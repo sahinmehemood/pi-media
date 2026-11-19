@@ -363,21 +363,12 @@ async def librarian_page(request: Request, _: bool = Depends(require_auth)):
     fixed_by = counts.get("fixed_by_channel") or {}
     located_by = counts.get("located_by_channel") or {}
     rows = []
-    client = None
-    try:
-        from Backend.fastapi.routes.api_routes import _scan_client
-        client = _scan_client()
-    except Exception:
-        client = None
+    # Channel names come from the settings cache (maintained on every
+    # Settings save) — a page render must never call Telegram.
+    titles = settings.channel_titles or {}
     for ch in settings.auth_channels:
         stripped = str(ch).replace("-100", "")
-        name = str(ch)
-        if client is not None:
-            try:
-                chat = await client.get_chat(int(ch))
-                name = getattr(chat, "title", None) or name
-            except Exception:
-                pass
+        name = titles.get(str(ch)) or str(ch)
         w = waiting.get(stripped, 0)
         scan = (counts.get("scan_by_channel") or {}).get(stripped, {})
         rows.append({"id": str(ch), "name": name, "waiting": w,

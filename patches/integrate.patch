@@ -790,7 +790,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..6415ea1 100644
+index c53ee43..6976a24 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -854,7 +854,7 @@ index c53ee43..6415ea1 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -262,11 +316,75 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +316,66 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -905,21 +905,12 @@ index c53ee43..6415ea1 100644
 +    fixed_by = counts.get("fixed_by_channel") or {}
 +    located_by = counts.get("located_by_channel") or {}
 +    rows = []
-+    client = None
-+    try:
-+        from Backend.fastapi.routes.api_routes import _scan_client
-+        client = _scan_client()
-+    except Exception:
-+        client = None
++    # Channel names come from the settings cache (maintained on every
++    # Settings save) — a page render must never call Telegram.
++    titles = settings.channel_titles or {}
 +    for ch in settings.auth_channels:
 +        stripped = str(ch).replace("-100", "")
-+        name = str(ch)
-+        if client is not None:
-+            try:
-+                chat = await client.get_chat(int(ch))
-+                name = getattr(chat, "title", None) or name
-+            except Exception:
-+                pass
++        name = titles.get(str(ch)) or str(ch)
 +        w = waiting.get(stripped, 0)
 +        scan = (counts.get("scan_by_channel") or {}).get(stripped, {})
 +        rows.append({"id": str(ch), "name": name, "waiting": w,

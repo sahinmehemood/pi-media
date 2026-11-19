@@ -239,6 +239,26 @@ class _FakeColl:
     async def count_documents(self, query):
         return sum(1 for d in self.docs.values() if _matches(d, query))
 
+    def aggregate(self, pipeline):
+        docs = [dict(d) for d in self.docs.values()]
+        for stage in pipeline or []:
+            if "$match" in stage:
+                docs = [d for d in docs if _matches(d, stage["$match"])]
+            elif "$group" in stage:
+                spec = stage["$group"]
+                field = str(spec.get("_id") or "").lstrip("$")
+                groups = {}
+                for d in docs:
+                    key = d.get(field)
+                    row = groups.setdefault(key, {"_id": key, "n": 0})
+                    row["n"] += 1
+                docs = list(groups.values())
+            elif "$sort" in stage:
+                for field, direction in reversed(list(stage["$sort"].items())):
+                    docs.sort(key=lambda d: d.get(field) or 0,
+                              reverse=(direction < 0))
+        return _FakeCursor(docs)
+
     async def update_one(self, filt, update, upsert=False):
         seen = {}
         for op, body in update.items():
@@ -364,6 +384,30 @@ def test_packet_scope_selects_scanned_files():
         assert pkt["scope"] == "waiting"
     finally:
         _unwire(lib, saved)
+
+
+def test_panel_counts_cached_until_invalidated():
+    lib = load_lib()
+    ledger, locator = _FakeColl(), _FakeColl()
+    proposals, audit = _FakeColl(), _FakeColl()
+    ledger.docs["a"] = {"_id": "a", "status": "open", "chat_id": -1001,
+                         "reason_code": "no-match"}
+    saved = _wire(lib, ledger=ledger, locator=locator,
+                  proposals=proposals, audit=audit)
+    try:
+        lib.invalidate_counts()
+        first = run(lib.panel_counts())
+        assert first["waiting"] == 1
+        ledger.docs["b"] = {"_id": "b", "status": "open", "chat_id": -1001,
+                             "reason_code": "no-match"}
+        second = run(lib.panel_counts())
+        assert second["waiting"] == 1  # served from cache
+        lib.invalidate_counts()
+        third = run(lib.panel_counts())
+        assert third["waiting"] == 2
+    finally:
+        _unwire(lib, saved)
+        lib.invalidate_counts()
 
 
 def test_request_stop_flags_running_action():

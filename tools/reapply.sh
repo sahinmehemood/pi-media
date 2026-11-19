@@ -87,6 +87,7 @@ PLUGIN_FILES=(
   docs/dl-link.md
   docs/stream-buffer/README.md
   docs/wave-2/DESIGN.md
+  docs/website-rebuild/DESIGN.md
   tools/reapply.sh
   patches/integrate.patch
   .github/workflows/upstream-check.yml
