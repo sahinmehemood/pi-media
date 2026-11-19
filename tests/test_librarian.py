@@ -187,6 +187,13 @@ class _FakeColl:
         self.docs = {}
 
     async def update_one(self, filt, update, upsert=False):
+        # Mirror MongoDB: one path may not be targeted by two operators.
+        seen = {}
+        for op, body in update.items():
+            for path in (body or {}):
+                if path in seen:
+                    raise ValueError(f"Updating the path '{path}' would create a conflict")
+                seen[path] = op
         key = filt["_id"]
         doc = self.docs.setdefault(key, {"_id": key, "history": [], "skip_msg_ids": []})
         for k, v in (update.get("$setOnInsert") or {}).items():

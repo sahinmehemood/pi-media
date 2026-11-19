@@ -245,6 +245,7 @@ async def record_reject(fields: dict) -> bool:
     ledger never re-inflates the way the skip pile did."""
     coll = _ledger_coll()
     if coll is None or not fields.get("key"):
+        LOGGER.warning("[Librarian] ledger unavailable or key missing; record skipped")
         return False
     now = time.time()
     mutable = {
@@ -270,7 +271,6 @@ async def record_reject(fields: dict) -> bool:
         "status": fields.get("status") or "open",
         "parse": _jsonable(fields.get("parse")),
         "bits": fields.get("bits"),
-        "skip_msg_ids": [],
         "first_seen": now,
     }
     update = {"$set": mutable, "$setOnInsert": on_insert,
@@ -796,10 +796,12 @@ async def run_suspect_audit() -> dict:
                 LOGGER.warning(f"[Librarian] audit scan failed ({name}.{coll_name}): {e}")
 
     recorded = 0
+    found = {"multi_index": 0, "slot_collision": 0}
     for (chat, msg), titles in locations.items():
         distinct = {(t[0], t[1]) for t in titles}
         if len(distinct) < 2:
             continue
+        found["multi_index"] += 1
         names = ", ".join(sorted(t[1] for t in distinct))
         ok = await record_reject({
             "key": f"tg:{chat}:{msg}", "file_unique_id": None,
@@ -825,6 +827,7 @@ async def run_suspect_audit() -> dict:
         sizes = [_bytes(s) for _, _, s in entries]
         sizes = [s for s in sizes if s > 0]
         if len(sizes) >= 2 and max(sizes) > 2.5 * min(sizes):
+            found["slot_collision"] += 1
             chat, msg, _ = entries[0]
             ok = await record_reject({
                 "key": f"tg:{chat}:{msg}", "file_unique_id": None,
@@ -838,7 +841,7 @@ async def run_suspect_audit() -> dict:
                 "bits": name_bits("", ""),
             })
             recorded += 1 if ok else 0
-    return {"ok": True, "suspects_recorded": recorded,
+    return {"ok": True, "suspects_recorded": recorded, "found": found,
             "messages_indexed": len(locations)}
 
 
