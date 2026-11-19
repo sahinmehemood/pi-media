@@ -26,7 +26,7 @@ PLUGIN_FILES=(
   Backend/helper/stream_source.py
   Backend/helper/prewarm.py
   Backend/helper/update_manager.py
-  Backend/helper/bot_admin_external.py
+  Backend/helper/hermes_bot.py
   Backend/pyrofork/plugins/dl_link.py
   Backend/pyrofork/plugins/prewarm_hooks.py
   Backend/fastapi/templates/dl_index.html
@@ -39,7 +39,7 @@ PLUGIN_FILES=(
   tests/test_wave2_engine.py
   tests/test_wave2_prewarm.py
   tests/test_wave2_update_manager.py
-  tests/test_bot_admin_external.py
+  tests/test_hermes_bot.py
   docs/stream-buffer/DESIGN.md
   docs/dl-link.md
   docs/stream-buffer/README.md

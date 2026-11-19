@@ -296,11 +296,9 @@ async def custom_catalogs_page(request: Request, _: bool = Depends(require_auth)
 async def tools_page(request: Request, _: bool = Depends(require_auth)):
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
-    #----- Bot Admin Manager needs a session string AND more than one bot
-    #----- (pool tokens and/or registered external bots)
+    #----- Bot Admin Manager needs a session string AND more than one bot token
     ctx["userbot_configured"] = botmod.Userbot is not None
     ctx["multi_token_available"] = len(multi_clients) > 1
-    ctx["extra_bots_available"] = len(SettingsManager.current().bot_admin_extra_bots) > 0
     return templates.TemplateResponse("tools.html", ctx)
 
 

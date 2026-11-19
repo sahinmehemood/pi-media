@@ -1429,6 +1429,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
         </div>
     </div>
 
+    <!-- ── Hermes Bot ──────────────────────────────────────────────────── -->
+    <div class="settings-card">
+        <h2><i class="fa-brands fa-telegram"></i> Hermes Bot</h2>
+        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
+            Your Hermes Media Manager bot. It is <strong>never</strong> used for streaming — the token
+            only identifies the bot so the Bot Admin Manager (Tools page) can promote it as admin in
+            your channels, where it manages media captions. Saving verifies the token with Telegram.
+            {% if settings.hermes_bot and settings.hermes_bot.username %}
+            <br>Connected as <strong>@{{ settings.hermes_bot.username }}</strong> (ID {{ settings.hermes_bot.user_id }}).
+            {% endif %}
+        </p>
+        <div class="add-row">
+            <input type="text" id="hermes_bot_token" class="s-input" spellcheck="false"
+                value="{{ settings.hermes_bot_token or '' }}"
+                placeholder="Hermes bot token (1234567890:ABCdef…)">
+        </div>
+    </div>
+
     <!-- ── Backup & Restore ───────────────────────────────────────────── -->
     <div class="settings-card">
         <h2><i class="fa-solid fa-box-archive"></i> Backup &amp; Restore</h2>
@@ -1980,6 +1998,7 @@ async function saveSettings() {
         webdav_password:               document.getElementById('webdav_password').value,
         multi_tokens:                  collectList('multi_tokens'),
         helper_tokens:                 collectList('helper_tokens'),
+        hermes_bot_token:              document.getElementById('hermes_bot_token').value.trim(),
         extra_databases:               collectList('extra_databases'),
         global_search:                 document.getElementById('global_search').checked,
         global_search_channels:        collectList('global_search_channels'),
@@ -2172,6 +2191,8 @@ function renderSettings(s) {
     document.getElementById('cf_stream_url').value = s.cf_stream_url || '';
     document.getElementById('cf_stream_secret').value = s.cf_stream_secret || '';
     document.getElementById('cf_stream_mode').value = s.cf_stream_mode || 'off';
+    const hb = document.getElementById('hermes_bot_token');
+    if (hb) hb.value = s.hermes_bot_token || '';
     const wu = document.getElementById('webdav_user');
     if (wu) wu.value = s.webdav_user || '';
     const wp = document.getElementById('webdav_password');

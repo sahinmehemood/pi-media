@@ -229,29 +229,33 @@ def test_template_context_seam():
     assert '"buffer_health": buffer_health' in text
 
 
-def test_bot_admin_external_seams():
+def test_hermes_bot_seams():
     routes = read("Backend/fastapi/routes/api_routes.py")
-    assert "bot_admin_external_add_api" in routes
-    assert "bot_admin_external_remove_api" in routes
     assert "_all_known_bots" in routes
     # Scan and apply must resolve bots through the known set (pool +
-    # external), never the pool alone, so externals are never orphans.
+    # Hermes Bot), never the pool alone, so the Hermes Bot is never
+    # reported as an orphan.
     assert routes.count("bots = await _all_known_bots()") == 2
+    # The Hermes Bot token is verified via getMe on settings save.
+    assert "_resolve_bot_identity" in routes
+    assert '"hermes_bot_token" in payload' in routes
     main = read("Backend/fastapi/main.py")
-    assert "/api/admin/tools/bot-admin/external/add" in main
-    assert "/api/admin/tools/bot-admin/external/remove" in main
-    page = read("Backend/fastapi/templates/tools.html")
-    assert 'id="ba-ext-username"' in page
-    assert "addExternalBot" in page and "removeExternalBot" in page
+    assert "bot-admin/external" not in main
+    tools = read("Backend/fastapi/templates/tools.html")
+    assert "ba-ext-username" not in tools
+    assert "addExternalBot" not in tools
+    assert "(Hermes bot)" in tools
+    settings_page = read("Backend/fastapi/templates/settings.html")
+    assert 'id="hermes_bot_token"' in settings_page
+    assert "Hermes Bot" in settings_page
     sm = read("Backend/helper/settings_manager.py")
-    assert '"bot_admin_extra_bots"' in sm
-    assert "def bot_admin_extra_bots" in sm
-    helper = read("Backend/helper/bot_admin_external.py")
-    # The registry must stay credential-free and pool-agnostic.
+    assert '"hermes_bot_token"' in sm
+    assert '"hermes_bot"' in sm
+    assert "def hermes_bot" in sm
+    assert "bot_admin_extra_bots" not in sm
+    helper = read("Backend/helper/hermes_bot.py")
+    # The identity helper must stay pool-agnostic.
     assert "multi_clients" not in helper
-    assert "BOT_TOKEN" not in helper
-    tpl = read("Backend/fastapi/routes/template_routes.py")
-    assert '"extra_bots_available"' in tpl or "extra_bots_available" in tpl
 
 
 if __name__ == "__main__":

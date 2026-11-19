@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 import Backend.pyrofork.bot as botmod
 from Backend.config import Telegram
-from Backend.helper.bot_admin_external import sanitize_bots as _sanitize_extra_bots
+from Backend.helper.hermes_bot import sanitize_identity as _sanitize_hermes_identity
 from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
 from Backend.helper.prewarm import PROFILES as _PREWARM_PROFILES
 from Backend.helper.prewarm import RANGES as _PREWARM_RANGES
@@ -55,8 +55,11 @@ _DEFAULTS: Dict[str, Any] = {
     #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
     "dl_channel_id": "",
     "dl_expire_days": 0,
-    #----- Bot Admin Manager external bots (identity only, never clients)
-    "bot_admin_extra_bots": [],
+    #----- Hermes Bot (Media Manager): token + resolved identity.
+    #----- The token is verified via getMe on save and NEVER used to
+    #----- build a streaming client — the bot is librarian-only.
+    "hermes_bot_token": "",
+    "hermes_bot": {},
     "delete_on_metadata_fail": False,
     "better_poster_enabled": False,
     "better_poster": "",
@@ -186,14 +189,15 @@ class Settings:
         return bool(self._d.get("announce_new_content", False))
 
     @property
-    def bot_admin_extra_bots(self) -> List[Dict[str, Any]]:
-        """External bots registered in the Bot Admin Manager.
+    def hermes_bot_token(self) -> str:
+        return str(self._d.get("hermes_bot_token") or "").strip()
 
-        Identity only (user id / username / name) — these bots hold no
-        token in this app and are never streaming clients; the userbot
-        promotes them as channel admins by user id.
-        """
-        return _sanitize_extra_bots(self._d.get("bot_admin_extra_bots"))
+    @property
+    def hermes_bot(self) -> Dict[str, Any] | None:
+        """Resolved Hermes Bot identity {user_id, username, name}, or
+        None when no Hermes Bot is registered. The Bot Admin Manager
+        promotes this bot by user id; it is never a streaming client."""
+        return _sanitize_hermes_identity(self._d.get("hermes_bot"))
 
     @property
     def delete_on_metadata_fail(self) -> bool:

@@ -32,11 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
 from Backend.helper.health import run_health_checks
 from Backend.helper.manual_add import resolve_telegram_message, retag_media, stamp_caption_by_ref
 from Backend.helper import own_bots
-from Backend.helper.bot_admin_external import (
-    external_entries as _external_entries,
-    remove_bot as _external_remove,
-    upsert_bot as _external_upsert,
-)
+from Backend.helper.hermes_bot import manager_entry as _hermes_manager_entry
 from Backend.helper.pyro import resolve_video_thumb_url
 from Backend.helper.requests_manager import (
     delete_request,
@@ -1814,6 +1810,36 @@ async def get_settings_api() -> dict:
     return {"settings": data}
 
 
+async def _resolve_bot_identity(token: str) -> dict | None:
+    """Resolve a bot token to {user_id, username, name} via Bot API getMe.
+
+    Used for the Hermes Bot setting: the token is verified on save and
+    only the identity is used afterwards (Bot Admin Manager promotion).
+    The token is never used to build a streaming client.
+    """
+    import aiohttp
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://api.telegram.org/bot{token}/getMe",
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                data = await resp.json()
+    except Exception:
+        return None
+    if not data.get("ok"):
+        return None
+    result = data.get("result") or {}
+    if not result.get("is_bot") or not result.get("id"):
+        return None
+    return {
+        "user_id": int(result["id"]),
+        "username": result.get("username") or "",
+        "name": result.get("first_name") or "",
+    }
+
+
 async def update_settings_api(payload: dict) -> dict:
 
     #----- Empty password string means leave it unchanged
@@ -2037,6 +2063,24 @@ async def update_settings_api(payload: dict) -> dict:
                         status_code=400,
                         detail=f"Channel {', '.join(sorted(clash))} can't be in both {a} and {b} channels — each channel may only belong to one field."
                     )
+
+    #----- Hermes Bot: when the token changes, verify it with Telegram
+    #----- (getMe) and cache the resolved identity for the Bot Admin
+    #----- Manager. An unverifiable token rejects the whole save.
+    if "hermes_bot_token" in payload:
+        new_token = str(payload.get("hermes_bot_token") or "").strip()
+        payload["hermes_bot_token"] = new_token
+        if new_token != SettingsManager.current().hermes_bot_token:
+            if not new_token:
+                payload["hermes_bot"] = {}
+            else:
+                identity = await _resolve_bot_identity(new_token)
+                if identity is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Hermes Bot token could not be verified with Telegram (getMe failed). Check the token and try again.",
+                    )
+                payload["hermes_bot"] = identity
 
     #----- Strip whitespace from string fields
     for key in ("tmdb_api", "base_url", "upstream_repo", "upstream_branch",
@@ -2690,18 +2734,18 @@ async def _managed_bots() -> list[dict]:
 
 
 async def _all_known_bots() -> list[dict]:
-    """Pool bots + registered external bots, for Bot Admin scan/apply.
+    """Pool bots + the Hermes Bot, for Bot Admin scan/apply.
 
-    External bots are identity-only registrations (no token in this app),
-    so they can be promoted as channel admins but can never join the
-    streaming pool. An external entry whose user id collides with a pool
-    bot is dropped — the pool entry wins.
+    The Hermes Bot is registered in Settings and promoted by user id
+    only — it is never a streaming client. If its user id ever collided
+    with a pool bot, the pool entry wins.
     """
     managed = await _managed_bots()
     managed_ids = {b["user_id"] for b in managed}
-    extra = _external_entries(
-        SettingsManager.current().bot_admin_extra_bots, managed_ids)
-    return managed + extra
+    hermes = _hermes_manager_entry(SettingsManager.current().hermes_bot)
+    if hermes is not None and hermes["user_id"] not in managed_ids:
+        return managed + [hermes]
+    return managed
 
 
 def _bot_served_channels() -> list[dict]:
@@ -2826,10 +2870,10 @@ async def bot_admin_scan_api() -> dict:
     bots = await _all_known_bots()
     if len(bots) <= 1:
         return {"status": "error", "reason": "single_token", "bots": bots,
-                "message": "Add an extra bot token (multi-token) or register an external bot to use this tool."}
+                "message": "Add an extra bot token (multi-token) or set the Hermes Bot in Settings to use this tool."}
 
     channels = _bot_served_channels()
-    # Known = pool + external. External bots are never reported as orphans.
+    # Known = pool + Hermes Bot. The Hermes Bot is never reported as an orphan.
     managed_ids = {b["user_id"] for b in bots}
     out: list[dict] = []
 
@@ -2980,7 +3024,7 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
 
     bots = await _all_known_bots()
     if len(bots) <= 1:
-        raise HTTPException(status_code=400, detail="Need a session string and at least two bots (pool or external).")
+        raise HTTPException(status_code=400, detail="Need a session string and at least two bots (pool or Hermes Bot).")
 
     bot_by_id = {str(b["user_id"]): b for b in bots}
     sel_ids = payload.get("bot_ids")
@@ -3021,58 +3065,6 @@ async def bot_admin_apply_status_api() -> dict:
             "error": st["error"],
         },
     }
-
-
-async def bot_admin_external_add_api(payload: dict | None = None) -> dict:
-    """Register an external bot (by username) in the Bot Admin Manager.
-
-    Only the bot's public identity is stored — never a token — so an
-    external bot can be promoted as a channel admin by the userbot but
-    can never become a streaming client.
-    """
-    if botmod.Userbot is None:
-        raise HTTPException(status_code=503, detail="No Telegram session connected. Connect one from Settings.")
-
-    username = str((payload or {}).get("username") or "").strip().lstrip("@").strip()
-    if not username:
-        raise HTTPException(status_code=400, detail="Enter the bot's username.")
-
-    try:
-        user = await botmod.Userbot.get_users(username)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"Could not find @{username} on Telegram.")
-    if isinstance(user, list):
-        user = user[0] if user else None
-    if user is None or not getattr(user, "is_bot", False):
-        raise HTTPException(status_code=400, detail=f"@{username} is not a bot account.")
-
-    managed = await _managed_bots()
-    managed_ids = {b["user_id"] for b in managed}
-    if user.id in managed_ids:
-        raise HTTPException(status_code=400, detail="That bot is already one of your streaming bots.")
-
-    current = SettingsManager.current().bot_admin_extra_bots
-    new_list, added = _external_upsert(current, {
-        "user_id": user.id,
-        "username": getattr(user, "username", None) or username,
-        "name": getattr(user, "first_name", None) or "",
-    })
-    if added:
-        await SettingsManager.update(db, {"bot_admin_extra_bots": new_list})
-
-    entries = _external_entries(new_list, managed_ids)
-    match = next((e for e in entries if e["user_id"] == user.id), None)
-    return {"status": "success", "data": {"bot": match, "added": added}}
-
-
-async def bot_admin_external_remove_api(payload: dict | None = None) -> dict:
-    """Unregister an external bot. Existing channel admin rights the bot
-    already holds are NOT changed — this only removes it from the manager."""
-    current = SettingsManager.current().bot_admin_extra_bots
-    new_list, removed = _external_remove(current, (payload or {}).get("user_id"))
-    if removed:
-        await SettingsManager.update(db, {"bot_admin_extra_bots": new_list})
-    return {"status": "success", "data": {"removed": removed}}
 
 
 # ── Update Manager (Wave 2 Phase D) ────────────────────────────────

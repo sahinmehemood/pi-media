@@ -28,18 +28,16 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..3d1434c 100644
+index 9ae7925..6dd1beb 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
-@@ -70,8 +70,16 @@ from Backend.fastapi.routes.api_routes import (
+@@ -70,8 +70,14 @@ from Backend.fastapi.routes.api_routes import (
      get_system_stats_api,
      get_tools_channels_api,
      bot_admin_scan_api,
 +    dl_index_action_api,
      bot_admin_apply_api,
      bot_admin_apply_status_api,
-+    bot_admin_external_add_api,
-+    bot_admin_external_remove_api,
 +    update_manager_check_api,
 +    update_manager_deploy_api,
 +    update_manager_rollback_api,
@@ -48,7 +46,7 @@ index 9ae7925..3d1434c 100644
      clear_manual_session_api,
      search_manual_session_api,
      set_manual_session_api,
-@@ -124,6 +132,7 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+@@ -124,6 +130,7 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
  from Backend.fastapi.routes.template_routes import (
      admin_access_page,
      admin_dashboard_page,
@@ -56,7 +54,7 @@ index 9ae7925..3d1434c 100644
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -293,6 +302,14 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +300,14 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -71,18 +69,10 @@ index 9ae7925..3d1434c 100644
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +830,34 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +828,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
-+@app.post("/api/admin/tools/bot-admin/external/add")
-+async def tools_bot_admin_external_add(payload: dict, _: bool = Depends(require_auth)):
-+    return await bot_admin_external_add_api(payload)
-+
-+@app.post("/api/admin/tools/bot-admin/external/remove")
-+async def tools_bot_admin_external_remove(payload: dict, _: bool = Depends(require_auth)):
-+    return await bot_admin_external_remove_api(payload)
-+
 +@app.get("/api/admin/tools/update-manager/status")
 +async def tools_update_manager_status(_: bool = Depends(require_auth)):
 +    return await update_manager_status_api()
@@ -107,22 +97,18 @@ index 9ae7925..3d1434c 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..24596fb 100644
+index e6d9542..ab0a450 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
-@@ -32,6 +32,11 @@ from Backend.helper.encrypt import decode_string, encode_string
+@@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
  from Backend.helper.health import run_health_checks
  from Backend.helper.manual_add import resolve_telegram_message, retag_media, stamp_caption_by_ref
  from Backend.helper import own_bots
-+from Backend.helper.bot_admin_external import (
-+    external_entries as _external_entries,
-+    remove_bot as _external_remove,
-+    upsert_bot as _external_upsert,
-+)
++from Backend.helper.hermes_bot import manager_entry as _hermes_manager_entry
  from Backend.helper.pyro import resolve_video_thumb_url
  from Backend.helper.requests_manager import (
      delete_request,
-@@ -612,6 +617,16 @@ async def get_dead_links_api() -> dict:
+@@ -612,6 +613,16 @@ async def get_dead_links_api() -> dict:
  async def get_stream_analytics_api() -> dict:
      try:
          data = await db.get_stream_analytics(limit=200)
@@ -139,7 +125,44 @@ index e6d9542..24596fb 100644
          return {"status": "success", "data": data}
      except Exception as e:
          LOGGER.error(f"Stream analytics API error: {e}")
-@@ -1808,7 +1823,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1799,6 +1810,36 @@ async def get_settings_api() -> dict:
+     return {"settings": data}
+ 
+ 
++async def _resolve_bot_identity(token: str) -> dict | None:
++    """Resolve a bot token to {user_id, username, name} via Bot API getMe.
++
++    Used for the Hermes Bot setting: the token is verified on save and
++    only the identity is used afterwards (Bot Admin Manager promotion).
++    The token is never used to build a streaming client.
++    """
++    import aiohttp
++
++    try:
++        async with aiohttp.ClientSession() as session:
++            async with session.get(
++                f"https://api.telegram.org/bot{token}/getMe",
++                timeout=aiohttp.ClientTimeout(total=15),
++            ) as resp:
++                data = await resp.json()
++    except Exception:
++        return None
++    if not data.get("ok"):
++        return None
++    result = data.get("result") or {}
++    if not result.get("is_bot") or not result.get("id"):
++        return None
++    return {
++        "user_id": int(result["id"]),
++        "username": result.get("username") or "",
++        "name": result.get("first_name") or "",
++    }
++
++
+ async def update_settings_api(payload: dict) -> dict:
+ 
+     #----- Empty password string means leave it unchanged
+@@ -1808,7 +1849,7 @@ async def update_settings_api(payload: dict) -> dict:
          del payload["session_secret"]
  
      #----- Type coercion and validation
@@ -148,7 +171,7 @@ index e6d9542..24596fb 100644
      for key in bool_keys:
          if key in payload:
              payload[key] = bool(payload[key])
-@@ -1856,6 +1871,50 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1856,6 +1897,50 @@ async def update_settings_api(payload: dict) -> dict:
          except (ValueError, TypeError):
              payload["fanart_shuffle_interval"] = 5
  
@@ -199,7 +222,7 @@ index e6d9542..24596fb 100644
      if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
          raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
  
-@@ -1936,11 +1995,17 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1936,11 +2021,17 @@ async def update_settings_api(payload: dict) -> dict:
              payload["skip_channel"], "skip channel"
          )
  
@@ -218,7 +241,7 @@ index e6d9542..24596fb 100644
      if any(field in payload for field in _channel_fields):
          current = SettingsManager.current()
  
-@@ -1956,6 +2021,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1956,6 +2047,7 @@ async def update_settings_api(payload: dict) -> dict:
              "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
              "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
              "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
@@ -226,7 +249,30 @@ index e6d9542..24596fb 100644
          }
  
          allowed_overlap = frozenset({"AUTH", "ANIME"})
-@@ -1977,7 +2043,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1972,12 +2064,30 @@ async def update_settings_api(payload: dict) -> dict:
+                         detail=f"Channel {', '.join(sorted(clash))} can't be in both {a} and {b} channels — each channel may only belong to one field."
+                     )
+ 
++    #----- Hermes Bot: when the token changes, verify it with Telegram
++    #----- (getMe) and cache the resolved identity for the Bot Admin
++    #----- Manager. An unverifiable token rejects the whole save.
++    if "hermes_bot_token" in payload:
++        new_token = str(payload.get("hermes_bot_token") or "").strip()
++        payload["hermes_bot_token"] = new_token
++        if new_token != SettingsManager.current().hermes_bot_token:
++            if not new_token:
++                payload["hermes_bot"] = {}
++            else:
++                identity = await _resolve_bot_identity(new_token)
++                if identity is None:
++                    raise HTTPException(
++                        status_code=400,
++                        detail="Hermes Bot token could not be verified with Telegram (getMe failed). Check the token and try again.",
++                    )
++                payload["hermes_bot"] = identity
++
+     #----- Strip whitespace from string fields
+     for key in ("tmdb_api", "base_url", "upstream_repo", "upstream_branch",
                  "admin_username", "admin_password", "session_secret", "http_proxy_url",
                  "cf_stream_url", "cf_stream_secret", "cf_stream_mode",
                  "mediaflow_password", "payment_instructions", "payment_qr_url",
@@ -235,7 +281,7 @@ index e6d9542..24596fb 100644
          if key in payload and isinstance(payload[key], str):
              payload[key] = payload[key].strip()
  
-@@ -2501,6 +2567,60 @@ async def download_logs_api():
+@@ -2501,6 +2611,60 @@ async def download_logs_api():
      return FileResponse(path, filename="log.txt", media_type="text/plain")
  
  
@@ -296,29 +342,29 @@ index e6d9542..24596fb 100644
  #----- Run the updater then re-exec the app; runs after the HTTP response is flushed
  async def _perform_restart(delay: float = 1.0) -> None:
      await asyncio.sleep(delay)
-@@ -2569,6 +2689,21 @@ async def _managed_bots() -> list[dict]:
+@@ -2569,6 +2733,21 @@ async def _managed_bots() -> list[dict]:
      return bots
  
  
 +async def _all_known_bots() -> list[dict]:
-+    """Pool bots + registered external bots, for Bot Admin scan/apply.
++    """Pool bots + the Hermes Bot, for Bot Admin scan/apply.
 +
-+    External bots are identity-only registrations (no token in this app),
-+    so they can be promoted as channel admins but can never join the
-+    streaming pool. An external entry whose user id collides with a pool
-+    bot is dropped — the pool entry wins.
++    The Hermes Bot is registered in Settings and promoted by user id
++    only — it is never a streaming client. If its user id ever collided
++    with a pool bot, the pool entry wins.
 +    """
 +    managed = await _managed_bots()
 +    managed_ids = {b["user_id"] for b in managed}
-+    extra = _external_entries(
-+        SettingsManager.current().bot_admin_extra_bots, managed_ids)
-+    return managed + extra
++    hermes = _hermes_manager_entry(SettingsManager.current().hermes_bot)
++    if hermes is not None and hermes["user_id"] not in managed_ids:
++        return managed + [hermes]
++    return managed
 +
 +
  def _bot_served_channels() -> list[dict]:
      s = SettingsManager.current()
      order: list[str] = []
-@@ -2595,6 +2730,8 @@ def _bot_served_channels() -> list[dict]:
+@@ -2595,6 +2774,8 @@ def _bot_served_channels() -> list[dict]:
          add(s.announcement_channel, "announce")
      if s.skip_channel:
          add(s.skip_channel, "skip")
@@ -327,7 +373,7 @@ index e6d9542..24596fb 100644
      return [mapping[k] for k in order]
  
  
-@@ -2686,12 +2823,13 @@ async def bot_admin_scan_api() -> dict:
+@@ -2686,12 +2867,13 @@ async def bot_admin_scan_api() -> dict:
          return {"status": "error", "reason": "no_session",
                  "message": "Connect your Telegram session from the Settings page to manage channel admins."}
  
@@ -336,14 +382,14 @@ index e6d9542..24596fb 100644
      if len(bots) <= 1:
          return {"status": "error", "reason": "single_token", "bots": bots,
 -                "message": "Add at least one extra bot token (multi-token) to use this tool."}
-+                "message": "Add an extra bot token (multi-token) or register an external bot to use this tool."}
++                "message": "Add an extra bot token (multi-token) or set the Hermes Bot in Settings to use this tool."}
  
      channels = _bot_served_channels()
-+    # Known = pool + external. External bots are never reported as orphans.
++    # Known = pool + Hermes Bot. The Hermes Bot is never reported as an orphan.
      managed_ids = {b["user_id"] for b in bots}
      out: list[dict] = []
  
-@@ -2840,9 +2978,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
+@@ -2840,9 +3022,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
      if not isinstance(channel_ids, list) or not channel_ids:
          raise HTTPException(status_code=400, detail="Select at least one channel.")
  
@@ -351,66 +397,14 @@ index e6d9542..24596fb 100644
 +    bots = await _all_known_bots()
      if len(bots) <= 1:
 -        raise HTTPException(status_code=400, detail="Need a session string and more than one bot token.")
-+        raise HTTPException(status_code=400, detail="Need a session string and at least two bots (pool or external).")
++        raise HTTPException(status_code=400, detail="Need a session string and at least two bots (pool or Hermes Bot).")
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3021,114 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3065,62 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
-+
-+
-+async def bot_admin_external_add_api(payload: dict | None = None) -> dict:
-+    """Register an external bot (by username) in the Bot Admin Manager.
-+
-+    Only the bot's public identity is stored — never a token — so an
-+    external bot can be promoted as a channel admin by the userbot but
-+    can never become a streaming client.
-+    """
-+    if botmod.Userbot is None:
-+        raise HTTPException(status_code=503, detail="No Telegram session connected. Connect one from Settings.")
-+
-+    username = str((payload or {}).get("username") or "").strip().lstrip("@").strip()
-+    if not username:
-+        raise HTTPException(status_code=400, detail="Enter the bot's username.")
-+
-+    try:
-+        user = await botmod.Userbot.get_users(username)
-+    except Exception:
-+        raise HTTPException(status_code=400, detail=f"Could not find @{username} on Telegram.")
-+    if isinstance(user, list):
-+        user = user[0] if user else None
-+    if user is None or not getattr(user, "is_bot", False):
-+        raise HTTPException(status_code=400, detail=f"@{username} is not a bot account.")
-+
-+    managed = await _managed_bots()
-+    managed_ids = {b["user_id"] for b in managed}
-+    if user.id in managed_ids:
-+        raise HTTPException(status_code=400, detail="That bot is already one of your streaming bots.")
-+
-+    current = SettingsManager.current().bot_admin_extra_bots
-+    new_list, added = _external_upsert(current, {
-+        "user_id": user.id,
-+        "username": getattr(user, "username", None) or username,
-+        "name": getattr(user, "first_name", None) or "",
-+    })
-+    if added:
-+        await SettingsManager.update(db, {"bot_admin_extra_bots": new_list})
-+
-+    entries = _external_entries(new_list, managed_ids)
-+    match = next((e for e in entries if e["user_id"] == user.id), None)
-+    return {"status": "success", "data": {"bot": match, "added": added}}
-+
-+
-+async def bot_admin_external_remove_api(payload: dict | None = None) -> dict:
-+    """Unregister an external bot. Existing channel admin rights the bot
-+    already holds are NOT changed — this only removes it from the manager."""
-+    current = SettingsManager.current().bot_admin_extra_bots
-+    new_list, removed = _external_remove(current, (payload or {}).get("user_id"))
-+    if removed:
-+        await SettingsManager.update(db, {"bot_admin_extra_bots": new_list})
-+    return {"status": "success", "data": {"removed": removed}}
 +
 +
 +# ── Update Manager (Wave 2 Phase D) ────────────────────────────────
@@ -550,7 +544,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..c844d66 100644
+index c53ee43..06a4582 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -614,20 +608,7 @@ index c53ee43..c844d66 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -242,9 +296,11 @@ async def custom_catalogs_page(request: Request, _: bool = Depends(require_auth)
- async def tools_page(request: Request, _: bool = Depends(require_auth)):
-     ctx = _base_context(request)
-     ctx["current_user"] = get_current_user(request)
--    #----- Bot Admin Manager needs a session string AND more than one bot token
-+    #----- Bot Admin Manager needs a session string AND more than one bot
-+    #----- (pool tokens and/or registered external bots)
-     ctx["userbot_configured"] = botmod.Userbot is not None
-     ctx["multi_token_available"] = len(multi_clients) > 1
-+    ctx["extra_bots_available"] = len(SettingsManager.current().bot_admin_extra_bots) > 0
-     return templates.TemplateResponse("tools.html", ctx)
- 
- 
-@@ -262,11 +318,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +316,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -742,7 +723,7 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 62bda08..c6a1003 100644
+index 62bda08..f5535f4 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
 @@ -143,26 +143,13 @@
@@ -986,7 +967,32 @@ index 62bda08..c6a1003 100644
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1682,6 +1872,37 @@ function toggleWebdavPwdVisibility() {
+@@ -1239,6 +1429,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
+         </div>
+     </div>
+ 
++    <!-- ── Hermes Bot ──────────────────────────────────────────────────── -->
++    <div class="settings-card">
++        <h2><i class="fa-brands fa-telegram"></i> Hermes Bot</h2>
++        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
++            Your Hermes Media Manager bot. It is <strong>never</strong> used for streaming — the token
++            only identifies the bot so the Bot Admin Manager (Tools page) can promote it as admin in
++            your channels, where it manages media captions. Saving verifies the token with Telegram.
++            {% if settings.hermes_bot and settings.hermes_bot.username %}
++            <br>Connected as <strong>@{{ settings.hermes_bot.username }}</strong> (ID {{ settings.hermes_bot.user_id }}).
++            {% endif %}
++        </p>
++        <div class="add-row">
++            <input type="text" id="hermes_bot_token" class="s-input" spellcheck="false"
++                value="{{ settings.hermes_bot_token or '' }}"
++                placeholder="Hermes bot token (1234567890:ABCdef…)">
++        </div>
++    </div>
++
+     <!-- ── Backup & Restore ───────────────────────────────────────────── -->
+     <div class="settings-card">
+         <h2><i class="fa-solid fa-box-archive"></i> Backup &amp; Restore</h2>
+@@ -1682,6 +1890,37 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -1024,7 +1030,15 @@ index 62bda08..c6a1003 100644
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1766,7 +1987,26 @@ async function saveSettings() {
+@@ -1759,6 +1998,7 @@ async function saveSettings() {
+         webdav_password:               document.getElementById('webdav_password').value,
+         multi_tokens:                  collectList('multi_tokens'),
+         helper_tokens:                 collectList('helper_tokens'),
++        hermes_bot_token:              document.getElementById('hermes_bot_token').value.trim(),
+         extra_databases:               collectList('extra_databases'),
+         global_search:                 document.getElementById('global_search').checked,
+         global_search_channels:        collectList('global_search_channels'),
+@@ -1766,7 +2006,26 @@ async function saveSettings() {
          announce_new_content:          document.getElementById('announce_new_content').checked,
          announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
          skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
@@ -1051,7 +1065,7 @@ index 62bda08..c6a1003 100644
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1902,6 +2142,25 @@ function renderSettings(s) {
+@@ -1902,6 +2161,25 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -1077,7 +1091,16 @@ index 62bda08..c6a1003 100644
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1945,6 +2204,16 @@ function renderSettings(s) {
+@@ -1913,6 +2191,8 @@ function renderSettings(s) {
+     document.getElementById('cf_stream_url').value = s.cf_stream_url || '';
+     document.getElementById('cf_stream_secret').value = s.cf_stream_secret || '';
+     document.getElementById('cf_stream_mode').value = s.cf_stream_mode || 'off';
++    const hb = document.getElementById('hermes_bot_token');
++    if (hb) hb.value = s.hermes_bot_token || '';
+     const wu = document.getElementById('webdav_user');
+     if (wu) wu.value = s.webdav_user || '';
+     const wp = document.getElementById('webdav_password');
+@@ -1945,6 +2225,16 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -1094,7 +1117,7 @@ index 62bda08..c6a1003 100644
      toggleSkipDeleteField();
  
      rebuildDatabaseList(s.database_list || []);
-@@ -2021,7 +2290,6 @@ const STAT_FIELDS = [
+@@ -2021,7 +2311,6 @@ const STAT_FIELDS = [
      ['streams', 'Streams'], ['db_size', 'DB Size'],
      ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
  ];
@@ -1102,7 +1125,7 @@ index 62bda08..c6a1003 100644
  
  /* Spin the clicked refresh button's icon while an async action runs */
  function spinIcon(btn, on) {
-@@ -2047,32 +2315,6 @@ async function loadDbStats(btn) {
+@@ -2047,32 +2336,6 @@ async function loadDbStats(btn) {
      }
  }
  
@@ -1135,7 +1158,7 @@ index 62bda08..c6a1003 100644
  async function restartApp() {
      if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
  
-@@ -2089,7 +2331,6 @@ async function restartApp() {
+@@ -2089,7 +2352,6 @@ async function restartApp() {
      }
  
      // Web app goes down during restart — poll health until start_time changes, then reload.
@@ -1143,7 +1166,7 @@ index 62bda08..c6a1003 100644
      const overlay = document.getElementById('restart-overlay');
      overlay.hidden = false;
      document.documentElement.classList.add('rs-lock');
-@@ -2137,7 +2378,6 @@ window.addEventListener('DOMContentLoaded', () => {
+@@ -2137,7 +2399,6 @@ window.addEventListener('DOMContentLoaded', () => {
      toggleDuplicateProtection();
      toggleMediaflowFields();
      loadDbStats();
@@ -1152,7 +1175,7 @@ index 62bda08..c6a1003 100644
  </script>
  
 diff --git a/Backend/fastapi/templates/tools.html b/Backend/fastapi/templates/tools.html
-index a642921..ad5e401 100644
+index a642921..aeff4f6 100644
 --- a/Backend/fastapi/templates/tools.html
 +++ b/Backend/fastapi/templates/tools.html
 @@ -314,6 +314,37 @@
@@ -1198,7 +1221,7 @@ index a642921..ad5e401 100644
  
          <p class="hint mt-3 mb-4">
 -            Promote your bots to admin in the channels they serve, using your session account.
-+            Promote your bots — the streaming pool and any registered external bots — to admin in the
++            Promote your bots — the streaming pool and the Hermes Bot (set in Settings) — to admin in the
 +            channels they serve, using your session account.
          </p>
  
@@ -1218,31 +1241,16 @@ index a642921..ad5e401 100644
              </p>
          </div>
          {% else %}
-@@ -353,6 +380,14 @@
-             </span>
-         </div>
- 
-+        <div class="flex items-center gap-2 flex-wrap mb-2">
-+            <input type="text" id="ba-ext-username" class="s-input" placeholder="External bot username — e.g. @mediamanagerthehdbot" style="flex:1;min-width:260px;width:auto">
-+            <button class="btn btn-ghost" type="button" onclick="addExternalBot()">
-+                <i class="fa-solid fa-plus"></i> Add external bot
-+            </button>
-+        </div>
-+        <p class="hint mb-3">External bots (like the Hermes Media Manager) are promoted as channel admins by your session account. No token is stored for them, and they never join the streaming pool.</p>
-+
-         <div id="ba-loading" class="hint" style="display:none"><i class="fa-solid fa-spinner fa-spin"></i> Scanning channels &amp; bots…</div>
-         <div id="ba-error" class="hint" style="color:var(--danger);display:none"></div>
- 
-@@ -373,7 +408,7 @@
+@@ -373,7 +400,7 @@
                  <input type="checkbox" id="ba-demote-orphans">
                  <span class="min-w-0">
                      <span class="c-name block">Also remove orphan bot-admins</span>
 -                    <span class="c-id">Revoke admin from bots that are admin in a channel but are no longer in your token list (they stay as members, not banned).</span>
-+                    <span class="c-id">Revoke admin from bots that are admin in a channel but are not in your bot list — pool tokens or registered external bots (they stay as members, not banned).</span>
++                    <span class="c-id">Revoke admin from bots that are admin in a channel but are not in your bot list — pool tokens or the Hermes Bot (they stay as members, not banned).</span>
                  </span>
              </label>
  
-@@ -1230,6 +1265,121 @@ const BA_SESSION = {
+@@ -1230,6 +1257,77 @@ const BA_SESSION = {
      unknown:           '<span class="ba-cell ba-muted"><i class="fa-solid fa-question"></i> Unknown</span>',
  };
  
@@ -1317,63 +1325,19 @@ index a642921..ad5e401 100644
 +
 +if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', umLoad); else umLoad();
 +
-+async function addExternalBot() {
-+    const input = document.getElementById('ba-ext-username');
-+    const username = (input.value || '').trim();
-+    if (!username) { showToast('Enter a bot username first.', 'error', 'Bot Admin'); return; }
-+    try {
-+        const res = await fetch('/api/admin/tools/bot-admin/external/add', {
-+            method: 'POST',
-+            headers: { 'Content-Type': 'application/json' },
-+            body: JSON.stringify({ username })
-+        });
-+        const data = await res.json();
-+        if (!res.ok || data.status !== 'success') {
-+            showToast(data.detail || 'Could not add that bot.', 'error', 'Bot Admin');
-+            return;
-+        }
-+        showToast(data.data && data.data.added ? 'External bot registered.' : 'That bot is already registered.', 'success', 'Bot Admin');
-+        input.value = '';
-+        loadBotAdmin();
-+    } catch (e) {
-+        showToast('Could not reach the server.', 'error', 'Bot Admin');
-+    }
-+}
-+
-+async function removeExternalBot(ev, userId) {
-+    ev.preventDefault(); ev.stopPropagation();
-+    if (!confirm('Remove this external bot from the manager? Its existing channel admin rights are not changed.')) return;
-+    try {
-+        const res = await fetch('/api/admin/tools/bot-admin/external/remove', {
-+            method: 'POST',
-+            headers: { 'Content-Type': 'application/json' },
-+            body: JSON.stringify({ user_id: userId })
-+        });
-+        const data = await res.json();
-+        if (!res.ok || data.status !== 'success') {
-+            showToast(data.detail || 'Could not remove that bot.', 'error', 'Bot Admin');
-+            return;
-+        }
-+        showToast('External bot removed.', 'success', 'Bot Admin');
-+        loadBotAdmin();
-+    } catch (e) {
-+        showToast('Could not reach the server.', 'error', 'Bot Admin');
-+    }
-+}
-+
  async function loadBotAdmin() {
      const body = document.getElementById('ba-body');
      if (!body) return;
-@@ -1266,7 +1416,7 @@ function renderBotAdmin() {
+@@ -1266,7 +1364,7 @@ function renderBotAdmin() {
          <label class="chip ba-bot-chip" style="width:auto">
              <input type="checkbox" class="ba-bot-cb" value="${escapeHtmlAttr(String(b.user_id))}" checked>
              <span class="min-w-0">
 -                <span class="c-name block">${escapeHtml(b.name)}${b.is_main ? ' <span class="c-id">(main)</span>' : ''}</span>
-+                <span class="c-name block">${escapeHtml(b.name)}${b.is_main ? ' <span class="c-id">(main)</span>' : ''}${b.external ? ' <span class="c-id">(external)</span>' : ''}${b.external ? `<span title="Remove external bot" style="cursor:pointer;color:var(--danger);margin-left:0.3rem" onclick="removeExternalBot(event, '${escapeHtmlAttr(String(b.user_id))}')"><i class="fa-solid fa-xmark"></i></span>` : ''}</span>
++                <span class="c-name block">${escapeHtml(b.name)}${b.is_main ? ' <span class="c-id">(main)</span>' : ''}${b.external ? ' <span class="c-id">(Hermes bot)</span>' : ''}</span>
                  <span class="c-id">${b.username ? '@' + escapeHtml(b.username) : escapeHtml(String(b.user_id))}</span>
              </span>
          </label>
-@@ -1338,7 +1488,7 @@ async function applyBotAdmin() {
+@@ -1338,7 +1436,7 @@ async function applyBotAdmin() {
      if (!botIds.length) { showToast('Select at least one bot to add.', 'error', 'Bot Admin'); return; }
  
      let msg = `Add ${botIds.length} bot(s) as admin to ${channels.length} channel(s)?`;
@@ -1456,33 +1420,36 @@ index 0a0418f..a8e0b59 100644
  
  
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..5b0a659 100644
+index 2b7712c..44fc05b 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,10 @@ from typing import Any, Dict, List
  
  import Backend.pyrofork.bot as botmod
  from Backend.config import Telegram
-+from Backend.helper.bot_admin_external import sanitize_bots as _sanitize_extra_bots
++from Backend.helper.hermes_bot import sanitize_identity as _sanitize_hermes_identity
 +from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
 +from Backend.helper.prewarm import PROFILES as _PREWARM_PROFILES
 +from Backend.helper.prewarm import RANGES as _PREWARM_RANGES
  from Backend.helper.passwords import hash_password
  from Backend.logger import LOGGER
  
-@@ -48,6 +52,11 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -48,6 +52,14 @@ _DEFAULTS: Dict[str, Any] = {
      "announce_new_content": False,
      "announcement_channel": "",
      "skip_channel": "",
 +    #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
 +    "dl_channel_id": "",
 +    "dl_expire_days": 0,
-+    #----- Bot Admin Manager external bots (identity only, never clients)
-+    "bot_admin_extra_bots": [],
++    #----- Hermes Bot (Media Manager): token + resolved identity.
++    #----- The token is verified via getMe on save and NEVER used to
++    #----- build a streaming client — the bot is librarian-only.
++    "hermes_bot_token": "",
++    "hermes_bot": {},
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -63,6 +72,24 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -63,6 +75,24 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -1507,24 +1474,25 @@ index 2b7712c..5b0a659 100644
  }
  
  
-@@ -158,6 +185,16 @@ class Settings:
+@@ -158,6 +188,17 @@ class Settings:
      def announce_new_content(self) -> bool:
          return bool(self._d.get("announce_new_content", False))
  
 +    @property
-+    def bot_admin_extra_bots(self) -> List[Dict[str, Any]]:
-+        """External bots registered in the Bot Admin Manager.
++    def hermes_bot_token(self) -> str:
++        return str(self._d.get("hermes_bot_token") or "").strip()
 +
-+        Identity only (user id / username / name) — these bots hold no
-+        token in this app and are never streaming clients; the userbot
-+        promotes them as channel admins by user id.
-+        """
-+        return _sanitize_extra_bots(self._d.get("bot_admin_extra_bots"))
++    @property
++    def hermes_bot(self) -> Dict[str, Any] | None:
++        """Resolved Hermes Bot identity {user_id, username, name}, or
++        None when no Hermes Bot is registered. The Bot Admin Manager
++        promotes this bot by user id; it is never a streaming client."""
++        return _sanitize_hermes_identity(self._d.get("hermes_bot"))
 +
      @property
      def delete_on_metadata_fail(self) -> bool:
          return bool(self._d.get("delete_on_metadata_fail", False))
-@@ -170,6 +207,31 @@ class Settings:
+@@ -170,6 +211,31 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -1556,7 +1524,7 @@ index 2b7712c..5b0a659 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +367,103 @@ class Settings:
+@@ -305,6 +371,103 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -1660,7 +1628,7 @@ index 2b7712c..5b0a659 100644
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +539,7 @@ class SettingsManager:
+@@ -380,7 +543,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -1669,7 +1637,7 @@ index 2b7712c..5b0a659 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +686,23 @@ class SettingsManager:
+@@ -527,4 +690,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  
