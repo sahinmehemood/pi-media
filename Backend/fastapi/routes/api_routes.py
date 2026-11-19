@@ -3202,6 +3202,10 @@ async def librarian_action_api(payload: dict) -> dict:
         return librarian.start_action(action, channel)
     if action == "rollback":
         return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
+    if action == "alias_delete":
+        return await librarian.delete_alias(str(payload.get("alias_id") or ""))
+    if action == "dismiss":
+        return await librarian.dismiss_item(str(payload.get("key") or ""))
     if action == "regen_token":
         import secrets
 

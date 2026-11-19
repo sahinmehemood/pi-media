@@ -1207,6 +1207,7 @@ async def list_proposals(limit: int = 20) -> list[dict]:
             doc["item_count"] = len(items)
             # Attach each item's current recorded caption so the page can
             # show before -> after per file.
+            gate_items = (doc.get("gate") or {}).get("items") or {}
             detail = []
             for it in items:
                 before = it.get("seen_caption") or ""
@@ -1216,9 +1217,12 @@ async def list_proposals(limit: int = 20) -> list[dict]:
                         before = (ld or {}).get("caption") or ""
                     except Exception:
                         before = ""
+                g = gate_items.get(it.get("key")) or {}
                 detail.append({"before": before,
                                "after": it.get("new_caption") or "",
-                               "n": it.get("n")})
+                               "n": it.get("n"),
+                               "reason": g.get("reason") or "",
+                               "got_title": g.get("got_title") or ""})
             doc["items_detail"] = detail
             doc.pop("items", None)
             out.append(_jsonable(doc))
@@ -1242,6 +1246,103 @@ async def list_audit(limit: int = 20) -> list[dict]:
     return out
 
 
+async def list_aliases(limit: int = 200) -> list[dict]:
+    """What the bot has been taught: uploader stem -> resolved title/IDs,
+    per channel. Shown in the control room so Yan can audit (and remove)
+    learned mappings."""
+    coll = _alias_coll()
+    if coll is None:
+        return []
+    out = []
+    try:
+        cursor = coll.find({}).sort("taught_at", -1).limit(
+            max(1, min(500, limit)))
+        async for doc in cursor:
+            doc = dict(doc)
+            out.append(_jsonable({
+                "id": doc.get("_id"), "channel": doc.get("channel"),
+                "stem": doc.get("stem"), "title": doc.get("title") or "",
+                "tmdb_id": doc.get("tmdb_id"), "imdb_id": doc.get("imdb_id"),
+                "media_type": doc.get("media_type"),
+                "taught_at": doc.get("taught_at"),
+            }))
+    except Exception as e:
+        LOGGER.warning(f"[Librarian] alias list failed: {e}")
+    return out
+
+
+async def delete_alias(alias_id: str) -> dict:
+    """Forget one taught alias (control-room action). The bot will have
+    to re-identify that stem from evidence next time."""
+    coll = _alias_coll()
+    if coll is None or not alias_id:
+        return {"ok": False, "message": "Alias store unavailable."}
+    try:
+        res = await coll.delete_one({"_id": alias_id})
+        n = getattr(res, "deleted_count", 0) or 0
+    except Exception as e:
+        return {"ok": False, "message": f"Delete failed: {e}"}
+    return {"ok": bool(n), "deleted": n,
+            "message": "Alias removed." if n else "Alias not found."}
+
+
+async def dismiss_item(key: str) -> dict:
+    """Yan's won't-fix decision on one waiting file: it leaves every
+    future packet and the waiting counts, but stays in the ledger for
+    the record."""
+    coll = _ledger_coll()
+    if coll is None or not key:
+        return {"ok": False, "message": "Ledger unavailable."}
+    doc = await coll.find_one({"_id": key})
+    if doc is None:
+        return {"ok": False, "message": "Item not found."}
+    if doc.get("status") not in ("open", "unresolved"):
+        return {"ok": False,
+                "message": f"Item is {doc.get('status')}, not waiting."}
+    await coll.update_one({"_id": key}, {"$set": {
+        "status": "dismissed", "dismissed_at": time.time(),
+        "proposal_id": None}})
+    return {"ok": True,
+            "message": "Dismissed — the bot will not offer this file again."}
+
+
+async def list_flagged(per_reason: int = 8) -> list[dict]:
+    """The flagged queue for the control room: waiting items grouped by
+    why they failed, biggest group first, a sample of items per group."""
+    coll = _ledger_coll()
+    if coll is None:
+        return []
+    docs = []
+    try:
+        cursor = coll.find(
+            {"status": {"$in": ["open", "unresolved"]}}).sort(
+            "updated_at", -1).limit(500)
+        async for doc in cursor:
+            docs.append(dict(doc))
+    except Exception as e:
+        LOGGER.warning(f"[Librarian] flagged list failed: {e}")
+        return []
+    located = await _located_map([d["_id"] for d in docs])
+    groups: dict[str, dict] = {}
+    for d in docs:
+        code = d.get("reason_code") or "unknown"
+        g = groups.setdefault(code, {"reason_code": code, "count": 0,
+                                     "items": []})
+        g["count"] += 1
+        if len(g["items"]) < per_reason:
+            loc = located.get(d["_id"]) or {}
+            g["items"].append(_jsonable({
+                "key": d["_id"],
+                "caption": ((loc.get("caption") or d.get("caption") or "")
+                            .split("\n")[0]),
+                "file_name": loc.get("file_name") or d.get("file_name") or "",
+                "reason": d.get("reason") or "",
+                "chat_id": d.get("chat_id") or loc.get("chat_id"),
+                "status": d.get("status"),
+            }))
+    return sorted(groups.values(), key=lambda g: -g["count"])
+
+
 async def panel_counts() -> dict:
     """The control panel's numbers: waiting per channel, fixed, proposals,
     edits used today."""
@@ -1249,7 +1350,9 @@ async def panel_counts() -> dict:
     out = {"available": base.get("available", False),
            "waiting": 0, "fixed": 0, "by_status": base.get("by_status", {}),
            "proposals_pending": 0, "edits_today": await _edits_today(),
-           "waiting_by_channel": {}}
+           "waiting_by_channel": {}, "fixed_by_channel": {},
+           "located_by_channel": {}, "by_reason": {},
+           "dismissed": base.get("by_status", {}).get("dismissed", 0)}
     out["waiting"] = sum(base.get("by_status", {}).get(s, 0)
                          for s in ("open", "unresolved"))
     out["fixed"] = base.get("by_status", {}).get("fixed", 0)
@@ -1258,15 +1361,31 @@ async def panel_counts() -> dict:
         try:
             keys = []
             async for d in ledger.find(
-                    {"status": {"$in": ["open", "unresolved"]}}, {"_id": 1, "chat_id": 1}):
+                    {"status": {"$in": ["open", "unresolved"]}},
+                    {"_id": 1, "chat_id": 1, "reason_code": 1}):
                 keys.append(d)
             located = await _located_map([d["_id"] for d in keys])
             for d in keys:
+                code = d.get("reason_code") or "unknown"
+                out["by_reason"][code] = out["by_reason"].get(code, 0) + 1
                 loc = located.get(d["_id"]) or {}
                 chat = d.get("chat_id") or loc.get("chat_id")
                 if chat:
                     k = str(_norm_chat(chat))
                     out["waiting_by_channel"][k] = out["waiting_by_channel"].get(k, 0) + 1
+                    if loc:
+                        out["located_by_channel"][k] = out["located_by_channel"].get(k, 0) + 1
+            fixed_keys = []
+            async for d in ledger.find(
+                    {"status": "fixed"}, {"_id": 1, "chat_id": 1}):
+                fixed_keys.append(d)
+            flocated = await _located_map([d["_id"] for d in fixed_keys])
+            for d in fixed_keys:
+                loc = flocated.get(d["_id"]) or {}
+                chat = d.get("chat_id") or loc.get("chat_id")
+                if chat:
+                    k = str(_norm_chat(chat))
+                    out["fixed_by_channel"][k] = out["fixed_by_channel"].get(k, 0) + 1
         except Exception:
             pass
     pcoll = _proposals_coll()

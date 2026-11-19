@@ -226,6 +226,13 @@ class _FakeColl:
         doc.setdefault("_id", f"auto{len(self.docs)}")
         self.docs[doc["_id"]] = doc
 
+    async def delete_one(self, filt):
+        key = filt.get("_id")
+        if key in self.docs:
+            del self.docs[key]
+            return types.SimpleNamespace(deleted_count=1)
+        return types.SimpleNamespace(deleted_count=0)
+
     async def replace_one(self, filt, doc, upsert=False):
         self.docs[filt["_id"]] = dict(doc)
 
@@ -643,4 +650,80 @@ def test_identity_check_blocks_wrong_file():
     finally:
         lib._bot_api = orig
         settings.librarian_dry_run = True
+        _unwire(lib, saved)
+
+
+# ---------------------------------------------------------------------------
+# v5 Phase 2 — control room: aliases, dismiss, flagged queue
+# ---------------------------------------------------------------------------
+
+def test_alias_list_and_delete():
+    lib = load_lib()
+    alias = _FakeColl()
+    alias.docs["-1001:btth"] = {"_id": "-1001:btth", "channel": -1001,
+                                "stem": "btth", "title": "Battle Through The Heavens",
+                                "tmdb_id": 123, "imdb_id": None,
+                                "media_type": "tv", "taught_at": 2.0}
+    alias.docs["-1001:pw"] = {"_id": "-1001:pw", "channel": -1001,
+                              "stem": "pw", "title": "Perfect World",
+                              "tmdb_id": 456, "imdb_id": "tt999",
+                              "media_type": "tv", "taught_at": 1.0}
+    saved = _wire(lib, alias=alias)
+    try:
+        rows = run(lib.list_aliases())
+        assert [r["stem"] for r in rows] == ["btth", "pw"]  # newest first
+        res = run(lib.delete_alias("-1001:pw"))
+        assert res["ok"] is True and res["deleted"] == 1
+        assert "-1001:pw" not in alias.docs
+        res = run(lib.delete_alias("-1001:pw"))
+        assert res["ok"] is False
+    finally:
+        _unwire(lib, saved)
+
+
+def test_dismiss_item_leaves_packets():
+    lib = load_lib()
+    ledger, locator = _FakeColl(), _FakeColl()
+    ledger.docs["d1"] = {"_id": "d1", "status": "open", "chat_id": -100111,
+                         "caption": "Broken File", "first_seen": 1.0,
+                         "reason_code": "no-match"}
+    ledger.docs["d2"] = {"_id": "d2", "status": "fixed", "chat_id": -100111,
+                         "caption": "Done", "first_seen": 2.0}
+    saved = _wire(lib, ledger=ledger, locator=locator)
+    try:
+        res = run(lib.dismiss_item("d1"))
+        assert res["ok"] is True
+        assert ledger.docs["d1"]["status"] == "dismissed"
+        # A dismissed item is no longer offered; a fixed one cannot be dismissed.
+        res = run(lib.dismiss_item("d1"))
+        assert res["ok"] is False
+        res = run(lib.dismiss_item("d2"))
+        assert res["ok"] is False
+        res = run(lib.dismiss_item("nope"))
+        assert res["ok"] is False
+    finally:
+        _unwire(lib, saved)
+
+
+def test_list_flagged_groups_by_reason():
+    lib = load_lib()
+    ledger, locator = _FakeColl(), _FakeColl()
+    ledger.docs["f1"] = {"_id": "f1", "status": "open", "caption": "A E01",
+                         "reason_code": "no-match", "reason": "no match",
+                         "updated_at": 3.0}
+    ledger.docs["f2"] = {"_id": "f2", "status": "unresolved", "caption": "B E02",
+                         "reason_code": "no-match", "reason": "no match",
+                         "updated_at": 2.0}
+    ledger.docs["f3"] = {"_id": "f3", "status": "open", "caption": "C",
+                         "reason_code": "no-quality", "reason": "no quality token",
+                         "updated_at": 1.0}
+    ledger.docs["f4"] = {"_id": "f4", "status": "dismissed", "caption": "D",
+                         "reason_code": "no-match", "updated_at": 4.0}
+    saved = _wire(lib, ledger=ledger, locator=locator)
+    try:
+        groups = run(lib.list_flagged())
+        assert [g["reason_code"] for g in groups] == ["no-match", "no-quality"]
+        assert groups[0]["count"] == 2 and groups[1]["count"] == 1
+        assert groups[0]["items"][0]["caption"] == "A E01"
+    finally:
         _unwire(lib, saved)

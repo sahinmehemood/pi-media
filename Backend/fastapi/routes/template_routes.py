@@ -352,12 +352,16 @@ async def librarian_page(request: Request, _: bool = Depends(require_auth)):
     ctx["lib_counts"] = counts
     ctx["lib_proposals"] = await librarian.list_proposals(limit=15)
     ctx["lib_fixes"] = await librarian.list_audit(limit=15)
+    ctx["lib_aliases"] = await librarian.list_aliases()
+    ctx["lib_flagged"] = await librarian.list_flagged()
     ctx["lib_state"] = librarian.ACTION_STATE
     ctx["librarian_enabled"] = settings.librarian_enabled
     ctx["librarian_dry_run"] = settings.librarian_dry_run
     ctx["lib_budget"] = settings.librarian_edit_budget_per_day
     # Channel rows: id, display name (best effort), files waiting.
     waiting = counts.get("waiting_by_channel") or {}
+    fixed_by = counts.get("fixed_by_channel") or {}
+    located_by = counts.get("located_by_channel") or {}
     rows = []
     client = None
     try:
@@ -374,7 +378,10 @@ async def librarian_page(request: Request, _: bool = Depends(require_auth)):
                 name = getattr(chat, "title", None) or name
             except Exception:
                 pass
-        rows.append({"id": str(ch), "name": name,
-                     "waiting": waiting.get(stripped, 0)})
+        w = waiting.get(stripped, 0)
+        rows.append({"id": str(ch), "name": name, "waiting": w,
+                     "fixed": fixed_by.get(stripped, 0),
+                     "located_pct": (round(100 * located_by.get(stripped, 0) / w)
+                                     if w else None)})
     ctx["lib_channels"] = rows
     return templates.TemplateResponse("librarian.html", ctx)

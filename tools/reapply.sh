@@ -47,6 +47,19 @@ PLUGIN_FILES=(
   docs/librarian/DESIGN-v4.md
   docs/librarian/DESIGN-v5.md
   tools/librarian_cli.py
+  tools/media-manager-profile/SOUL.md
+  tools/media-manager-profile/memories/MEMORY.md
+  tools/media-manager-profile/memories/USER.md
+  tools/media-manager-profile/skills/librarian/SKILL.md
+  tools/media-manager-profile/skills/provider-research/SKILL.md
+  tools/media-manager-profile/skills/release-naming/SKILL.md
+  tools/media-manager-profile/skills/movie-naming/SKILL.md
+  tools/media-manager-profile/skills/tv-naming/SKILL.md
+  tools/media-manager-profile/skills/anime-naming/SKILL.md
+  tools/media-manager-profile/skills/donghua-naming/SKILL.md
+  tools/media-manager-profile/skills/cartoon-naming/SKILL.md
+  tools/media-manager-profile/skills/drama-naming/SKILL.md
+  tools/media-manager-profile/skills/telegram-uploaders/SKILL.md
   docs/stream-buffer/DESIGN.md
   docs/dl-link.md
   docs/stream-buffer/README.md
