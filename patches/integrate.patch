@@ -97,7 +97,7 @@ index 9ae7925..6dd1beb 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..ab0a450 100644
+index e6d9542..07a447a 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -389,7 +389,37 @@ index e6d9542..ab0a450 100644
      managed_ids = {b["user_id"] for b in bots}
      out: list[dict] = []
  
-@@ -2840,9 +3022,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
+@@ -2736,6 +2918,20 @@ async def bot_admin_scan_api() -> dict:
+     return {"status": "success", "data": {"bots": bots, "channels": out}}
+ 
+ 
++async def _meet_peer(bot: dict) -> None:
++    """Resolve a bot's username once so the peer (with its access hash)
++    is cached in the userbot session. A bot the account has never met —
++    e.g. the Hermes Bot — has no cached peer, and Telegram rejects
++    raw-id promote/add calls for it with PEER_ID_INVALID."""
++    username = bot.get("username")
++    if not username:
++        return
++    try:
++        await botmod.Userbot.get_users(username)
++    except Exception:
++        pass
++
++
+ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: bool = True) -> dict:
+     label = bot.get("name") or (f"@{bot['username']}" if bot.get("username") else str(bot["user_id"]))
+     bid = bot["user_id"]
+@@ -2743,6 +2939,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
+     if await _bot_member_status(chat_id, bid) == "admin":
+         return {"bot": label, "user_id": bid, "status": "already", "message": "Already an admin."}
+ 
++    await _meet_peer(bot)
++
+     try:
+         await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
+         return {"bot": label, "user_id": bid, "status": "added", "message": "Promoted to admin."}
+@@ -2840,9 +3038,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
      if not isinstance(channel_ids, list) or not channel_ids:
          raise HTTPException(status_code=400, detail="Select at least one channel.")
  
@@ -401,7 +431,7 @@ index e6d9542..ab0a450 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3065,62 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3081,62 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }

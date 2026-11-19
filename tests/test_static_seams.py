@@ -256,6 +256,10 @@ def test_hermes_bot_seams():
     helper = read("Backend/helper/hermes_bot.py")
     # The identity helper must stay pool-agnostic.
     assert "multi_clients" not in helper
+    # Promoting a bot the session has never met needs the peer resolved
+    # first, or Telegram answers PEER_ID_INVALID.
+    assert "_meet_peer" in routes
+    assert "await _meet_peer(bot)" in routes
 
 
 if __name__ == "__main__":

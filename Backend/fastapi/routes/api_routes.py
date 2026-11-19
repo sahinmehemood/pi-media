@@ -2918,12 +2918,28 @@ async def bot_admin_scan_api() -> dict:
     return {"status": "success", "data": {"bots": bots, "channels": out}}
 
 
+async def _meet_peer(bot: dict) -> None:
+    """Resolve a bot's username once so the peer (with its access hash)
+    is cached in the userbot session. A bot the account has never met —
+    e.g. the Hermes Bot — has no cached peer, and Telegram rejects
+    raw-id promote/add calls for it with PEER_ID_INVALID."""
+    username = bot.get("username")
+    if not username:
+        return
+    try:
+        await botmod.Userbot.get_users(username)
+    except Exception:
+        pass
+
+
 async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: bool = True) -> dict:
     label = bot.get("name") or (f"@{bot['username']}" if bot.get("username") else str(bot["user_id"]))
     bid = bot["user_id"]
 
     if await _bot_member_status(chat_id, bid) == "admin":
         return {"bot": label, "user_id": bid, "status": "already", "message": "Already an admin."}
+
+    await _meet_peer(bot)
 
     try:
         await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
