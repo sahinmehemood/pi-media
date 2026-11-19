@@ -142,6 +142,13 @@ def test_initial_window_seek_burst():
     assert burst is False and initial < maximum
     initial, maximum, burst = bs._initial_window(policy, 5 * 1024 * 1024)
     assert burst is True and initial == maximum
+    # The settings toggle (buffer_seek_burst) disables the burst
+    sb.refresh_policy({"buffer_seek_burst": False})
+    policy = sb.get_policy()
+    assert policy.seek_burst is False
+    initial, maximum, burst = bs._initial_window(policy, 5 * 1024 * 1024)
+    assert burst is False and initial < maximum
+    sb.refresh_policy(None)
 
 
 #----- Stream source classifier

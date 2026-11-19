@@ -756,6 +756,15 @@
                 </p>
             </div>
             <div>
+                <label class="s-label" for="buffer_seek_burst">Seek burst</label>
+                <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="buffer_seek_burst"
+                        {% if settings.buffer_seek_burst %}checked{% endif %}>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">Open at full window for seeks &amp; tail probes (mid-file starts)</span>
+                </label>
+            </div>
+            <div>
                 <label class="s-label" for="flood_alert_enabled">Flood alerts</label>
                 <label class="toggle-wrap">
                     <input type="checkbox" class="toggle-input" id="flood_alert_enabled"
@@ -1899,6 +1908,7 @@ async function saveSettings() {
         buffer_cache_mb:               parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0,
         buffer_disk_cache_mb:          parseInt(document.getElementById('buffer_disk_cache_mb').value, 10) || 0,
         buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value, 10) || 90,
+        buffer_seek_burst:             document.getElementById('buffer_seek_burst').checked,
         flood_alert_enabled:           document.getElementById('flood_alert_enabled').checked,
     };
     const dsEl = document.getElementById('default_streaming');
@@ -2043,6 +2053,7 @@ function renderSettings(s) {
     document.getElementById('buffer_cache_mb').value = (s.buffer_cache_mb ?? 48);
     document.getElementById('buffer_disk_cache_mb').value = (s.buffer_disk_cache_mb ?? 512);
     document.getElementById('buffer_stall_timeout').value = (s.buffer_stall_timeout ?? 90);
+    document.getElementById('buffer_seek_burst').checked = (s.buffer_seek_burst ?? true);
     document.getElementById('flood_alert_enabled').checked = !!s.flood_alert_enabled;
     toggleBufferFields();
     applyBufferProfile();

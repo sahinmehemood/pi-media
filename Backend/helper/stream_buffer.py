@@ -117,6 +117,7 @@ class BufferPolicy:
     readahead_mb: int = 16
     cache_mb: int = 48
     disk_cache_mb: int = DEFAULT_DISK_CACHE_MB
+    seek_burst: bool = True
     stall_timeout_s: int = DEFAULT_STALL_TIMEOUT_S
     per_client_cap: int = 4
     max_flood_wait_s: int = DEFAULT_MAX_FLOOD_WAIT_S
@@ -143,6 +144,7 @@ class BufferPolicy:
             "readahead_mb": self.readahead_mb,
             "cache_mb": self.cache_mb,
             "disk_cache_mb": self.disk_cache_mb,
+            "seek_burst": self.seek_burst,
             "stall_timeout_s": self.stall_timeout_s,
             "per_client_cap": self.per_client_cap,
             "max_flood_wait_s": self.max_flood_wait_s,
@@ -184,6 +186,7 @@ def build_policy(data: Optional[Dict[str, Any]] = None) -> BufferPolicy:
         readahead_mb=readahead_mb,
         cache_mb=cache_mb,
         disk_cache_mb=_clamp_key(data, "buffer_disk_cache_mb", DEFAULT_DISK_CACHE_MB),
+        seek_burst=bool(data.get("buffer_seek_burst", True)),
         stall_timeout_s=_clamp_key(data, "buffer_stall_timeout", DEFAULT_STALL_TIMEOUT_S),
         per_client_cap=per_client_cap,
         max_flood_wait_s=_clamp_key(data, "max_flood_wait_s", DEFAULT_MAX_FLOOD_WAIT_S),

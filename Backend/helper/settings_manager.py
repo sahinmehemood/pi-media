@@ -73,6 +73,7 @@ _DEFAULTS: Dict[str, Any] = {
     "buffer_workers": 4,
     "buffer_cache_mb": 48,
     "buffer_disk_cache_mb": 512,
+    "buffer_seek_burst": True,
     "buffer_stall_timeout": 90,
     "flood_alert_enabled": False,
 }
@@ -375,6 +376,10 @@ class Settings:
         return self._buffer_int("buffer_disk_cache_mb", 512)
 
     @property
+    def buffer_seek_burst(self) -> bool:
+        return bool(self._d.get("buffer_seek_burst", True))
+
+    @property
     def flood_alert_enabled(self) -> bool:
         return bool(self._d.get("flood_alert_enabled", False))
 
@@ -596,7 +601,7 @@ class SettingsManager:
         buffer_keys = {
             "buffer_enabled", "buffer_profile", "buffer_adaptive",
             "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
-            "buffer_disk_cache_mb", "buffer_stall_timeout",
+            "buffer_disk_cache_mb", "buffer_seek_burst", "buffer_stall_timeout",
         }
         if any(old.get(k) != new.get(k) for k in buffer_keys):
             try:

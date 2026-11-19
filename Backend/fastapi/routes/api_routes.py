@@ -1873,6 +1873,8 @@ async def update_settings_api(payload: dict) -> dict:
             payload[_key] = max(_lo, min(_hi, _v))
     if "flood_alert_enabled" in payload:
         payload["flood_alert_enabled"] = bool(payload["flood_alert_enabled"])
+    if "buffer_seek_burst" in payload:
+        payload["buffer_seek_burst"] = bool(payload["buffer_seek_burst"])
 
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")

@@ -36,8 +36,8 @@ def test_settings_defaults_and_reinit_seam():
     text = read("Backend/helper/settings_manager.py")
     for key in ("buffer_enabled", "buffer_profile", "buffer_adaptive",
                 "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
-                "buffer_disk_cache_mb", "buffer_stall_timeout",
-                "flood_alert_enabled"):
+                "buffer_disk_cache_mb", "buffer_seek_burst",
+                "buffer_stall_timeout", "flood_alert_enabled"):
         assert f'"{key}"' in text, key
     assert "refresh_policy(new)" in text
 
@@ -54,7 +54,8 @@ def test_settings_page_card():
     for element_id in ("buffer_enabled", "buffer_profile", "buffer_adaptive",
                        "buffer_readahead_mb", "buffer_workers",
                        "buffer_cache_mb", "buffer_disk_cache_mb",
-                       "buffer_stall_timeout", "flood_alert_enabled",
+                       "buffer_seek_burst", "buffer_stall_timeout",
+                       "flood_alert_enabled",
                        "buffer-fields", "buffer-estimate"):
         assert f'id="{element_id}"' in text, element_id
     assert "buffer_health" in text

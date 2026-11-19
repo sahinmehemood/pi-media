@@ -81,7 +81,7 @@ def _initial_window(policy: sb.BufferPolicy, offset: int) -> Tuple[int, int, boo
         initial = min(maximum, initial)
     else:
         maximum = initial = policy.workers
-    seek_burst = offset > 0
+    seek_burst = offset > 0 and policy.seek_burst
     if seek_burst:
         initial = maximum
     return initial, maximum, seek_burst
