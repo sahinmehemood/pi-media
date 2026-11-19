@@ -9,8 +9,12 @@ works unchanged. Inside, the producer is the buffer engine from
 ``Backend.helper.stream_buffer``:
 
 - adaptive in-flight window (AIMD) instead of upstream's fixed formula,
-- client pool scheduled by flood penalty and per-client concurrency caps,
-- one shared FloodBudget per stream (capped waits, client shedding),
+  opened at maximum for mid-file starts (seeks / tail probes),
+- client pool scheduled by flood penalty and per-client concurrency
+  caps, tie-broken by per-(client, DC) fetch speed,
+- one shared FloodBudget per stream (capped waits, client shedding);
+  a flood wait sleeps AFTER releasing the client's in-flight slot, so
+  a penalised client never blocks its own concurrency budget,
 - a byte-budgeted chunk cache consulted before every fetch,
 - honest three-state chunk results: a chunk that cannot be fetched ends
   the stream as an *error*, never as a clean EOF (upstream conflates the
@@ -61,6 +65,26 @@ class PoolMember(NamedTuple):
 
 def _backoff_s(tries: int) -> float:
     return min(0.5 * (2 ** (tries - 1)), 10.0)
+
+
+def _initial_window(policy: sb.BufferPolicy, offset: int) -> Tuple[int, int, bool]:
+    """(initial, maximum, seek_burst) for a new stream's adaptive window.
+
+    A stream starting mid-file (offset > 0) is a player seek or a tail
+    probe: it opens at the maximum window so the player gets its bytes
+    immediately, and AIMD settles the window within a few chunks.
+    Sequential streams start from the speed tracker's scaled workers.
+    """
+    if policy.adaptive:
+        maximum = policy.workers * 2
+        initial = max(1, int(round(policy.workers * sb.get_speed_tracker().multiplier())))
+        initial = min(maximum, initial)
+    else:
+        maximum = initial = policy.workers
+    seek_burst = offset > 0
+    if seek_burst:
+        initial = maximum
+    return initial, maximum, seek_burst
 
 
 class BufferedByteStreamer(ByteStreamer):
@@ -148,13 +172,11 @@ class BufferedByteStreamer(ByteStreamer):
         cache = sb.get_cache()
         media_id = getattr(file_id, "media_id", None)
         budget = sb.FloodBudget(policy.max_flood_wait_s)
-        if policy.adaptive:
-            maximum = policy.workers * 2
-            initial = max(1, int(round(policy.workers * sb.get_speed_tracker().multiplier())))
-            initial = min(maximum, initial)
-        else:
-            maximum = initial = policy.workers
+        initial, maximum, seek_burst = _initial_window(policy, offset)
+        stream_entry["buffer_seek_burst"] = seek_burst
         window = sb.AdaptiveWindow(initial, maximum, adaptive=policy.adaptive)
+        file_dc = getattr(file_id, "dc_id", 0) or 0
+        dc_speeds = sb.get_dc_speed_table()
 
         q: asyncio.Queue = asyncio.Queue(maxsize=policy.readahead_chunks(chunk_size))
         stop_event = asyncio.Event()
@@ -212,7 +234,12 @@ class BufferedByteStreamer(ByteStreamer):
                 candidates = fresh
             start = (seq + attempt) % len(candidates)
             rotated = candidates[start:] + candidates[:start]
-            return min(rotated, key=lambda pos: (budget.penalty(pool[pos].client_index), in_flight[pos]))
+            # Order: flood penalty, then load, then fastest-to-this-DC.
+            return min(rotated, key=lambda pos: (
+                budget.penalty(pool[pos].client_index),
+                in_flight[pos],
+                -dc_speeds.mbps(pool[pos].client_index, file_dc),
+            ))
 
         def any_client_alive() -> bool:
             return any(not budget.is_shed(m.client_index) for m in pool)
@@ -251,6 +278,8 @@ class BufferedByteStreamer(ByteStreamer):
                     member.client_index, member.session,
                     member.location_box, member.refresh)
                 in_flight[pos] += 1
+                flood_wait = 0.0
+                send_started = time.monotonic()
                 try:
                     r = await asyncio.wait_for(
                         c_session.send(
@@ -267,6 +296,11 @@ class BufferedByteStreamer(ByteStreamer):
                         budget.record_success(c_idx)
                         window.note_success()
                         sb.METRICS.incr("chunks_fetched")
+                        elapsed = time.monotonic() - send_started
+                        if elapsed > 0:
+                            sb.note_dc_speed(
+                                c_idx, file_dc,
+                                (len(chunk_bytes) / (1024 * 1024)) / elapsed)
                         if key is not None:
                             cache.put(key, chunk_bytes)
                         return seq, chunk_bytes, "ok"
@@ -288,8 +322,16 @@ class BufferedByteStreamer(ByteStreamer):
                         wait = required + random.uniform(0.5, 2.0)
                         sb.METRICS.incr("floods_seen")
                         window.note_flood()
+                        if sb.get_flood_sender() is not None:
+                            _title = (meta or {}).get("title") or (meta or {}).get("file_name") or ""
+                            for _ev in sb.note_flood(c_idx, wait, _title):
+                                asyncio.create_task(sb.publish_flood_event(_ev))
                         if budget.register_flood(c_idx, wait):
-                            await asyncio.sleep(wait)
+                            # Do NOT sleep here: the finally block first
+                            # releases this client's in-flight slot, the
+                            # wait happens after it (below), and the loop
+                            # then re-picks — possibly a healthier client.
+                            flood_wait = wait
                         else:
                             # Budget exhausted: shed this client for the
                             # stream and let another client take the chunk.
@@ -301,6 +343,8 @@ class BufferedByteStreamer(ByteStreamer):
                         await asyncio.sleep(_backoff_s(tries))
                 finally:
                     in_flight[pos] -= 1
+                if flood_wait:
+                    await asyncio.sleep(flood_wait)
             sb.METRICS.incr("chunks_failed")
             return seq, None, "failed"
 

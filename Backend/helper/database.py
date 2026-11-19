@@ -2677,7 +2677,7 @@ class Database:
             #----- Recent records (newest first)
             recent_cursor = col.find(
                 {},
-                {"_id": 0, "stream_id": 1, "client_index": 1, "dc_id": 1,
+                {"_id": 0, "stream_id": 1, "client_index": 1, "dc_id": 1, "chat_id": 1,
                  "total_bytes": 1, "duration_sec": 1, "avg_mbps": 1,
                  "peak_mbps": 1, "status": 1, "logged_at": 1, "title": 1}
             ).sort("logged_at", DESCENDING).limit(limit)

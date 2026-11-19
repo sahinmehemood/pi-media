@@ -166,6 +166,34 @@ def test_per_client_cap_is_strict():
     run(main())
 
 
+def test_flood_wait_releases_client_slot():
+    async def main():
+        # cap of 1 on a single client: chunk 0 floods and must sleep
+        # WITHOUT holding the only slot — chunks 1 and 2 are served
+        # before chunk 0's retry (Wave 2 flood-slot fix).
+        sb.refresh_policy({"buffer_profile": "custom", "buffer_workers": 4,
+                           "per_client_cap": 1, "buffer_readahead_mb": 16,
+                           "buffer_cache_mb": 48, "buffer_disk_cache_mb": 0})
+        sb.get_cache().clear()
+        client = FakeClient(DATA, {"flood_once": True})
+        ok_offsets = []
+        orig_send = client.session.send
+
+        async def recording_send(request):
+            r = await orig_send(request)
+            ok_offsets.append(request.offset)
+            return r
+
+        client.session.send = recording_send
+        streamer, extras = make_streamer([client])
+        out = await stream(streamer, extras, data_len_chunks=3, stream_id="slot")
+        await settle()
+        assert out == DATA[:3 * CHUNK]
+        assert ok_offsets == [CHUNK, 2 * CHUNK, 0], ok_offsets
+        assert entry("slot")["status"] == "finished"
+    run(main())
+
+
 def test_disabled_policy_delegates_to_upstream():
     async def main():
         sb.refresh_policy({"buffer_enabled": False})

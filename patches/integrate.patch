@@ -18,10 +18,27 @@ index 4b43288..4128675 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index 7d42083..ae08f28 100644
+index 7d42083..d484cca 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
-@@ -1797,7 +1797,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -604,6 +604,16 @@ async def get_dead_links_api() -> dict:
+ async def get_stream_analytics_api() -> dict:
+     try:
+         data = await db.get_stream_analytics(limit=200)
++        try:
++            from Backend.helper.stream_source import build_source_context, classify_source
++
++            _ctx = build_source_context(SettingsManager.current())
++            for _r in data.get("recent", []):
++                _src = classify_source(_r.get("chat_id"), _ctx)
++                _r["source_label"] = _src["label"]
++                _r["source_kind"] = _src["kind"]
++        except Exception:
++            pass
+         return {"status": "success", "data": data}
+     except Exception as e:
+         LOGGER.error(f"Stream analytics API error: {e}")
+@@ -1797,7 +1807,7 @@ async def update_settings_api(payload: dict) -> dict:
          del payload["session_secret"]
  
      #----- Type coercion and validation
@@ -30,7 +47,7 @@ index 7d42083..ae08f28 100644
      for key in bool_keys:
          if key in payload:
              payload[key] = bool(payload[key])
-@@ -1845,6 +1845,23 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1845,6 +1855,25 @@ async def update_settings_api(payload: dict) -> dict:
          except (ValueError, TypeError):
              payload["fanart_shuffle_interval"] = 5
  
@@ -43,18 +60,20 @@ index 7d42083..ae08f28 100644
 +            raise HTTPException(status_code=400, detail="buffer_profile must be conservative, balanced, aggressive or custom")
 +    from Backend.helper.stream_buffer import RANGES as _buffer_ranges
 +
-+    for _key in ("buffer_workers", "buffer_readahead_mb", "buffer_cache_mb", "buffer_stall_timeout"):
++    for _key in ("buffer_workers", "buffer_readahead_mb", "buffer_cache_mb", "buffer_stall_timeout", "buffer_disk_cache_mb"):
 +        if _key in payload:
 +            _v = payload[_key]
 +            if isinstance(_v, bool) or not isinstance(_v, int):
 +                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
 +            _lo, _hi = _buffer_ranges[_key]
 +            payload[_key] = max(_lo, min(_hi, _v))
++    if "flood_alert_enabled" in payload:
++        payload["flood_alert_enabled"] = bool(payload["flood_alert_enabled"])
 +
      if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
          raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
  
-@@ -1925,11 +1942,17 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1925,11 +1954,17 @@ async def update_settings_api(payload: dict) -> dict:
              payload["skip_channel"], "skip channel"
          )
  
@@ -73,7 +92,7 @@ index 7d42083..ae08f28 100644
      if any(field in payload for field in _channel_fields):
          current = SettingsManager.current()
  
-@@ -1945,6 +1968,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1945,6 +1980,7 @@ async def update_settings_api(payload: dict) -> dict:
              "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
              "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
              "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
@@ -81,7 +100,7 @@ index 7d42083..ae08f28 100644
          }
  
          allowed_overlap = frozenset({"AUTH", "ANIME"})
-@@ -1966,7 +1990,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1966,7 +2002,7 @@ async def update_settings_api(payload: dict) -> dict:
                  "admin_username", "admin_password", "session_secret", "http_proxy_url",
                  "cf_stream_url", "cf_stream_secret", "cf_stream_mode",
                  "mediaflow_password", "payment_instructions", "payment_qr_url",
@@ -90,7 +109,7 @@ index 7d42083..ae08f28 100644
          if key in payload and isinstance(payload[key], str):
              payload[key] = payload[key].strip()
  
-@@ -2584,6 +2608,8 @@ def _bot_served_channels() -> list[dict]:
+@@ -2584,6 +2620,8 @@ def _bot_served_channels() -> list[dict]:
          add(s.announcement_channel, "announce")
      if s.skip_channel:
          add(s.skip_channel, "skip")
@@ -100,7 +119,7 @@ index 7d42083..ae08f28 100644
  
  
 diff --git a/Backend/fastapi/routes/stream_routes.py b/Backend/fastapi/routes/stream_routes.py
-index 1ec874f..acd8dde 100644
+index 1ec874f..2a35d71 100644
 --- a/Backend/fastapi/routes/stream_routes.py
 +++ b/Backend/fastapi/routes/stream_routes.py
 @@ -16,6 +16,7 @@ from Backend import db
@@ -129,6 +148,23 @@ index 1ec874f..acd8dde 100644
      return _userbot_streamer
  
  
+@@ -718,6 +719,16 @@ async def get_stream_stats():
+         }
+         for info in RECENT_STREAMS
+     ]
++    try:
++        from Backend.helper.stream_source import build_source_context, classify_source
++
++        _src_ctx = build_source_context(SettingsManager.current())
++        for _row in active + recent:
++            _src = classify_source(_row.get("chat_id"), _src_ctx)
++            _row["source_label"] = _src["label"]
++            _row["source_kind"] = _src["kind"]
++    except Exception:
++        pass
+     return JSONResponse({
+         "active_streams": active,
+         "recent_streams": recent,
 diff --git a/Backend/fastapi/routes/stremio_routes.py b/Backend/fastapi/routes/stremio_routes.py
 index 1dc8c44..aca7a37 100644
 --- a/Backend/fastapi/routes/stremio_routes.py
@@ -184,6 +220,52 @@ index c53ee43..96e5b27 100644
 +        "buffer_health": buffer_health,
      })
      return templates.TemplateResponse("settings.html", ctx)
+diff --git a/Backend/fastapi/templates/admin_dashboard.html b/Backend/fastapi/templates/admin_dashboard.html
+index 914b18b..3d989fc 100644
+--- a/Backend/fastapi/templates/admin_dashboard.html
++++ b/Backend/fastapi/templates/admin_dashboard.html
+@@ -176,6 +176,7 @@
+                             <tr>
+                                 <th>Stream ID</th>
+                                 <th>Title</th>
++                                <th>Source</th>
+                                 <th class="text-center">Bot (DC)</th>
+                                 <th class="text-right">Transferred</th>
+                                 <th class="text-right">Avg / Peak</th>
+@@ -186,7 +187,7 @@
+                         </thead>
+                         <tbody id="analytics-tbody">
+                             <tr>
+-                                <td colspan="8" class="empty-state">
++                                <td colspan="9" class="empty-state">
+                                     <i class="fas fa-spinner fa-spin mr-2 text-primary"></i> Loading analytics...
+                                 </td>
+                             </tr>
+@@ -400,7 +401,7 @@
+             const streams = data?.data?.recent || [];
+ 
+             if (!streams.length) {
+-                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No recent streams recorded.</td></tr>';
++                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No recent streams recorded.</td></tr>';
+                 mobile.innerHTML = '<div class="empty-state">No recent streams recorded.</div>';
+                 return;
+             }
+@@ -426,6 +427,7 @@
+                     <tr>
+                         <td><span class="stream-id muted font-mono text-xs" title="${escapeHtml(s.stream_id)}">${escapeHtml(s.stream_id)}</span></td>
+                         <td><div class="title-cell font-semibold" title="${escapeHtml(titleStr)}">${escapeHtml(titleStr)}</div></td>
++                        <td><span class="muted text-xs" title="${escapeHtml(s.source_kind || '')}">${escapeHtml(s.source_label || '—')}</span></td>
+                         <td class="text-center">Bot ${Number(s.client_index ?? 0) + 1} <span class="muted text-xs ml-1">(DC${escapeHtml(s.dc_id)})</span></td>
+                         <td class="text-right font-semibold">${bytesStr}</td>
+                         <td class="text-right font-semibold">${avg.toFixed(1)} <span class="muted">/ ${peak.toFixed(1)} MB/s</span></td>
+@@ -442,6 +444,7 @@
+                             <span class="${getStatusBadge(status)}">${escapeHtml(status)}</span>
+                         </div>
+                         <div class="flex flex-wrap gap-x-3 gap-y-1 muted text-xs mt-2">
++                            ${s.source_label ? `<span>${escapeHtml(s.source_label)}</span>` : ''}
+                             <span>Bot ${Number(s.client_index ?? 0) + 1} · DC${escapeHtml(s.dc_id)}</span>
+                             <span class="font-semibold text-text">${bytesStr}</span>
+                             <span>${avg.toFixed(1)}/${peak.toFixed(1)} MB/s</span>
 diff --git a/Backend/fastapi/templates/base.html b/Backend/fastapi/templates/base.html
 index 55027ba..6de2450 100644
 --- a/Backend/fastapi/templates/base.html
@@ -204,11 +286,25 @@ index 55027ba..6de2450 100644
      </div>
      <p class="label-caps mb-2">Theme</p>
      <div class="theme-opts mb-4" data-theme-picker></div>
+diff --git a/Backend/fastapi/templates/dashboard.html b/Backend/fastapi/templates/dashboard.html
+index ca3f585..3985380 100644
+--- a/Backend/fastapi/templates/dashboard.html
++++ b/Backend/fastapi/templates/dashboard.html
+@@ -273,6 +273,9 @@
+ 
+     function getClientLabel(stream) {
+         const parts = [];
++        if (stream?.source_label) {
++            parts.push(stream.source_label);
++        }
+         if (stream?.client_index !== null && stream?.client_index !== undefined) {
+             parts.push('Bot ' + (Number(stream.client_index) + 1));
+         }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 2a5a120..a972e8b 100644
+index 2a5a120..04ee333 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
-@@ -693,6 +693,105 @@
+@@ -693,6 +693,125 @@
      {% endif %}
  </div>
  
@@ -266,6 +362,23 @@ index 2a5a120..a972e8b 100644
 +                <input type="number" id="buffer_stall_timeout" class="s-input" min="15" max="600" step="1"
 +                    value="{{ settings.buffer_stall_timeout }}" oninput="updateBufferEstimate()">
 +            </div>
++            <div>
++                <label class="s-label" for="buffer_disk_cache_mb">Disk cache (MiB)</label>
++                <input type="number" id="buffer_disk_cache_mb" class="s-input" min="0" max="8192" step="1"
++                    value="{{ settings.buffer_disk_cache_mb }}">
++                <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem">
++                    Chunks evicted from the memory cache spill to disk and survive restarts. 0 = off.
++                </p>
++            </div>
++            <div>
++                <label class="s-label" for="flood_alert_enabled">Flood alerts</label>
++                <label class="toggle-wrap">
++                    <input type="checkbox" class="toggle-input" id="flood_alert_enabled"
++                        {% if settings.flood_alert_enabled %}checked{% endif %}>
++                    <span class="toggle-track"></span>
++                    <span class="toggle-label">DM the owner when a bot hits a big FloodWait (≥10s, batched)</span>
++                </label>
++            </div>
 +        </div>
 +        <p id="buffer-estimate" style="font-size:0.8rem;color:var(--text-sec);margin-top:0.7rem"></p>
 +        {% if buffer_health and buffer_health.policy %}
@@ -273,7 +386,10 @@ index 2a5a120..a972e8b 100644
 +            Live: profile <strong>{{ buffer_health['policy']['profile'] }}</strong> ·
 +            speed EWMA <strong>{{ buffer_health['speed_mbps'] }} Mbps</strong> ({{ buffer_health['speed_samples'] }} samples) ·
 +            cache <strong>{{ (buffer_health['cache']['size_bytes'] / 1048576) | round(1) }} / {{ (buffer_health['cache']['budget_bytes'] / 1048576) | round(0) }} MiB</strong>
-+            ({{ buffer_health['cache']['hits'] }} hits / {{ buffer_health['cache']['misses'] }} misses) ·
++            ({{ buffer_health['cache']['hits'] }} hits / {{ buffer_health['cache']['misses'] }} misses)
++            {% if buffer_health['cache']['disk'] %}· disk <strong>{{ (buffer_health['cache']['disk']['size_bytes'] / 1048576) | round(1) }} / {{ (buffer_health['cache']['disk']['budget_bytes'] / 1048576) | round(0) }} MiB</strong>
++            ({{ buffer_health['cache']['disk']['entries'] }} chunks, {{ buffer_health['cache']['disk']['hits'] }} hits){% endif %}
++            {% if buffer_health['dc_speed_entries'] %}· DC speeds tracked for {{ buffer_health['dc_speed_entries'] }} client/DC pairs{% endif %} ·
 +            chunks fetched {{ buffer_health['metrics']['chunks_fetched'] }}, failed {{ buffer_health['metrics']['chunks_failed'] }},
 +            floods {{ buffer_health['metrics']['floods_seen'] }}, workers shed {{ buffer_health['metrics']['workers_shed'] }},
 +            stalls {{ buffer_health['metrics']['stall_timeouts'] }}
@@ -314,7 +430,7 @@ index 2a5a120..a972e8b 100644
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1656,6 +1755,37 @@ function toggleWebdavPwdVisibility() {
+@@ -1656,6 +1775,37 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -352,7 +468,7 @@ index 2a5a120..a972e8b 100644
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1739,7 +1869,15 @@ async function saveSettings() {
+@@ -1739,7 +1889,17 @@ async function saveSettings() {
          announce_new_content:          document.getElementById('announce_new_content').checked,
          announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
          skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
@@ -364,11 +480,13 @@ index 2a5a120..a972e8b 100644
 +        buffer_readahead_mb:           parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 16,
 +        buffer_workers:                parseInt(document.getElementById('buffer_workers').value, 10) || 4,
 +        buffer_cache_mb:               parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0,
++        buffer_disk_cache_mb:          parseInt(document.getElementById('buffer_disk_cache_mb').value, 10) || 0,
 +        buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value, 10) || 90,
++        flood_alert_enabled:           document.getElementById('flood_alert_enabled').checked,
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1875,6 +2013,15 @@ function renderSettings(s) {
+@@ -1875,6 +2035,17 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -378,13 +496,15 @@ index 2a5a120..a972e8b 100644
 +    document.getElementById('buffer_readahead_mb').value = (s.buffer_readahead_mb ?? 16);
 +    document.getElementById('buffer_workers').value = (s.buffer_workers ?? 4);
 +    document.getElementById('buffer_cache_mb').value = (s.buffer_cache_mb ?? 48);
++    document.getElementById('buffer_disk_cache_mb').value = (s.buffer_disk_cache_mb ?? 512);
 +    document.getElementById('buffer_stall_timeout').value = (s.buffer_stall_timeout ?? 90);
++    document.getElementById('flood_alert_enabled').checked = !!s.flood_alert_enabled;
 +    toggleBufferFields();
 +    applyBufferProfile();
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1917,6 +2064,15 @@ function renderSettings(s) {
+@@ -1917,6 +2088,15 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -400,6 +520,19 @@ index 2a5a120..a972e8b 100644
      toggleSkipDeleteField();
  
      rebuildDatabaseList(s.database_list || []);
+diff --git a/Backend/helper/database.py b/Backend/helper/database.py
+index 57a9f61..ce322eb 100644
+--- a/Backend/helper/database.py
++++ b/Backend/helper/database.py
+@@ -2677,7 +2677,7 @@ class Database:
+             #----- Recent records (newest first)
+             recent_cursor = col.find(
+                 {},
+-                {"_id": 0, "stream_id": 1, "client_index": 1, "dc_id": 1,
++                {"_id": 0, "stream_id": 1, "client_index": 1, "dc_id": 1, "chat_id": 1,
+                  "total_bytes": 1, "duration_sec": 1, "avg_mbps": 1,
+                  "peak_mbps": 1, "status": 1, "logged_at": 1, "title": 1}
+             ).sort("logged_at", DESCENDING).limit(limit)
 diff --git a/Backend/helper/pyro.py b/Backend/helper/pyro.py
 index 0a0418f..a8e0b59 100644
 --- a/Backend/helper/pyro.py
@@ -417,7 +550,7 @@ index 0a0418f..a8e0b59 100644
  
  
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 5ba6a9f..8b2abf9 100644
+index 5ba6a9f..f56323c 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,7 @@ from typing import Any, Dict, List
@@ -437,7 +570,7 @@ index 5ba6a9f..8b2abf9 100644
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -62,6 +65,14 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -62,6 +65,16 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -448,11 +581,13 @@ index 5ba6a9f..8b2abf9 100644
 +    "buffer_readahead_mb": 16,
 +    "buffer_workers": 4,
 +    "buffer_cache_mb": 48,
++    "buffer_disk_cache_mb": 512,
 +    "buffer_stall_timeout": 90,
++    "flood_alert_enabled": False,
  }
  
  
-@@ -169,6 +180,17 @@ class Settings:
+@@ -169,6 +182,17 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -470,7 +605,7 @@ index 5ba6a9f..8b2abf9 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -304,6 +326,48 @@ class Settings:
+@@ -304,6 +328,56 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -516,10 +651,18 @@ index 5ba6a9f..8b2abf9 100644
 +    def buffer_stall_timeout(self) -> int:
 +        return self._buffer_int("buffer_stall_timeout", 90)
 +
++    @property
++    def buffer_disk_cache_mb(self) -> int:
++        return self._buffer_int("buffer_disk_cache_mb", 512)
++
++    @property
++    def flood_alert_enabled(self) -> bool:
++        return bool(self._d.get("flood_alert_enabled", False))
++
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -375,7 +439,7 @@ class SettingsManager:
+@@ -375,7 +449,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -528,7 +671,7 @@ index 5ba6a9f..8b2abf9 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -518,4 +582,23 @@ class SettingsManager:
+@@ -518,4 +592,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  
@@ -536,7 +679,7 @@ index 5ba6a9f..8b2abf9 100644
 +        buffer_keys = {
 +            "buffer_enabled", "buffer_profile", "buffer_adaptive",
 +            "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
-+            "buffer_stall_timeout",
++            "buffer_disk_cache_mb", "buffer_stall_timeout",
 +        }
 +        if any(old.get(k) != new.get(k) for k in buffer_keys):
 +            try:

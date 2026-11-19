@@ -604,6 +604,16 @@ async def get_dead_links_api() -> dict:
 async def get_stream_analytics_api() -> dict:
     try:
         data = await db.get_stream_analytics(limit=200)
+        try:
+            from Backend.helper.stream_source import build_source_context, classify_source
+
+            _ctx = build_source_context(SettingsManager.current())
+            for _r in data.get("recent", []):
+                _src = classify_source(_r.get("chat_id"), _ctx)
+                _r["source_label"] = _src["label"]
+                _r["source_kind"] = _src["kind"]
+        except Exception:
+            pass
         return {"status": "success", "data": data}
     except Exception as e:
         LOGGER.error(f"Stream analytics API error: {e}")
@@ -1854,13 +1864,15 @@ async def update_settings_api(payload: dict) -> dict:
             raise HTTPException(status_code=400, detail="buffer_profile must be conservative, balanced, aggressive or custom")
     from Backend.helper.stream_buffer import RANGES as _buffer_ranges
 
-    for _key in ("buffer_workers", "buffer_readahead_mb", "buffer_cache_mb", "buffer_stall_timeout"):
+    for _key in ("buffer_workers", "buffer_readahead_mb", "buffer_cache_mb", "buffer_stall_timeout", "buffer_disk_cache_mb"):
         if _key in payload:
             _v = payload[_key]
             if isinstance(_v, bool) or not isinstance(_v, int):
                 raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
             _lo, _hi = _buffer_ranges[_key]
             payload[_key] = max(_lo, min(_hi, _v))
+    if "flood_alert_enabled" in payload:
+        payload["flood_alert_enabled"] = bool(payload["flood_alert_enabled"])
 
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")

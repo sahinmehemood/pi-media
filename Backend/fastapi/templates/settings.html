@@ -747,6 +747,23 @@
                 <input type="number" id="buffer_stall_timeout" class="s-input" min="15" max="600" step="1"
                     value="{{ settings.buffer_stall_timeout }}" oninput="updateBufferEstimate()">
             </div>
+            <div>
+                <label class="s-label" for="buffer_disk_cache_mb">Disk cache (MiB)</label>
+                <input type="number" id="buffer_disk_cache_mb" class="s-input" min="0" max="8192" step="1"
+                    value="{{ settings.buffer_disk_cache_mb }}">
+                <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem">
+                    Chunks evicted from the memory cache spill to disk and survive restarts. 0 = off.
+                </p>
+            </div>
+            <div>
+                <label class="s-label" for="flood_alert_enabled">Flood alerts</label>
+                <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="flood_alert_enabled"
+                        {% if settings.flood_alert_enabled %}checked{% endif %}>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">DM the owner when a bot hits a big FloodWait (≥10s, batched)</span>
+                </label>
+            </div>
         </div>
         <p id="buffer-estimate" style="font-size:0.8rem;color:var(--text-sec);margin-top:0.7rem"></p>
         {% if buffer_health and buffer_health.policy %}
@@ -754,7 +771,10 @@
             Live: profile <strong>{{ buffer_health['policy']['profile'] }}</strong> ·
             speed EWMA <strong>{{ buffer_health['speed_mbps'] }} Mbps</strong> ({{ buffer_health['speed_samples'] }} samples) ·
             cache <strong>{{ (buffer_health['cache']['size_bytes'] / 1048576) | round(1) }} / {{ (buffer_health['cache']['budget_bytes'] / 1048576) | round(0) }} MiB</strong>
-            ({{ buffer_health['cache']['hits'] }} hits / {{ buffer_health['cache']['misses'] }} misses) ·
+            ({{ buffer_health['cache']['hits'] }} hits / {{ buffer_health['cache']['misses'] }} misses)
+            {% if buffer_health['cache']['disk'] %}· disk <strong>{{ (buffer_health['cache']['disk']['size_bytes'] / 1048576) | round(1) }} / {{ (buffer_health['cache']['disk']['budget_bytes'] / 1048576) | round(0) }} MiB</strong>
+            ({{ buffer_health['cache']['disk']['entries'] }} chunks, {{ buffer_health['cache']['disk']['hits'] }} hits){% endif %}
+            {% if buffer_health['dc_speed_entries'] %}· DC speeds tracked for {{ buffer_health['dc_speed_entries'] }} client/DC pairs{% endif %} ·
             chunks fetched {{ buffer_health['metrics']['chunks_fetched'] }}, failed {{ buffer_health['metrics']['chunks_failed'] }},
             floods {{ buffer_health['metrics']['floods_seen'] }}, workers shed {{ buffer_health['metrics']['workers_shed'] }},
             stalls {{ buffer_health['metrics']['stall_timeouts'] }}
@@ -1877,7 +1897,9 @@ async function saveSettings() {
         buffer_readahead_mb:           parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 16,
         buffer_workers:                parseInt(document.getElementById('buffer_workers').value, 10) || 4,
         buffer_cache_mb:               parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0,
+        buffer_disk_cache_mb:          parseInt(document.getElementById('buffer_disk_cache_mb').value, 10) || 0,
         buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value, 10) || 90,
+        flood_alert_enabled:           document.getElementById('flood_alert_enabled').checked,
     };
     const dsEl = document.getElementById('default_streaming');
     if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
@@ -2019,7 +2041,9 @@ function renderSettings(s) {
     document.getElementById('buffer_readahead_mb').value = (s.buffer_readahead_mb ?? 16);
     document.getElementById('buffer_workers').value = (s.buffer_workers ?? 4);
     document.getElementById('buffer_cache_mb').value = (s.buffer_cache_mb ?? 48);
+    document.getElementById('buffer_disk_cache_mb').value = (s.buffer_disk_cache_mb ?? 512);
     document.getElementById('buffer_stall_timeout').value = (s.buffer_stall_timeout ?? 90);
+    document.getElementById('flood_alert_enabled').checked = !!s.flood_alert_enabled;
     toggleBufferFields();
     applyBufferProfile();
     togglePosterProvider();

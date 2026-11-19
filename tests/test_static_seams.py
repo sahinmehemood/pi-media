@@ -36,7 +36,8 @@ def test_settings_defaults_and_reinit_seam():
     text = read("Backend/helper/settings_manager.py")
     for key in ("buffer_enabled", "buffer_profile", "buffer_adaptive",
                 "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
-                "buffer_stall_timeout"):
+                "buffer_disk_cache_mb", "buffer_stall_timeout",
+                "flood_alert_enabled"):
         assert f'"{key}"' in text, key
     assert "refresh_policy(new)" in text
 
@@ -52,7 +53,8 @@ def test_settings_page_card():
     text = read("Backend/fastapi/templates/settings.html")
     for element_id in ("buffer_enabled", "buffer_profile", "buffer_adaptive",
                        "buffer_readahead_mb", "buffer_workers",
-                       "buffer_cache_mb", "buffer_stall_timeout",
+                       "buffer_cache_mb", "buffer_disk_cache_mb",
+                       "buffer_stall_timeout", "flood_alert_enabled",
                        "buffer-fields", "buffer-estimate"):
         assert f'id="{element_id}"' in text, element_id
     assert "buffer_health" in text
@@ -103,6 +105,26 @@ def test_dl_channel_seams():
     assert "dl_channel_id:" in html  # saveSettings payload
     patch = read("patches/integrate.patch")
     assert "dl_channel_id" in patch
+
+
+def test_wave2_phase_a_seams():
+    # Source labels: resolver module + both enrichments + both templates
+    assert (ROOT / "Backend/helper/stream_source.py").exists()
+    api = read("Backend/fastapi/routes/api_routes.py")
+    assert "classify_source" in api and "buffer_disk_cache_mb" in api
+    routes = read("Backend/fastapi/routes/stream_routes.py")
+    assert "classify_source" in routes
+    database = read("Backend/helper/database.py")
+    assert '"chat_id": 1' in database  # analytics projection carries the id
+    admin = read("Backend/fastapi/templates/admin_dashboard.html")
+    assert "source_label" in admin and "<th>Source</th>" in admin
+    dash = read("Backend/fastapi/templates/dashboard.html")
+    assert "source_label" in dash
+    # Flood alert: engine registry + plugin sender
+    assert "set_flood_sender" in read("Backend/helper/stream_buffer.py")
+    assert "set_flood_sender" in read("Backend/pyrofork/plugins/dl_link.py")
+    # Disk tier lives in the engine core
+    assert "class DiskTier" in read("Backend/helper/stream_buffer.py")
 
 
 def test_startup_policy_init_seam():

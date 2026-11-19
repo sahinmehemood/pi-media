@@ -762,3 +762,48 @@ async def dl_check_command(client: Client, message: Message):
         await run_check(client, message, target)
     except Exception as e:
         LOGGER.warning(f"[DL] /check failed for message {target.id}: {e}")
+
+
+#----- Flood alerts (Wave 2): the buffer engine aggregates FloodWaits in
+#----- stream_buffer.FloodAlerter; this plugin registers the sender that
+#----- delivers them to the owner. The toggle is read live at send time,
+#----- so enabling/disabling in Settings needs no restart. With the
+#----- toggle off (default) the sender returns immediately.
+async def _flood_alert_sender(event) -> None:
+    try:
+        if not SettingsManager.current().flood_alert_enabled:
+            return
+        owner = getattr(Telegram, "OWNER_ID", 0) or 0
+        if not owner:
+            return
+
+        def _who(idx) -> str:
+            return f"Bot {idx + 1}" if idx >= 0 else "Userbot"
+
+        if event.get("kind") == "flood_summary":
+            clients = ", ".join(_who(c) for c in event.get("clients", [])) or "the pool"
+            text = (
+                "⚠️ <b>FloodWait summary</b>\n"
+                f"{event.get('count')} more waits in the last 10 min "
+                f"(max {event.get('max_wait_s')}s) — {clients}. "
+                "The engine is routing around them."
+            )
+        else:
+            title = str(event.get("title") or "a stream")[:60]
+            text = (
+                f"⚠️ <b>FloodWait</b> — {_who(event.get('client_index', 0))} must wait "
+                f"{event.get('wait_s')}s (while streaming {escape(title)}). "
+                "The engine shed the load to the other bots; no action needed."
+            )
+        await botmod.StreamBot.send_message(
+            owner, text, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        LOGGER.warning(f"[DL] flood alert send failed: {e}")
+
+
+try:
+    from Backend.helper import stream_buffer as _stream_buffer
+
+    _stream_buffer.set_flood_sender(_flood_alert_sender)
+except Exception as _e:  # pragma: no cover - registration must never break the plugin
+    LOGGER.warning(f"[DL] flood alert sender registration failed: {_e}")

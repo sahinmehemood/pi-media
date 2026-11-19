@@ -273,6 +273,9 @@
 
     function getClientLabel(stream) {
         const parts = [];
+        if (stream?.source_label) {
+            parts.push(stream.source_label);
+        }
         if (stream?.client_index !== null && stream?.client_index !== undefined) {
             parts.push('Bot ' + (Number(stream.client_index) + 1));
         }

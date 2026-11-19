@@ -15,8 +15,14 @@ Interface summary
   resolved from settings (profiles + custom values).
 - ``AdaptiveWindow``: per-stream AIMD concurrency controller.
 - ``SpeedTracker``: gated EWMA of finished-stream throughput.
-- ``ChunkCache``: byte-budgeted LRU cache for fetched chunks.
+- ``ChunkCache``: byte-budgeted LRU cache for fetched chunks, with an
+  optional best-effort disk spill tier (``DiskTier``) that survives
+  restarts.
 - ``FloodBudget``: per-stream FloodWait accounting and client shedding.
+- ``DcSpeedTable``: per (client, DC) gated EWMA of fetch throughput,
+  used to break picker ties toward the client fastest to a file's DC.
+- ``FloodAlerter``: aggregates flood events for an optional owner
+  alert; a plugin registers the sender via ``set_flood_sender``.
 - ``BufferMetrics``: counters for the settings-page health block.
 - Module state: ``get_policy()``, ``refresh_policy(data)``, ``get_cache()``,
   ``note_stream_speed(mbps)``, ``snapshot()``.
@@ -24,7 +30,10 @@ Interface summary
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -49,6 +58,7 @@ PROFILES: Dict[str, Dict[str, int]] = {
 DEFAULT_PROFILE = "balanced"
 DEFAULT_STALL_TIMEOUT_S = 90
 DEFAULT_MAX_FLOOD_WAIT_S = 300
+DEFAULT_DISK_CACHE_MB = 512
 
 # Clamp ranges for every numeric setting (the settings API validates with
 # the same ranges and rejects non-integer input before it reaches here).
@@ -59,6 +69,7 @@ RANGES = {
     "buffer_stall_timeout": (15, 600),
     "per_client_cap": (1, 8),
     "max_flood_wait_s": (0, 3600),
+    "buffer_disk_cache_mb": (0, 8192),
 }
 
 
@@ -105,6 +116,7 @@ class BufferPolicy:
     workers: int = 4
     readahead_mb: int = 16
     cache_mb: int = 48
+    disk_cache_mb: int = DEFAULT_DISK_CACHE_MB
     stall_timeout_s: int = DEFAULT_STALL_TIMEOUT_S
     per_client_cap: int = 4
     max_flood_wait_s: int = DEFAULT_MAX_FLOOD_WAIT_S
@@ -119,6 +131,9 @@ class BufferPolicy:
     def cache_budget_bytes(self) -> int:
         return self.cache_mb * MiB
 
+    def disk_cache_bytes(self) -> int:
+        return self.disk_cache_mb * MiB
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "enabled": self.enabled,
@@ -127,6 +142,7 @@ class BufferPolicy:
             "workers": self.workers,
             "readahead_mb": self.readahead_mb,
             "cache_mb": self.cache_mb,
+            "disk_cache_mb": self.disk_cache_mb,
             "stall_timeout_s": self.stall_timeout_s,
             "per_client_cap": self.per_client_cap,
             "max_flood_wait_s": self.max_flood_wait_s,
@@ -167,6 +183,7 @@ def build_policy(data: Optional[Dict[str, Any]] = None) -> BufferPolicy:
         workers=workers,
         readahead_mb=readahead_mb,
         cache_mb=cache_mb,
+        disk_cache_mb=_clamp_key(data, "buffer_disk_cache_mb", DEFAULT_DISK_CACHE_MB),
         stall_timeout_s=_clamp_key(data, "buffer_stall_timeout", DEFAULT_STALL_TIMEOUT_S),
         per_client_cap=per_client_cap,
         max_flood_wait_s=_clamp_key(data, "max_flood_wait_s", DEFAULT_MAX_FLOOD_WAIT_S),
@@ -269,9 +286,185 @@ class SpeedTracker:
         return max(0.5, min(2.0, self._ewma / self._REFERENCE_MBPS))
 
 
-#----- Chunk cache (byte-budgeted LRU)
+#----- Per-(client, DC) speed table
+
+
+class DcSpeedTable:
+    """Gated EWMA of chunk-fetch throughput per (client, data centre).
+
+    A client fast to one Telegram DC can be slow to another; the pool
+    picker consults this table to break ties toward the client that is
+    fastest to the DC the current file actually lives on. Same outlier
+    gating as SpeedTracker, so a broken sample never poisons a cell.
+    """
+
+    _MAX_PLAUSIBLE_MBPS = 2000.0
+
+    def __init__(self, alpha: float = 0.3) -> None:
+        self._alpha = alpha
+        self._ewma: Dict[Tuple[int, int], float] = {}
+
+    def observe(self, client_index: int, dc_id: int, mbps: float) -> bool:
+        """Record one fetch's throughput; True when accepted."""
+        try:
+            value = float(mbps)
+            key = (int(client_index), int(dc_id))
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(value) or value <= 0 or value > self._MAX_PLAUSIBLE_MBPS:
+            return False
+        current = self._ewma.get(key)
+        self._ewma[key] = value if current is None else (
+            self._alpha * value + (1 - self._alpha) * current)
+        return True
+
+    def mbps(self, client_index: int, dc_id: int) -> float:
+        try:
+            return self._ewma.get((int(client_index), int(dc_id)), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def entries(self) -> int:
+        return len(self._ewma)
+
+
+#----- Chunk cache (byte-budgeted LRU, optional disk spill tier)
 
 CacheKey = Tuple[Hashable, int, Hashable]  # (media_id, chunk_size, position)
+
+
+class DiskTier:
+    """Best-effort disk spill tier for the chunk cache.
+
+    One file per chunk under ``root``, named by a hash of the cache key,
+    plus a JSON manifest (name -> [size, last_touch]) that is verified
+    against the real files on load: missing or size-mismatched entries
+    are dropped silently. Every operation swallows its own errors — a
+    disk problem degrades the cache to memory-only, never breaks a
+    stream. Budget 0 disables the tier (and evicts everything).
+    """
+
+    _MANIFEST = "manifest.json"
+
+    def __init__(self, root: str, budget_bytes: int = 0) -> None:
+        self._root = root
+        self._budget = max(0, int(budget_bytes))
+        self._index: Dict[str, Tuple[int, float]] = {}
+        self._size = 0
+        self._loaded = False
+        self._hits = 0
+        self._writes = 0
+
+    @staticmethod
+    def _name_for(key: CacheKey) -> str:
+        return hashlib.sha1(repr(key).encode("utf-8")).hexdigest()
+
+    def _path(self, name: str) -> str:
+        return os.path.join(self._root, name)
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        try:
+            with open(self._path(self._MANIFEST), "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            for name, meta in raw.items():
+                size, touched = int(meta[0]), float(meta[1])
+                if os.path.isfile(self._path(name)) and os.path.getsize(self._path(name)) == size:
+                    self._index[name] = (size, touched)
+                    self._size += size
+        except Exception:
+            self._index = {}
+            self._size = 0
+
+    def _save(self) -> None:
+        try:
+            os.makedirs(self._root, exist_ok=True)
+            tmp = self._path(self._MANIFEST + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({n: [s, t] for n, (s, t) in self._index.items()}, fh)
+            os.replace(tmp, self._path(self._MANIFEST))
+        except Exception:
+            pass
+
+    def _drop(self, name: str) -> None:
+        meta = self._index.pop(name, None)
+        if meta is not None:
+            self._size -= meta[0]
+        try:
+            os.remove(self._path(name))
+        except Exception:
+            pass
+
+    def _evict(self) -> None:
+        while self._size > self._budget and self._index:
+            lru = min(self._index, key=lambda n: self._index[n][1])
+            self._drop(lru)
+
+    def get(self, key: CacheKey) -> Optional[bytes]:
+        if self._budget <= 0:
+            return None
+        self._ensure_loaded()
+        name = self._name_for(key)
+        meta = self._index.get(name)
+        if meta is None:
+            return None
+        try:
+            with open(self._path(name), "rb") as fh:
+                data = fh.read()
+            if len(data) != meta[0]:
+                raise ValueError("size mismatch")
+        except Exception:
+            self._drop(name)
+            self._save()
+            return None
+        self._index[name] = (meta[0], time.time())
+        self._hits += 1
+        return data
+
+    def put(self, key: CacheKey, data: bytes) -> None:
+        if self._budget <= 0 or not data or len(data) > self._budget:
+            return
+        self._ensure_loaded()
+        name = self._name_for(key)
+        try:
+            os.makedirs(self._root, exist_ok=True)
+            tmp = self._path(name + ".tmp")
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, self._path(name))
+        except Exception:
+            return
+        old = self._index.get(name)
+        if old is not None:
+            self._size -= old[0]
+        self._index[name] = (len(data), time.time())
+        self._size += len(data)
+        self._writes += 1
+        self._evict()
+        self._save()
+
+    def resize(self, budget_bytes: int) -> None:
+        self._budget = max(0, int(budget_bytes))
+        self._ensure_loaded()
+        self._evict()
+        self._save()
+
+    def clear(self) -> None:
+        self._ensure_loaded()
+        for name in list(self._index):
+            self._drop(name)
+        self._save()
+
+    def stats(self) -> Dict[str, Any]:
+        return {
+            "budget_bytes": self._budget,
+            "size_bytes": self._size,
+            "entries": len(self._index),
+            "hits": self._hits,
+            "writes": self._writes,
+        }
 
 
 class ChunkCache:
@@ -279,14 +472,20 @@ class ChunkCache:
 
     A chunk larger than the whole budget is never stored. Budget 0 disables
     storage entirely. Single-event-loop use; no locking by design.
+
+    With a DiskTier attached, memory evictions spill the evicted chunk to
+    disk instead of dropping it, and a memory miss consults the disk tier
+    (promoting the chunk back into memory) — so the effective cache
+    survives restarts while the hot set stays in RAM.
     """
 
-    def __init__(self, budget_bytes: int = 0) -> None:
+    def __init__(self, budget_bytes: int = 0, disk: Optional[DiskTier] = None) -> None:
         self._budget = max(0, int(budget_bytes))
         self._entries: "OrderedDict[CacheKey, bytes]" = OrderedDict()
         self._size = 0
         self._hits = 0
         self._misses = 0
+        self._disk = disk
 
     @property
     def budget_bytes(self) -> int:
@@ -294,35 +493,50 @@ class ChunkCache:
 
     def get(self, key: CacheKey) -> Optional[bytes]:
         data = self._entries.get(key)
-        if data is None:
-            self._misses += 1
-            return None
-        self._entries.move_to_end(key)
-        self._hits += 1
-        return data
+        if data is not None:
+            self._entries.move_to_end(key)
+            self._hits += 1
+            return data
+        if self._disk is not None:
+            data = self._disk.get(key)
+            if data is not None:
+                self._hits += 1
+                self._insert(key, data, spill=False)
+                return data
+        self._misses += 1
+        return None
 
     def put(self, key: CacheKey, data: bytes) -> None:
         if self._budget <= 0 or not data or len(data) > self._budget:
             return
+        self._insert(key, data, spill=True)
+
+    def _insert(self, key: CacheKey, data: bytes, spill: bool) -> None:
         existing = self._entries.pop(key, None)
         if existing is not None:
             self._size -= len(existing)
         self._entries[key] = data
         self._size += len(data)
-        self._evict()
+        self._evict(spill=spill)
 
-    def resize(self, budget_bytes: int) -> None:
+    def resize(self, budget_bytes: int, disk_budget_bytes: Optional[int] = None) -> None:
         self._budget = max(0, int(budget_bytes))
-        self._evict()
+        self._evict(spill=True)
+        if disk_budget_bytes is not None and self._disk is not None:
+            self._disk.resize(disk_budget_bytes)
 
     def clear(self) -> None:
         self._entries.clear()
         self._size = 0
+        if self._disk is not None:
+            self._disk.clear()
 
-    def _evict(self) -> None:
+    def _evict(self, spill: bool = True) -> None:
         while self._size > self._budget and self._entries:
-            _, data = self._entries.popitem(last=False)
+            key, data = self._entries.popitem(last=False)
             self._size -= len(data)
+            if spill and self._disk is not None:
+                self._disk.put(key, data)
 
     def stats(self) -> Dict[str, Any]:
         return {
@@ -331,6 +545,7 @@ class ChunkCache:
             "entries": len(self._entries),
             "hits": self._hits,
             "misses": self._misses,
+            "disk": self._disk.stats() if self._disk is not None else None,
         }
 
 
@@ -413,6 +628,95 @@ class FloodBudget:
         return self._spent
 
 
+#----- Flood alerter (aggregated owner alerts, opt-in via a registered sender)
+
+
+class FloodAlerter:
+    """Aggregates flood events so an alert listener is not spammed.
+
+    Only waits >= ``min_wait_s`` qualify (smaller waits are routine).
+    The first qualifying event after a quiet period is returned for
+    immediate delivery; events inside the batch window accumulate and
+    are flushed as one summary by the first event after the window.
+    ``note`` returns the list of event dicts to publish now (0, 1 or 2).
+    Delivery itself is the registered sender's job (see below), so
+    this class stays synchronous and testable.
+    """
+
+    def __init__(self, min_wait_s: float = 10.0, batch_window_s: float = 600.0) -> None:
+        self._min_wait = float(min_wait_s)
+        self._window = float(batch_window_s)
+        self._last_sent = 0.0
+        self._pending: list = []
+
+    def note(self, client_index: int, wait_s: float, title: str = "",
+             now: Optional[float] = None) -> list:
+        if wait_s < self._min_wait:
+            return []
+        now = time.time() if now is None else float(now)
+        event = {
+            "kind": "flood",
+            "client_index": int(client_index),
+            "wait_s": round(float(wait_s), 1),
+            "title": title or "",
+        }
+        if now - self._last_sent >= self._window:
+            out = []
+            if self._pending:
+                out.append(self._summary())
+                self._pending = []
+            out.append(event)
+            self._last_sent = now
+            return out
+        self._pending.append(event)
+        return []
+
+    def _summary(self) -> Dict[str, Any]:
+        return {
+            "kind": "flood_summary",
+            "count": len(self._pending),
+            "max_wait_s": max(e["wait_s"] for e in self._pending),
+            "clients": sorted({e["client_index"] for e in self._pending}),
+        }
+
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+
+_FLOOD_ALERTER = FloodAlerter()
+_FLOOD_SENDER = None
+
+
+def set_flood_sender(fn) -> None:
+    """Register the async callable that delivers flood alert events.
+
+    Registered by a bot plugin at startup; with no sender registered,
+    note_flood still aggregates but publish_flood_event drops events.
+    """
+    global _FLOOD_SENDER
+    _FLOOD_SENDER = fn
+
+
+def get_flood_sender():
+    return _FLOOD_SENDER
+
+
+def note_flood(client_index: int, wait_s: float, title: str = "") -> list:
+    """Feed one flood event; returns event dicts to publish now."""
+    return _FLOOD_ALERTER.note(client_index, wait_s, title)
+
+
+async def publish_flood_event(event: Dict[str, Any]) -> None:
+    """Deliver one alert event via the registered sender (best-effort)."""
+    fn = _FLOOD_SENDER
+    if fn is None:
+        return
+    try:
+        await fn(event)
+    except Exception:
+        pass
+
+
 #----- Metrics
 
 
@@ -453,9 +757,18 @@ class BufferMetrics:
 
 #----- Module state: current policy, shared cache, speed tracker, metrics
 
+def _default_disk_root() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(os.path.dirname(os.path.dirname(here)), ".chunk_cache")
+
+
 _POLICY: BufferPolicy = build_policy(None)
-_CACHE: ChunkCache = ChunkCache(_POLICY.cache_budget_bytes())
+_CACHE: ChunkCache = ChunkCache(
+    _POLICY.cache_budget_bytes(),
+    disk=DiskTier(_default_disk_root(), _POLICY.disk_cache_bytes()),
+)
 _SPEED: SpeedTracker = SpeedTracker()
+_DC_SPEED: DcSpeedTable = DcSpeedTable()
 METRICS = BufferMetrics()
 
 
@@ -467,7 +780,7 @@ def refresh_policy(data: Optional[Dict[str, Any]] = None) -> BufferPolicy:
     """Rebuild the current policy from settings data and resize the cache."""
     global _POLICY
     _POLICY = build_policy(data)
-    _CACHE.resize(_POLICY.cache_budget_bytes())
+    _CACHE.resize(_POLICY.cache_budget_bytes(), _POLICY.disk_cache_bytes())
     return _POLICY
 
 
@@ -477,6 +790,15 @@ def get_cache() -> ChunkCache:
 
 def get_speed_tracker() -> SpeedTracker:
     return _SPEED
+
+
+def get_dc_speed_table() -> DcSpeedTable:
+    return _DC_SPEED
+
+
+def note_dc_speed(client_index: int, dc_id: int, mbps: float) -> bool:
+    """Feed one chunk fetch's throughput to the (client, DC) table."""
+    return _DC_SPEED.observe(client_index, dc_id, mbps)
 
 
 def note_stream_speed(mbps: float) -> bool:
@@ -490,6 +812,7 @@ def snapshot() -> Dict[str, Any]:
         "policy": _POLICY.to_dict(),
         "speed_mbps": round(_SPEED.mbps(), 3),
         "speed_samples": _SPEED.samples(),
+        "dc_speed_entries": _DC_SPEED.entries(),
         "cache": _CACHE.stats(),
         "metrics": METRICS.snapshot(),
     }

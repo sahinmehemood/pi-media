@@ -719,6 +719,16 @@ async def get_stream_stats():
         }
         for info in RECENT_STREAMS
     ]
+    try:
+        from Backend.helper.stream_source import build_source_context, classify_source
+
+        _src_ctx = build_source_context(SettingsManager.current())
+        for _row in active + recent:
+            _src = classify_source(_row.get("chat_id"), _src_ctx)
+            _row["source_label"] = _src["label"]
+            _row["source_kind"] = _src["kind"]
+    except Exception:
+        pass
     return JSONResponse({
         "active_streams": active,
         "recent_streams": recent,

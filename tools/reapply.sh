@@ -23,6 +23,7 @@ REF="${2:-master}"
 PLUGIN_FILES=(
   Backend/helper/stream_buffer.py
   Backend/helper/buffered_streamer.py
+  Backend/helper/stream_source.py
   Backend/pyrofork/plugins/dl_link.py
   tests/_loader.py
   tests/run_all.py
@@ -30,9 +31,11 @@ PLUGIN_FILES=(
   tests/test_buffered_streamer.py
   tests/test_static_seams.py
   tests/test_dl_link.py
+  tests/test_wave2_engine.py
   docs/stream-buffer/DESIGN.md
   docs/dl-link.md
   docs/stream-buffer/README.md
+  docs/wave-2/DESIGN.md
   tools/reapply.sh
   patches/integrate.patch
 )
