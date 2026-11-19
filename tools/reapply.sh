@@ -48,6 +48,7 @@ PLUGIN_FILES=(
   docs/librarian/DESIGN-v5.md
   tools/librarian_cli.py
   tools/media-manager-profile/SOUL.md
+  tools/media-manager-profile/AGENTS.md
   tools/media-manager-profile/memories/MEMORY.md
   tools/media-manager-profile/memories/USER.md
   tools/media-manager-profile/skills/librarian/SKILL.md
@@ -60,6 +61,20 @@ PLUGIN_FILES=(
   tools/media-manager-profile/skills/cartoon-naming/SKILL.md
   tools/media-manager-profile/skills/drama-naming/SKILL.md
   tools/media-manager-profile/skills/telegram-uploaders/SKILL.md
+  tools/media-manager-profile/skills/packet-triage/SKILL.md
+  tools/media-manager-profile/skills/specials-and-arcs/SKILL.md
+  tools/media-manager-profile/skills/quality-and-editions/SKILL.md
+  tools/media-manager-profile/skills/gate-and-apply/SKILL.md
+  tools/media-manager-profile/skills/alias-and-memory-discipline/SKILL.md
+  tools/media-manager-profile/skills/screenshot-evidence/SKILL.md
+  tools/media-manager-profile/skills/self-check-eval/SKILL.md
+  tools/media-manager-profile/skills/failure-playbooks/SKILL.md
+  tools/chief-profile/SOUL.md
+  tools/chief-profile/AGENTS.md
+  tools/chief-profile/memories/MEMORY.md
+  tools/chief-profile/memories/USER.md
+  tools/chief-profile/skills/routing-and-delegation/SKILL.md
+  tools/chief-profile/skills/status-and-digest/SKILL.md
   docs/stream-buffer/DESIGN.md
   docs/dl-link.md
   docs/stream-buffer/README.md

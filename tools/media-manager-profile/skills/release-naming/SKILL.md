@@ -1,12 +1,13 @@
 ---
 name: release-naming
 description: Torrent & scene release-name grammar — tokens, quality, groups
-version: 1.0.0
+version: 2.0.0
 platforms: [linux]
 metadata:
   hermes:
     tags: [torrent, scene, naming, parsing]
     category: media
+    requires_toolsets: [terminal]
 ---
 
 # Release naming — torrent & scene grammar

@@ -1,12 +1,13 @@
 ---
 name: cartoon-naming
 description: Western cartoons — segment episodes, split numbering chaos
-version: 1.0.0
+version: 2.0.0
 platforms: [linux]
 metadata:
   hermes:
     tags: [cartoons, animation, tvdb, tmdb]
     category: media
+    requires_toolsets: [terminal, web]
 ---
 
 # Cartoon naming

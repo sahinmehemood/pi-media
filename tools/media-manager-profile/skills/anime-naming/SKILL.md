@@ -1,12 +1,13 @@
 ---
 name: anime-naming
 description: Anime — fansub anatomy, AniDB/AniList/Kitsu numbering, cours
-version: 1.0.0
+version: 2.0.0
 platforms: [linux]
 metadata:
   hermes:
     tags: [anime, anidb, kitsu, anilist, fansub]
     category: media
+    requires_toolsets: [terminal, web]
 ---
 
 # Anime naming

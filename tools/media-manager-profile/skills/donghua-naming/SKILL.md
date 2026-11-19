@@ -1,12 +1,13 @@
 ---
 name: donghua-naming
 description: Donghua — pinyin titles, named arcs, nian fan, Bangumi-first
-version: 1.0.0
+version: 2.0.0
 platforms: [linux]
 metadata:
   hermes:
     tags: [donghua, bangumi, pinyin, arcs, specials]
     category: media
+    requires_toolsets: [terminal, web]
 ---
 
 # Donghua naming
@@ -67,8 +68,8 @@ gate now refuses that mapping mechanically.)
 4. Fix captions carry: English title (year of the SERIES), SxxExx
    per the chosen provider, the arc name for arc releases, and both
    numbers when continuous numbering differs.
-5. SP-marked files: follow the specials rule (provider-research) —
-   provider's specials list + special title in the note, or ❓.
+5. SP-marked files: follow `specials-and-arcs` — provider's
+   specials list + special title in the note, or ❓.
 
 ## Pitfalls
 

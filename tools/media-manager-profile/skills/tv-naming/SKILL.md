@@ -1,12 +1,13 @@
 ---
 name: tv-naming
 description: Western TV — orderings, packs, multi-episode, daily shows
-version: 1.0.0
+version: 2.0.0
 platforms: [linux]
 metadata:
   hermes:
     tags: [tv, tvdb, seasons, episodes]
     category: media
+    requires_toolsets: [terminal, web]
 ---
 
 # TV naming (Western series)
@@ -46,7 +47,7 @@ note when it is not aired order.
    two — check the episode list; never assume.
 8. **Specials** (Christmas specials, recap episodes, behind-the-
    scenes): TVDB season 0. Name the special's title in the note;
-   see the specials rule in provider-research.
+   full method in `specials-and-arcs`.
 
 ## Pitfalls
 

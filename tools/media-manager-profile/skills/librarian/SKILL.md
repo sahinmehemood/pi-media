@@ -1,26 +1,28 @@
 ---
 name: librarian
-description: Core workflow — fix rejected files via the Librarian API
-version: 2.0.0
+description: Router + core workflow for all Librarian work
+version: 3.0.0
 platforms: [linux]
 metadata:
   hermes:
-    tags: [librarian, telegram, media, workflow]
+    tags: [librarian, telegram, media, workflow, router]
     category: media
     requires_toolsets: [terminal]
 ---
 
-# Librarian — core workflow
+# Librarian — router and core workflow
 
 ## When to Use
 
-Whenever Yan asks you to work on the library, fix rejected files, or
-check the Librarian — and for scheduled digest runs.
+Every library work session: Yan asks you to fix rejected files, work
+a channel, review what's waiting, roll something back — and for
+scheduled digest check-ins. This skill routes the work; the other
+skills carry the detail.
 
 ## Tools
 
-Run everything through the CLI (it reads the API URL + token from your
-profile environment itself):
+Everything runs through the CLI (it reads the API URL + token from
+your profile environment itself):
 
 ```
 python3 ~/librarian-cli.py status
@@ -34,63 +36,87 @@ python3 ~/librarian-cli.py rollback --id <proposal_id>
 Channels: Ani -1004395609351 · Movie -1003981572300 ·
 Series -1003966209940 · Donghua -1004494510060 · Cartoon -1004450903732.
 
-## Procedure
+## Playbooks — pick one, copy its steps, skip nothing silently
 
-1. **Status first.** Run `status`. If `enabled` is false, say so and
-   stop. Note `dry_run`, `auto_apply` (your automation permission:
-   off / safe / all), and today's edit count vs the budget — they
-   bound everything below.
-2. **One channel at a time.** Use the channel Yan named, or ask which.
-   Pull a `packet`. Remember its `packet_id`; items are numbered (`n`).
-3. **Classify every run** in `runs_hint` by media type (the channel is
-   the default) and open the matching naming skill BEFORE deciding:
-   anime / donghua / movie / tv / cartoon / drama. Telegram-uploader
-   habits: `telegram-uploaders`. Identification method:
-   `provider-research`.
-4. **Decide per run, not per file.** A run shares one identification;
-   only the episode numbers differ. Apply the two-source rule
-   (provider-research): two independent sources agree, or the run is
-   ❓ (flag) — never guess.
-5. **Build ONE proposal per run** as plan.json:
-   - Top level: `channel`, `packet_id`, a short `label`, a `note` with
-     your evidence (sources used; for specials, the provider whose
-     specials list you used).
-   - Per item: `n` (the packet number — NEVER a raw key),
-     `seen_caption` (the item's original caption copied EXACTLY from
-     the packet), `media_type`, `tmdb_id` and/or `imdb_id`, `season`,
-     `episode` (or `absolute: true`), `year` when known, and
-     `new_caption` built by the caption contract below.
-   - The server rejects the whole proposal if any echo mismatches —
-     that means you misread the packet; re-pull and rebuild.
-6. **Submit** with `propose`. Read the gate result:
-   - `pending` → the plan is verified; present it (template below).
-   - `gate_failed` → read each item's reason, fix the plan or flag the
-     run ❓ with the reason. Never argue with the gate.
-7. **Present and wait.** Send the proposal digest (template). Do NOT
-   apply until Yan replies ✅ — UNLESS the `propose` result says
-   `auto_apply` is set: then the server is already applying the plan
-   under Yan's Automation setting. In that case do not ask; wait a
-   few seconds, re-check the proposal via `status`/the panel counts,
-   and send the apply report for what was actually fixed.
-8. **Apply** with `apply --id`. Then send the apply report (template)
-   with the Telegram link(s) from the results.
-9. **Close the loop.** Runs you could not decide stay ❓/⛔ in your
-   digest with a one-line reason each. Nothing silently disappears.
+Match the request to ONE playbook. Work its steps in order. If a
+step cannot be done, write `skip: <reason>` in your notes and
+continue — a skipped step is visible, never invisible.
+
+**Playbook A — channel run** (Yan names a channel, or says "fix files")
+1. `status` — permissions noted (AGENTS.md run protocol).
+2. `packet` for the channel → `packet-triage` for batching.
+3. Per run: classify → naming skill → `provider-research` →
+   `specials-and-arcs` if anything is SP-marked or arc-shaped.
+4. Build the plan (contract below) → `self-check-eval` → `propose`.
+5. Present the digest (template). Apply on ✅, or report the
+   server's auto-apply.
+6. Verify counts; close every run as ✅ / ❓ reason / ⛔.
+
+**Playbook B — single title** (Yan names a show/movie, or forwards a file)
+1. `status`. 2. `search` the title to see what the index already
+holds. 3. Pull a packet filtered by the channel it lives in; find
+the run. 4. Continue as Playbook A steps 3–6 for that run only.
+
+**Playbook C — digest check-in** (scheduled run, no human present)
+1. `status`. 2. If the digest setting is Manual, or weekly on a
+non-Monday, or nothing waits and nothing is pending: produce NO
+output at all. 3. Otherwise send the digest template (below) —
+report only; never pull packets, propose, or apply in a check-in.
+
+**Playbook D — rollback** (Yan says a fix was wrong)
+1. Find the proposal (Yan's message, the panel, or `status` counts).
+2. `rollback --id`. 3. Check the alias map for an alias the apply
+taught (`alias-and-memory-discipline`) — a surviving poisoned alias
+is reported to Yan the same message. 4. Report what was restored,
+with the link.
+
+**Playbook E — flagged review** (Yan asks "what's stuck / what needs me")
+1. `status` for counts. 2. Summarise the ❓/⛔ backlog grouped by
+reason (no-match, no-quality, multipart, specials) — counts first,
+top examples only. 3. Offer the next action per group; do not start
+fixing inside a review unless Yan says so.
+
+## The plan contract (propose)
+
+- Top level: `channel`, `packet_id`, short `label`, `note` with the
+  evidence (sources named; for specials, the provider whose specials
+  list was used).
+- Per item: `n` (packet number — NEVER a raw key), `seen_caption`
+  (the item's original caption copied EXACTLY from the packet),
+  `media_type`, `tmdb_id` and/or `imdb_id`, `season`, `episode`
+  (or `absolute: true`), `year` when known, `new_caption` per the
+  caption contract.
+- One proposal per run. A run shares one identification; only
+  episode numbers differ.
+- The server rejects the WHOLE proposal on any echo mismatch — that
+  means you misread the packet. Re-pull, rebuild, do not patch
+  blindly.
 
 ## Caption contract
 
 - First line: `Title (Year) SxxExx Quality` for episodes,
-  `Title (Year) Quality` for movies. Quality is a REAL token from the
-  file (its height, or the quality already in its name) — the app
-  rejects captions with no quality token.
+  `Title (Year) Quality` for movies. Quality is a REAL token from
+  the file (its height, or the quality already in its name) — the
+  app rejects captions with no quality token (`quality-and-editions`).
 - Specials: `S00Exx` form + the special's title where known; donghua
   and dual-numbered shows also carry the arc name and the overall
-  episode number (see donghua-naming).
+  episode number (donghua-naming, specials-and-arcs).
 - Preserve the original caption's other lines after the first line.
 - End with exactly ONE ID tag line, in the app's format:
   `<a href="https://www.imdb.com/title/ttXXXXXXX/">IMDB</a>`
   (IMDb preferred) or the TMDB equivalent.
 - Total caption ≤ 1,000 characters.
+
+## Gate and apply
+
+- `pending` → verified plan; present it.
+- `gate_failed` → read each item's reason (`gate-and-apply`), fix or
+  flag. Never argue with the gate, never route around it.
+- If the `propose` result carries `auto_apply`, the server is
+  applying under Yan's Settings: do not ask, wait a few seconds,
+  re-check, send the apply report for what was actually fixed.
+- After any apply: verify `status` fixed-count moved by exactly the
+  applied number before reporting.
 
 ## Report templates (use exactly)
 
@@ -112,32 +138,31 @@ Apply report:
 Panel shows before/after for every file.
 ```
 
+Digest (check-in):
+
+```
+📚 Librarian — <waiting> waiting · <fixed> fixed so far · <pending> proposal(s) awaiting approval · <today> fixes today
+Reply with a channel name and I will prepare its batch.
+```
+(Second line only when waiting > 0.)
+
 ## Pitfalls
 
-- **Raw file IDs.** Never copy a `key` from a packet into a plan. A
-  plan of yours once captioned the WRONG FILE this way (a post
-  received a completely different show's caption). Numbers + echoes
+- **Raw file IDs.** Never copy a `key` from a packet into a plan —
+  a plan once captioned the WRONG FILE that way. Numbers + echoes
   exist because of that failure.
-- **SP means special.** An SP-numbered arc is not Season N — it is a
-  special structure with its own episode count (see the type
-  skills). The gate refuses SP→season mappings mechanically — do
-  not try to route around it.
-- **Picture dramas / bonus shorts** (decimal-numbered "Turn x.xx"
-  style files) are specials with provider-specific placement:
-  default ❓ unless a provider's specials list settles them.
-- **Decimal episodes** (7.5), **split parts** (Part 1/2 of one
-  episode), and **batch posts** each have rules in the naming skills —
-  check before proposing.
-- **No caption at all:** the file_name is the only evidence; say so in
-  the note.
-- **Personal titles** (negative tmdb_id in the index) are intentional —
-  never "correct" them.
+- **One file at a time.** Yan rejected drip work. Batch by run,
+  report by batch.
+- **Presenting before the gate.** An unverified plan is not shown as
+  ✅. Only `pending` plans are "verified".
+- **Personal titles** (negative tmdb_id in the index) are
+  intentional — never "correct" them.
+- **No caption at all:** the file_name is the only evidence; say so
+  in the note (`quality-and-editions`).
 
 ## Verification
 
-- Every proposal you present has gate status `pending` — quote its
-  proposal_id in your notes to Yan when asked.
-- After apply: `applied` count equals the ✅ count you promised, or
-  the difference is itemised in the apply report.
-- `status` after a run shows `fixed` increased by exactly the applied
-  count.
+- Every ✅ in a digest corresponds to a `pending` proposal_id.
+- Apply report numbers equal the CLI's applied/skipped/failed.
+- Session ends with `status` re-checked: fixed total consistent
+  with everything you reported.

@@ -1,12 +1,13 @@
 ---
 name: movie-naming
 description: Movie identification — years, remakes, editions, franchises
-version: 1.0.0
+version: 2.0.0
 platforms: [linux]
 metadata:
   hermes:
     tags: [movies, tmdb, editions, remakes]
     category: media
+    requires_toolsets: [terminal, web]
 ---
 
 # Movie naming

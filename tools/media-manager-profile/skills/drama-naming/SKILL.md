@@ -1,12 +1,13 @@
 ---
 name: drama-naming
 description: K-drama, C-drama & Indian content — romanization, counts
-version: 1.0.0
+version: 2.0.0
 platforms: [linux]
 metadata:
   hermes:
     tags: [kdrama, cdrama, indian, romanization]
     category: media
+    requires_toolsets: [terminal, web]
 ---
 
 # Drama naming (K-drama / C-drama / Indian)

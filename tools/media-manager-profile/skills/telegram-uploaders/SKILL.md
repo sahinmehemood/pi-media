@@ -1,12 +1,13 @@
 ---
 name: telegram-uploaders
 description: How Telegram uploaders name files — short forms & habits
-version: 1.0.0
+version: 2.0.0
 platforms: [linux]
 metadata:
   hermes:
     tags: [telegram, uploaders, short-forms, captions]
     category: media
+    requires_toolsets: [terminal]
 ---
 
 # Telegram uploaders — naming habits
