@@ -497,6 +497,14 @@ def test_packet_numbers_runs_hint_and_special_flag():
     assert [it for it in res["items"] if it["key"] == "pk0"][0]["special"] is False
 
 
+def test_group_stem_drops_trailing_number_tokens():
+    lib = load_lib()
+    assert lib._group_stem("code geass turn 19 02") == "code geass turn"
+    assert lib._group_stem("alpha show") == "alpha show"
+    assert lib._group_stem("some movie 2") == "some movie"
+    assert lib._group_stem("1899") == "1899"  # all-numeric stem survives
+
+
 def test_submit_numbered_echo_guard():
     lib = load_lib()
     ledger, proposals, packets = _FakeColl(), _FakeColl(), _FakeColl()

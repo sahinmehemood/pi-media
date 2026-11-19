@@ -589,6 +589,17 @@ def _norm_caption(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def _group_stem(stem: str) -> str:
+    """Grouping key for the runs hint: drop trailing pure-number tokens
+    the parser could not read as numbering (e.g. picture-drama decimals
+    'Turn 19.02' -> stem 'code geass turn 19 02' -> group 'code geass
+    turn'), so one work's files land in one run."""
+    tokens = (stem or "").split()
+    while tokens and re.fullmatch(r"\d+(\.\d+)?", tokens[-1]):
+        tokens.pop()
+    return " ".join(tokens) or (stem or "(single)")
+
+
 async def get_packet(channel_id, limit: int = None) -> dict:
     """The next batch of unprocessed failed files for ONE channel, with the
     context the Media Manager needs to decide well: each item's original
@@ -658,7 +669,7 @@ async def get_packet(channel_id, limit: int = None) -> dict:
     runs: dict[str, dict] = {}
     for it in items:
         bits = name_bits(it["caption"], it["file_name"])
-        stem = bits.get("stem") or "(single)"
+        stem = _group_stem(bits.get("stem") or "(single)")
         run = runs.setdefault(stem, {"stem": stem, "numbers": [],
                                      "episodes": [], "special": False})
         run["numbers"].append(it["n"])
