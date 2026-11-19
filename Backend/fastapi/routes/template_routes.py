@@ -341,41 +341,70 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
 
 
 
-#----- Librarian v4: control panel (the bot DM is the working surface)
+#----- Librarian: modular page (registry in helper/librarian.py). The
+# shell renders the header, the sections chooser, and the inline
+# modules (status, channels); below-fold modules load as fragments so
+# a disabled or heavy section costs nothing on page load.
 async def librarian_page(request: Request, _: bool = Depends(require_auth)):
     from Backend.helper import librarian
 
     settings = SettingsManager.current()
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
-    counts = await librarian.panel_counts()
-    ctx["lib_counts"] = counts
-    ctx["lib_proposals"] = await librarian.list_proposals(limit=15)
-    ctx["lib_fixes"] = await librarian.list_audit(limit=15)
-    ctx["lib_aliases"] = await librarian.list_aliases()
-    ctx["lib_flagged"] = await librarian.list_flagged()
+    modules = librarian.enabled_modules(settings.librarian_modules)
+    ctx["lib_modules"] = modules
+    ctx["lib_module_defs"] = librarian.PAGE_MODULES
     ctx["lib_state"] = librarian.ACTION_STATE
     ctx["librarian_enabled"] = settings.librarian_enabled
     ctx["librarian_dry_run"] = settings.librarian_dry_run
     ctx["lib_budget"] = settings.librarian_edit_budget_per_day
-    # Channel rows: id, display name (best effort), files waiting.
-    waiting = counts.get("waiting_by_channel") or {}
-    fixed_by = counts.get("fixed_by_channel") or {}
-    located_by = counts.get("located_by_channel") or {}
-    rows = []
-    # Channel names come from the settings cache (maintained on every
-    # Settings save) — a page render must never call Telegram.
-    titles = settings.channel_titles or {}
-    for ch in settings.auth_channels:
-        stripped = str(ch).replace("-100", "")
-        name = titles.get(str(ch)) or str(ch)
-        w = waiting.get(stripped, 0)
-        scan = (counts.get("scan_by_channel") or {}).get(stripped, {})
-        rows.append({"id": str(ch), "name": name, "waiting": w,
-                     "fixed": fixed_by.get(stripped, 0),
-                     "indexed": scan.get("indexed", 0),
-                     "unindexed": scan.get("unindexed", 0),
-                     "located_pct": (round(100 * located_by.get(stripped, 0) / w)
-                                     if w else None)})
-    ctx["lib_channels"] = rows
+    counts = await librarian.panel_counts()
+    ctx["lib_counts"] = counts
+    if modules.get("channels"):
+        # Channel rows: id, display name, files waiting. Names come
+        # from the settings cache (maintained on every Settings
+        # save) — a page render must never call Telegram.
+        waiting = counts.get("waiting_by_channel") or {}
+        fixed_by = counts.get("fixed_by_channel") or {}
+        located_by = counts.get("located_by_channel") or {}
+        titles = settings.channel_titles or {}
+        rows = []
+        for ch in settings.auth_channels:
+            stripped = str(ch).replace("-100", "")
+            w = waiting.get(stripped, 0)
+            scan = (counts.get("scan_by_channel") or {}).get(stripped, {})
+            rows.append({"id": str(ch),
+                         "name": titles.get(str(ch)) or str(ch),
+                         "waiting": w,
+                         "fixed": fixed_by.get(stripped, 0),
+                         "indexed": scan.get("indexed", 0),
+                         "unindexed": scan.get("unindexed", 0),
+                         "located_pct": (round(100 * located_by.get(stripped, 0) / w)
+                                         if w else None)})
+        ctx["lib_channels"] = rows
     return templates.TemplateResponse("librarian.html", ctx)
+
+
+async def librarian_fragment(request: Request, name: str,
+                             _: bool = Depends(require_auth)):
+    """One below-fold Librarian section, rendered on demand. A module
+    that is off (or unknown) is a 404 — its data is never computed."""
+    from fastapi.responses import HTMLResponse
+
+    from Backend.helper import librarian
+
+    settings = SettingsManager.current()
+    modules = librarian.enabled_modules(settings.librarian_modules)
+    if name not in librarian.FRAGMENT_MODULES or not modules.get(name):
+        return HTMLResponse("Section is off.", status_code=404)
+    ctx = _base_context(request)
+    ctx["current_user"] = get_current_user(request)
+    if name == "proposals":
+        ctx["lib_proposals"] = await librarian.list_proposals(limit=15)
+    elif name == "activity":
+        ctx["lib_fixes"] = await librarian.list_audit(limit=15)
+    elif name == "flagged":
+        ctx["lib_flagged"] = await librarian.list_flagged()
+    elif name == "aliases":
+        ctx["lib_aliases"] = await librarian.list_aliases()
+    return templates.TemplateResponse(f"librarian/_{name}.html", ctx)

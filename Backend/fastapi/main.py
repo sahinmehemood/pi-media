@@ -139,6 +139,7 @@ from Backend.fastapi.routes.template_routes import (
     admin_dashboard_page,
     dl_index_page,
     librarian_page,
+    librarian_fragment,
     admin_requests_page,
     admin_subscriptions_page,
     public_request_page,
@@ -319,6 +320,10 @@ async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
 @app.get("/admin/librarian", response_class=HTMLResponse)
 async def admin_librarian(request: Request, _: bool = Depends(require_auth)):
     return await librarian_page(request, _)
+
+@app.get("/admin/librarian/fragment/{name}", response_class=HTMLResponse)
+async def admin_librarian_fragment(request: Request, name: str, _: bool = Depends(require_auth)):
+    return await librarian_fragment(request, name, _)
 
 @app.post("/api/admin/librarian/action")
 async def librarian_action(payload: dict, _: bool = Depends(require_auth)):

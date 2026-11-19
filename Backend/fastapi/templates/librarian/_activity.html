@@ -1,0 +1,16 @@
+<h2 class="sec-title">Recent fixes</h2>
+{% if not lib_fixes %}
+<div class="glass-card" style="padding:1rem">Nothing fixed yet.</div>
+{% else %}
+{% for f in lib_fixes %}
+<div class="row-item">
+  <div class="row-main">
+    <div class="row-title" style="font-size:.9rem">{{ (f.after or '').split('\n')[0] }}</div>
+    <div class="row-meta">was: {{ (f.before or '—').split('\n')[0] }}</div>
+    <div class="row-meta">{{ f.action }} · <span data-ts="{{ f.ts }}"></span> · {% if f.ok %}verified indexed{% else %}not verified{% endif %}
+      {% if f.chat_id and f.msg_id %} · <a href="https://t.me/c/{{ (f.chat_id|string).replace('-100', '') }}/{{ f.msg_id }}" target="_blank" rel="noopener">View in Telegram</a>{% endif %}</div>
+  </div>
+  {% if f.ok %}<span class="pill pill-on">fixed</span>{% else %}<span class="pill pill-off">check</span>{% endif %}
+</div>
+{% endfor %}
+{% endif %}

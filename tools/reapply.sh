@@ -32,6 +32,10 @@ PLUGIN_FILES=(
   Backend/pyrofork/plugins/prewarm_hooks.py
   Backend/fastapi/templates/dl_index.html
   Backend/fastapi/templates/librarian.html
+  Backend/fastapi/templates/librarian/_proposals.html
+  Backend/fastapi/templates/librarian/_activity.html
+  Backend/fastapi/templates/librarian/_flagged.html
+  Backend/fastapi/templates/librarian/_aliases.html
   tests/_loader.py
   tests/run_all.py
   tests/test_stream_buffer_core.py

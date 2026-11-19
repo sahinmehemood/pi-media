@@ -97,6 +97,7 @@ _DEFAULTS: Dict[str, Any] = {
     "librarian_dry_run": True,
     "librarian_auto_apply_tier_a": False,
     "librarian_auto_apply": "",
+    "librarian_modules": {},
     "librarian_digest": "manual",
     "librarian_edit_budget_per_day": 50,
     "librarian_channels": [],
@@ -507,6 +508,13 @@ class Settings:
         if value in ("off", "safe", "all"):
             return value
         return "safe" if self._d.get("librarian_auto_apply_tier_a") else "off"
+
+    @property
+    def librarian_modules(self) -> dict:
+        """Which Librarian-page sections Yan has chosen (module id ->
+        bool). Merged over the registry defaults by the page handler."""
+        raw = self._d.get("librarian_modules") or {}
+        return raw if isinstance(raw, dict) else {}
 
     @property
     def librarian_digest(self) -> str:

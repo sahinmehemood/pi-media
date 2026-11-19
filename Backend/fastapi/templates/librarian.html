@@ -42,6 +42,23 @@
     Telegram; this page shows what it has done and lets you undo a fix.
   </p>
 
+  {% if librarian_enabled %}
+  <details style="margin-bottom:1rem">
+    <summary style="cursor:pointer;font-size:.85rem;color:var(--text-sec)"><i class="fa-solid fa-sliders"></i> Page sections — show only what you use</summary>
+    <div class="glass-card" style="padding:1rem;margin-top:.5rem">
+      <div style="display:flex;gap:1rem;flex-wrap:wrap">
+        {% for m in lib_module_defs %}
+        <label style="display:inline-flex;align-items:center;gap:.45rem;font-size:.88rem;cursor:pointer">
+          <input type="checkbox" data-module="{{ m.id }}" {% if lib_modules[m.id] %}checked{% endif %}> {{ m.title }}
+        </label>
+        {% endfor %}
+      </div>
+      <button class="btn-ui btn-ghost" style="margin-top:.8rem" onclick="libSaveModules(this)"><i class="fa-solid fa-floppy-disk"></i> Save sections</button>
+      <span class="muted" style="font-size:.78rem;margin-left:.5rem">Sections that are off are not loaded at all — the page stays fast.</span>
+    </div>
+  </details>
+  {% endif %}
+
   {% if not librarian_enabled %}
   <div class="glass-card" style="padding:1.25rem">
     <b>The Librarian is off.</b>
@@ -49,13 +66,16 @@
   </div>
   {% else %}
 
+  {% if lib_modules.status %}
   <div class="stat-grid">
     <div class="glass-card stat-card"><div class="stat-num">{{ lib_counts.waiting }}</div><div class="stat-lbl">files waiting to be fixed</div></div>
     <div class="glass-card stat-card"><div class="stat-num">{{ lib_counts.fixed }}</div><div class="stat-lbl">files fixed so far</div></div>
     <div class="glass-card stat-card"><div class="stat-num">{{ lib_counts.proposals_pending }}</div><div class="stat-lbl">proposals awaiting your approval</div></div>
     <div class="glass-card stat-card"><div class="stat-num">{{ lib_counts.edits_today }}<span class="muted" style="font-size:1rem"> / {{ lib_budget }}</span></div><div class="stat-lbl">edits used today / daily budget</div></div>
   </div>
+  {% endif %}
 
+  {% if lib_modules.channels %}
   <h2 class="sec-title">Channels</h2>
   {% for ch in lib_channels %}
   <div class="row-item">
@@ -71,68 +91,68 @@
     <button class="btn-ui btn-danger" id="lib-stop" style="display:none" onclick="libStop(this)"><i class="fa-solid fa-stop"></i> Stop</button>
     <span id="lib-state" class="muted" style="font-size:.8rem"></span>
   </div>
-
-  <h2 class="sec-title">Proposals</h2>
-  {% if not lib_proposals %}
-  <div class="glass-card" style="padding:1rem">No proposals yet. Once the Media Manager reviews a batch, its proposals appear here — you approve them in the bot's DM.</div>
-  {% else %}
-  {% for p in lib_proposals %}
-  <div class="row-item">
-    <div class="row-main">
-      <div class="row-title">{{ p.label }}</div>
-      <div class="row-meta">{{ p.item_count }} file(s)
-        {% if p.status == 'gate_failed' %} · the app could not verify this plan — the bot has the reasons{% endif %}
-        {% if p.auto_apply_state == 'applied' %} · auto-fixed under your Automation setting{% elif p.auto_apply_state == 'scheduled' %} · auto-fix scheduled{% elif p.auto_apply_state == 'dry_run' %} · auto-fix held by Test mode{% elif p.auto_apply_state == 'failed' %} · auto-fix failed — ask the bot why{% endif %}</div>
-      {% if p.items_detail %}
-      <details style="margin-top:.4rem">
-        <summary style="cursor:pointer;font-size:.78rem;color:var(--text-sec)">Show files (before → after)</summary>
-        {% for d in p.items_detail %}
-        <div style="font-size:.78rem;margin-top:.35rem;word-break:break-word">
-          <span class="muted">was:</span> {{ (d.before or '—').split('\n')[0] }}<br>
-          <span class="muted">now:</span> {{ (d.after or '').split('\n')[0] }}
-          {% if d.reason %}<br><span style="color:var(--danger)">gate: {{ d.reason }}</span>{% endif %}
-        </div>
-        {% endfor %}
-      </details>
-      {% endif %}
-    </div>
-    {% if p.status == 'pending' %}<span class="pill pill-warn">awaiting your approval in Telegram</span>
-    {% elif p.status == 'applied' %}<span class="pill pill-on">applied</span>
-      <button class="btn-ui btn-danger" onclick="libRollback('{{ p._id }}', this)"><i class="fa-solid fa-rotate-left"></i> Roll back</button>
-    {% elif p.status == 'partial' %}<span class="pill pill-warn">partially applied</span>
-      <button class="btn-ui btn-danger" onclick="libRollback('{{ p._id }}', this)"><i class="fa-solid fa-rotate-left"></i> Roll back</button>
-    {% elif p.status == 'gate_failed' %}<span class="pill pill-off">gate failed</span>
-    {% elif p.status == 'rolled_back' %}<span class="pill pill-off">rolled back</span>
-    {% else %}<span class="pill pill-off">{{ p.status }}</span>{% endif %}
-  </div>
-  {% endfor %}
   {% endif %}
 
-  <h2 class="sec-title">Recent fixes</h2>
-  {% if not lib_fixes %}
-  <div class="glass-card" style="padding:1rem">Nothing fixed yet.</div>
-  {% else %}
-  {% for f in lib_fixes %}
-  <div class="row-item">
-    <div class="row-main">
-      <div class="row-title" style="font-size:.9rem">{{ (f.after or '').split('\n')[0] }}</div>
-      <div class="row-meta">was: {{ (f.before or '—').split('\n')[0] }}</div>
-      <div class="row-meta">{{ f.action }} · <span data-ts="{{ f.ts }}"></span> · {% if f.ok %}verified indexed{% else %}not verified{% endif %}
-        {% if f.chat_id and f.msg_id %} · <a href="https://t.me/c/{{ (f.chat_id|string).replace('-100', '') }}/{{ f.msg_id }}" target="_blank" rel="noopener">View in Telegram</a>{% endif %}</div>
-    </div>
-    {% if f.ok %}<span class="pill pill-on">fixed</span>{% else %}<span class="pill pill-off">check</span>{% endif %}
-  </div>
-  {% endfor %}
+  {% if lib_modules.proposals %}
+  <div data-frag="proposals"><p class="muted" style="margin-top:1.2rem">Loading proposals…</p></div>
+  {% endif %}
+
+  {% if lib_modules.activity %}
+  <div data-frag="activity"><p class="muted" style="margin-top:1.2rem">Loading recent fixes…</p></div>
+  {% endif %}
+
+  {% if lib_modules.flagged %}
+  <div data-frag="flagged"><p class="muted" style="margin-top:1.2rem">Loading flagged files…</p></div>
+  {% endif %}
+
+  {% if lib_modules.aliases %}
+  <div data-frag="aliases"><p class="muted" style="margin-top:1.2rem">Loading learned aliases…</p></div>
   {% endif %}
 
   {% endif %}
 </div>
 
 <script>
-  document.querySelectorAll('[data-ts]').forEach(el => {
-    const t = parseFloat(el.getAttribute('data-ts'));
-    if (t) el.textContent = new Date(t * 1000).toLocaleString();
+  function fmtTs(root) {
+    (root || document).querySelectorAll('[data-ts]').forEach(el => {
+      const t = parseFloat(el.getAttribute('data-ts'));
+      if (t) el.textContent = new Date(t * 1000).toLocaleString();
+    });
+  }
+  fmtTs(document);
+  // Below-fold sections load as fragments, only when enabled.
+  document.querySelectorAll('[data-frag]').forEach(async box => {
+    const name = box.getAttribute('data-frag');
+    try {
+      const r = await fetch('/admin/librarian/fragment/' + name);
+      if (r.ok) { box.innerHTML = await r.text(); fmtTs(box); }
+      else { box.innerHTML = ''; }
+    } catch (e) { box.innerHTML = ''; }
   });
+  async function libSaveModules(btn) {
+    const modules = {};
+    document.querySelectorAll('[data-module]').forEach(cb => {
+      modules[cb.getAttribute('data-module')] = cb.checked;
+    });
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'modules', modules});
+    if (res.ok) { location.reload(); }
+    else { alert(res.message || 'Could not save sections.'); if (btn) btn.disabled = false; }
+  }
+  async function libDismiss(key, btn) {
+    if (!confirm('Dismiss this file? The bot will never offer it again.')) return;
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'dismiss', key});
+    if (res.ok) { const row = btn.closest('.row-item'); if (row) row.remove(); }
+    else { alert(res.message || 'Dismiss failed.'); if (btn) btn.disabled = false; }
+  }
+  async function libAliasDelete(id, btn) {
+    if (!confirm('Forget this alias? The bot will identify this uploader from evidence again.')) return;
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'alias_delete', alias_id: id});
+    if (res.ok) { const row = btn.closest('.row-item'); if (row) row.remove(); }
+    else { alert(res.message || 'Delete failed.'); if (btn) btn.disabled = false; }
+  }
   async function libPost(payload) {
     const r = await fetch('/api/admin/librarian/action', {
       method: 'POST', headers: {'Content-Type': 'application/json'},

@@ -1603,6 +1603,37 @@ async def list_flagged(per_reason: int = 8) -> list[dict]:
     return sorted(groups.values(), key=lambda g: -g["count"])
 
 
+# ---------------------------------------------------------------------
+# Page modules: the Librarian page is composed of sections, each one a
+# registry entry Yan can turn on or off from the page itself. The
+# choice persists in the `librarian_modules` setting. Later phases
+# append their sections here (automations, pre-identified, agent).
+# ---------------------------------------------------------------------
+PAGE_MODULES: list[dict] = [
+    {"id": "status", "title": "Status summary", "default": True},
+    {"id": "channels", "title": "Channels & scans", "default": True},
+    {"id": "proposals", "title": "Proposals", "default": True},
+    {"id": "activity", "title": "Recent fixes", "default": True},
+    {"id": "flagged", "title": "Flagged files", "default": False},
+    {"id": "aliases", "title": "Learned aliases", "default": False},
+]
+
+# Sections rendered as lazily-loaded fragments (below the fold); the
+# rest render inline with the page shell.
+FRAGMENT_MODULES = ("proposals", "activity", "flagged", "aliases")
+
+
+def enabled_modules(stored=None) -> dict:
+    """Merge Yan's stored module choices over the registry defaults.
+    Unknown keys are dropped; anything that is not a dict is ignored."""
+    out = {m["id"]: bool(m["default"]) for m in PAGE_MODULES}
+    if isinstance(stored, dict):
+        for key, value in stored.items():
+            if key in out:
+                out[key] = bool(value)
+    return out
+
+
 _COUNTS_CACHE: dict = {"coll": None, "at": 0.0, "data": None}
 _COUNTS_TTL = 15.0
 

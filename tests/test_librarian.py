@@ -386,6 +386,21 @@ def test_packet_scope_selects_scanned_files():
         _unwire(lib, saved)
 
 
+def test_enabled_modules_merge_defaults_and_stored():
+    lib = load_lib()
+    mods = lib.enabled_modules(None)
+    assert mods["status"] is True and mods["channels"] is True
+    assert mods["proposals"] is True and mods["activity"] is True
+    assert mods["flagged"] is False and mods["aliases"] is False
+    merged = lib.enabled_modules({"flagged": True, "proposals": False,
+                                  "bogus": True})
+    assert merged["flagged"] is True
+    assert merged["proposals"] is False
+    assert "bogus" not in merged
+    assert lib.enabled_modules("junk") == mods
+    assert lib.enabled_modules({}) == mods
+
+
 def test_panel_counts_cached_until_invalidated():
     lib = load_lib()
     ledger, locator = _FakeColl(), _FakeColl()

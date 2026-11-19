@@ -327,10 +327,18 @@ def test_librarian_seams():
     assert 'id="lib-stop"' in page
     assert "lib_counts.waiting" in page
     assert "Runs & proposals" not in page
-    # v4.1 visibility: per-file before/after + Telegram deep links.
-    assert "items_detail" in page
-    assert "t.me/c/" in page
-    assert "f.before" in page
+    # v4.1 visibility: per-file before/after + Telegram deep links —
+    # since the modular page (L2) these live in the fragment partials.
+    proposals_frag = read("Backend/fastapi/templates/librarian/_proposals.html")
+    activity_frag = read("Backend/fastapi/templates/librarian/_activity.html")
+    assert "items_detail" in proposals_frag
+    assert "t.me/c/" in activity_frag
+    assert "f.before" in activity_frag
+    # L2 modules: registry, fragment route, sections chooser.
+    assert "PAGE_MODULES" in lib_src
+    assert '"/admin/librarian/fragment/{name}"' in main_py
+    assert "data-module" in page
+    assert "data-frag" in page
 
 
 if __name__ == "__main__":

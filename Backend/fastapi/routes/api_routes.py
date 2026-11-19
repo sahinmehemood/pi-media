@@ -3213,6 +3213,15 @@ async def librarian_action_api(payload: dict) -> dict:
         return await librarian.delete_alias(str(payload.get("alias_id") or ""))
     if action == "dismiss":
         return await librarian.dismiss_item(str(payload.get("key") or ""))
+    if action == "modules":
+        raw = payload.get("modules") or {}
+        clean = {}
+        for m in librarian.PAGE_MODULES:
+            if m["id"] in raw:
+                clean[m["id"]] = bool(raw[m["id"]])
+        await SettingsManager.update(db, {"librarian_modules": clean})
+        return {"ok": True, "modules": librarian.enabled_modules(clean),
+                "message": "Page sections saved."}
     if action == "regen_token":
         import secrets
 
