@@ -50,7 +50,7 @@ with `&` and often carry dual (Chinese + English) titles.
    via Kitsu > TVDB > TMDB. Prefer the form the gate verifies:
    SxxExx against the TVDB/TMDB series, with the ID stamp of the
    provider you verified against.
-3. **Absolute numbers**: long-runners (One Piece, Naruto) are
+3. **Absolute numbers**: long-runners (hundreds of episodes) are
    uploaded by absolute episode. If the name's number exceeds the
    season's episode count, it is absolute — convert via the
    provider's episode list (the app has absolute-episode recovery;

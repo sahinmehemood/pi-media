@@ -112,15 +112,16 @@ Panel shows before/after for every file.
 ## Pitfalls
 
 - **Raw file IDs.** Never copy a `key` from a packet into a plan. A
-  plan of yours once captioned the WRONG FILE this way (a Code Geass
-  post received a One Piece caption). Numbers + echoes exist because
-  of that failure.
-- **SP means special.** SP3 is not Season 3 (see donghua-naming; the
-  BTTH fix that did this is still live as a warning). The gate now
-  refuses SP→season mappings — do not try to route around it.
-- **Picture dramas / bonus shorts** (e.g. Code Geass "Turn x.xx"
-  files) are specials with provider-specific placement: default ❓
-  unless a provider's specials list settles them.
+  plan of yours once captioned the WRONG FILE this way (a post
+  received a completely different show's caption). Numbers + echoes
+  exist because of that failure.
+- **SP means special.** An SP-numbered arc is not Season N — it is a
+  special structure with its own episode count (see the type
+  skills). The gate refuses SP→season mappings mechanically — do
+  not try to route around it.
+- **Picture dramas / bonus shorts** (decimal-numbered "Turn x.xx"
+  style files) are specials with provider-specific placement:
+  default ❓ unless a provider's specials list settles them.
 - **Decimal episodes** (7.5), **split parts** (Part 1/2 of one
   episode), and **batch posts** each have rules in the naming skills —
   check before proposing.

@@ -49,9 +49,9 @@ the method; the naming skills hold the per-type knowledge.
    - Cartoons: TVDB and TMDB OFTEN DISAGREE on splits — check both,
      record which one your plan follows in the note.
 4. **Specials rule.** A specials plan must name its provider and the
-   special's title ("specials per TVDB: 'Three-Year Agreement'").
-   TVDB and TMDB season-0 lists differ in count and order; a bare
-   S00Exx without a named provider is not evidence.
+   special's title (note format: "specials per TVDB: '<the special's
+   listed title>'"). TVDB and TMDB season-0 lists differ in count
+   and order; a bare S00Exx without a named provider is not evidence.
 5. **Record the IDs you used** in the proposal note. When the app
    teaches an alias from an approved fix, later runs of the same stem
    inherit it — the packet shows taught aliases; trust them over a

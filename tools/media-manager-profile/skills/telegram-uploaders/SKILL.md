@@ -20,9 +20,10 @@ skill.
 ## The habits
 
 - **Short forms rule.** Uploaders compress titles to initialisms
-  (BTTH, PW, TOHG, MDZS) or clipped stems ("Kimetsu", "Doupo").
-  Initialisms are channel-local conventions: expand them from the
-  channel's context, the packet's taught aliases, and episode-count
+  (the initials of a romanized title) or clipped stems (just the
+  first word, or first syllables, of a long title). Initialisms are
+  channel-local conventions: expand them from the channel's
+  context, the packet's taught aliases, and episode-count
   evidence — never from the letters alone.
 - **The caption is often NOT the file name.** Quality and numbering
   may live only in the file_name; the caption may be a short form,
