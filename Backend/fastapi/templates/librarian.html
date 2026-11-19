@@ -11,7 +11,6 @@
   .btn-ui.btn-danger { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
   .btn-ui.btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
   .btn-ui.btn-ghost:hover { background: var(--card-high); }
-  .btn-ui.btn-on { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); border-color: color-mix(in srgb, var(--primary) 35%, transparent); }
   .pill { display: inline-flex; align-items: center; gap: .35rem; border-radius: 9999px; padding: .2rem .7rem; font-size: .75rem; font-weight: 600; border: 1px solid var(--border); }
   .pill-on { background: color-mix(in srgb, var(--success, #3fb96f) 15%, transparent); color: var(--success, #3fb96f); }
   .pill-warn { background: color-mix(in srgb, var(--warning, #d9a13b) 15%, transparent); color: var(--warning, #d9a13b); }
@@ -25,9 +24,6 @@
   .row-main { flex: 1 1 220px; min-width: 0; }
   .row-title { font-weight: 600; word-break: break-word; }
   .row-meta { font-size: .75rem; color: var(--text-sec); word-break: break-word; }
-  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .75rem; }
-  .step { padding: .9rem 1rem; }
-  .step b { display: block; margin-bottom: .25rem; }
   .sec-title { font-size: 1.05rem; font-weight: 700; margin: 1.4rem 0 .6rem; }
 </style>
 
@@ -36,22 +32,20 @@
     <h1 style="font-size:1.5rem;font-weight:700;margin:0"><i class="fa-solid fa-book-open"></i> Librarian</h1>
     {% if librarian_enabled %}
       <span class="pill pill-on"><i class="fa-solid fa-circle" style="font-size:.5rem"></i> On</span>
-      {% if librarian_dry_run %}<span class="pill pill-warn">Dry run — plans only, nothing edits</span>{% endif %}
+      {% if librarian_dry_run %}<span class="pill pill-warn">Test mode — plans only, nothing edits</span>{% endif %}
     {% else %}
       <span class="pill pill-off">Off</span>
     {% endif %}
   </div>
   <p class="muted" style="margin:.35rem 0 1rem">
-    The Media Manager bot reviews files whose captions the matcher rejected, works out what they
-    really are, and — after your approval in Telegram — fixes their captions and ID tags so they
-    index properly. This page is just the control panel; the work happens in the bot's DM.
+    The Media Manager bot fixes the captions of files the matcher rejected. You work with it in
+    Telegram; this page shows what it has done and lets you undo a fix.
   </p>
 
   {% if not librarian_enabled %}
   <div class="glass-card" style="padding:1.25rem">
     <b>The Librarian is off.</b>
-    <p class="muted" style="margin:.4rem 0 0">Turn it on in <a href="/admin/settings">Settings → Librarian</a>,
-    then come back here to prepare a channel.</p>
+    <p class="muted" style="margin:.4rem 0 0">Turn it on in <a href="/admin/settings">Settings → Librarian</a>.</p>
   </div>
   {% else %}
 
@@ -62,25 +56,18 @@
     <div class="glass-card stat-card"><div class="stat-num">{{ lib_counts.edits_today }}<span class="muted" style="font-size:1rem"> / {{ lib_budget }}</span></div><div class="stat-lbl">edits used today / daily budget</div></div>
   </div>
 
-  <div class="steps" style="margin-bottom:.5rem">
-    <div class="glass-card step"><b>1 · Prepare a channel</b><span class="muted">Locate the original posts below (one pass per channel).</span></div>
-    <div class="glass-card step"><b>2 · Ask the Media Manager</b><span class="muted">In Telegram, tell the bot which channel to work on. It sends you each series as one proposal.</span></div>
-    <div class="glass-card step"><b>3 · Approve</b><span class="muted">Reply ✅ in the DM and the bot fixes the captions. Every fix is logged here and can be rolled back.</span></div>
-  </div>
-
   <h2 class="sec-title">Channels</h2>
   {% for ch in lib_channels %}
   <div class="row-item">
     <div class="row-main">
       <div class="row-title">{{ ch.name }}</div>
-      <div class="row-meta"><code>{{ ch.id }}</code> · {{ ch.waiting }} waiting · {{ ch.fixed }} fixed{% if ch.located_pct is not none %} · {{ ch.located_pct }}% of waiting files located{% endif %}</div>
+      <div class="row-meta">{{ ch.waiting }} waiting · {{ ch.fixed }} fixed</div>
     </div>
     <button class="btn-ui btn-ghost" onclick="libAction('locator', '{{ ch.id }}', this)"><i class="fa-solid fa-location-crosshairs"></i> Locate originals</button>
   </div>
   {% endfor %}
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem;align-items:center">
     <button class="btn-ui btn-ghost" onclick="libAction('sweep', null, this)"><i class="fa-solid fa-broom"></i> Harvest skip pile</button>
-    <button class="btn-ui btn-ghost" onclick="libAction('audit', null, this)"><i class="fa-solid fa-magnifying-glass"></i> Suspect audit</button>
     <span id="lib-state" class="muted" style="font-size:.8rem"></span>
   </div>
 
@@ -92,7 +79,7 @@
   <div class="row-item">
     <div class="row-main">
       <div class="row-title">{{ p.label }}</div>
-      <div class="row-meta">{{ p.item_count }} file(s) · channel <code>{{ p.channel }}</code>
+      <div class="row-meta">{{ p.item_count }} file(s)
         {% if p.status == 'gate_failed' %} · the app could not verify this plan — the bot has the reasons{% endif %}
         {% if p.auto_apply_state == 'applied' %} · auto-fixed under your Automation setting{% elif p.auto_apply_state == 'scheduled' %} · auto-fix scheduled{% elif p.auto_apply_state == 'dry_run' %} · auto-fix held by Test mode{% elif p.auto_apply_state == 'failed' %} · auto-fix failed — ask the bot why{% endif %}</div>
       {% if p.items_detail %}
@@ -116,49 +103,6 @@
     {% elif p.status == 'gate_failed' %}<span class="pill pill-off">gate failed</span>
     {% elif p.status == 'rolled_back' %}<span class="pill pill-off">rolled back</span>
     {% else %}<span class="pill pill-off">{{ p.status }}</span>{% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  <h2 class="sec-title">Needs a decision</h2>
-  <p class="muted" style="margin:0 0 .6rem;font-size:.85rem">Files still waiting, grouped by why they failed. Dismiss the ones that will never be fixable (corrupt, split files, not media) — the bot stops offering them. Everything else, leave for the bot.</p>
-  {% if not lib_flagged %}
-  <div class="glass-card" style="padding:1rem">Nothing waiting. 🎉</div>
-  {% else %}
-  {% for g in lib_flagged %}
-  <div class="row-item">
-    <div class="row-main">
-      <div class="row-title" style="font-size:.92rem"><code>{{ g.reason_code }}</code> — {{ g.count }} file(s)</div>
-      <details style="margin-top:.35rem">
-        <summary style="cursor:pointer;font-size:.78rem;color:var(--text-sec)">Show sample files</summary>
-        {% for it in g.sample %}
-        <div style="display:flex;gap:.5rem;align-items:flex-start;margin-top:.45rem;flex-wrap:wrap">
-          <div style="flex:1 1 220px;min-width:0;font-size:.78rem;word-break:break-word">
-            {{ it.caption or it.file_name or '(no name)' }}
-            {% if it.reason %}<br><span class="muted">{{ it.reason }}</span>{% endif %}
-          </div>
-          <button class="btn-ui btn-ghost" onclick="libDismiss('{{ it.key }}', this)">Dismiss</button>
-        </div>
-        {% endfor %}
-      </details>
-    </div>
-    <span class="pill pill-warn">{{ g.count }}</span>
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  <h2 class="sec-title">What the bot has learned</h2>
-  <p class="muted" style="margin:0 0 .6rem;font-size:.85rem">Short forms the bot has been taught by your approved fixes. If one is wrong, remove it — the bot will re-identify that name from evidence next time.</p>
-  {% if not lib_aliases %}
-  <div class="glass-card" style="padding:1rem">No aliases taught yet. They appear here as fixes get approved.</div>
-  {% else %}
-  {% for a in lib_aliases %}
-  <div class="row-item">
-    <div class="row-main">
-      <div class="row-title" style="font-size:.92rem"><code>{{ a.stem }}</code> → {{ a.title or '(title id only)' }}</div>
-      <div class="row-meta">channel <code>{{ a.channel }}</code>{% if a.tmdb_id %} · TMDB {{ a.tmdb_id }}{% endif %}{% if a.imdb_id %} · {{ a.imdb_id }}{% endif %}{% if a.media_type %} · {{ a.media_type }}{% endif %} · taught <span data-ts="{{ a.taught_at }}"></span></div>
-    </div>
-    <button class="btn-ui btn-danger" onclick="libAliasDelete('{{ a.id }}', this)"><i class="fa-solid fa-trash"></i> Remove</button>
   </div>
   {% endfor %}
   {% endif %}
@@ -200,20 +144,6 @@
     const el = document.getElementById('lib-state');
     if (el) el.textContent = res.message || res.status || '';
     pollState();
-  }
-  async function libDismiss(key, btn) {
-    if (!confirm('Dismiss this file? The bot will never offer it again.')) return;
-    if (btn) btn.disabled = true;
-    const res = await libPost({action: 'dismiss', key});
-    alert(res.ok ? 'Dismissed.' : (res.message || 'Dismiss failed.'));
-    location.reload();
-  }
-  async function libAliasDelete(id, btn) {
-    if (!confirm('Remove this learned alias?')) return;
-    if (btn) btn.disabled = true;
-    const res = await libPost({action: 'alias_delete', alias_id: id});
-    alert(res.ok ? 'Alias removed.' : (res.message || 'Remove failed.'));
-    location.reload();
   }
   async function libRollback(pid, btn) {
     if (!confirm('Roll back this proposal? Original captions will be restored and the files un-indexed.')) return;

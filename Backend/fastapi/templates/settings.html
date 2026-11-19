@@ -890,25 +890,15 @@
             <p class="s-help">Hard daily cap on caption fixes. 0 = fixes paused.</p>
         </div>
         <div>
-            <label class="s-label" for="librarian_batch_size">Files per batch</label>
-            <input type="number" id="librarian_batch_size" class="s-input" min="1" max="200"
-                value="{{ settings.librarian_batch_size if settings.librarian_batch_size is not none else 60 }}">
-            <p class="s-help">How many files the bot gets at once. Bigger batches = fewer, larger proposals.</p>
+            <label class="s-label" for="librarian_auto_apply">Automatic fixing</label>
+            <select id="librarian_auto_apply" class="s-input">
+                <option value="off" {% if settings.librarian_auto_apply == 'off' %}selected{% endif %}>Off — always ask me first</option>
+                <option value="safe" {% if settings.librarian_auto_apply == 'safe' %}selected{% endif %}>Safe fixes only — verified plans, no specials</option>
+                <option value="all" {% if settings.librarian_auto_apply == 'all' %}selected{% endif %}>All verified fixes</option>
+            </select>
+            <p class="s-help">Only plans the app itself has verified can auto-fix, and the bot still reports everything it did. Test mode and the daily cap still apply.</p>
         </div>
     </div>
-        <details style="margin-top:1rem">
-        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Bot behaviour — check-ins &amp; channels</summary>
-        <div class="s-grid" style="margin-top:.9rem">
-            <div>
-                <label class="s-label" for="librarian_digest">Bot check-ins</label>
-                <select id="librarian_digest" class="s-input">
-                    <option value="manual" {% if settings.librarian_digest == 'manual' %}selected{% endif %}>Only when I ask</option>
-                    <option value="daily" {% if settings.librarian_digest == 'daily' %}selected{% endif %}>Daily summary</option>
-                    <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly summary</option>
-                </select>
-                <p class="s-help">How often the bot offers new work or reports on its own.</p>
-            </div>
-        </div>
         <label class="s-label" style="margin-top:1rem">Channels the bot may work on
             <span style="font-weight:400;text-transform:none;letter-spacing:0">
                 — leave empty to cover every source channel; add channels to restrict the bot to only those.</span>
@@ -930,46 +920,7 @@
                 onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
             <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
         </div>
-    </details>
-    <details style="margin-top:.75rem">
-        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Safety checks — what the verifier blocks</summary>
-        <div class="s-grid" style="margin-top:.9rem">
-            <div>
-                <label class="s-label" for="librarian_specials_policy">Special episodes &amp; arcs</label>
-                <select id="librarian_specials_policy" class="s-input">
-                    <option value="guard" {% if settings.librarian_specials_policy == 'guard' %}selected{% endif %}>Protected — specials must use the provider's Specials list, never a normal season</option>
-                    <option value="off" {% if settings.librarian_specials_policy == 'off' %}selected{% endif %}>Unprotected — no specials check</option>
-                </select>
-                <p class="s-help">A special arc (SP3) is its own structure with its own episode count — filing it as a regular season (S03) is the classic mistake this blocks.</p>
-            </div>
-            <div>
-                <label class="s-label" for="librarian_gate_strict_year">Year must match exactly</label>
-                <label class="toggle-wrap">
-                    <input type="checkbox" class="toggle-input" id="librarian_gate_strict_year"
-                        {% if settings.librarian_gate_strict_year %}checked{% endif %}>
-                    <span class="toggle-track"></span>
-                    <span class="toggle-label">Also reject plans whose claimed year disagrees with the provider's</span>
-                </label>
-            </div>
-        </div>
-    </details>
-    <details style="margin-top:.75rem">
-        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Automation — when the bot may fix without asking</summary>
-        <div class="s-grid" style="margin-top:.9rem">
-            <div>
-                <label class="s-label" for="librarian_auto_apply">Automatic fixing</label>
-                <select id="librarian_auto_apply" class="s-input">
-                    <option value="off" {% if settings.librarian_auto_apply == 'off' %}selected{% endif %}>Off — always ask me first</option>
-                    <option value="safe" {% if settings.librarian_auto_apply == 'safe' %}selected{% endif %}>Safe fixes only — verified plans, no specials</option>
-                    <option value="all" {% if settings.librarian_auto_apply == 'all' %}selected{% endif %}>All verified fixes</option>
-                </select>
-                <p class="s-help">Only plans the app itself has verified can auto-fix, and the bot still reports everything it did. Test mode and the daily cap still apply.</p>
-            </div>
-        </div>
-    </details>
-    <details style="margin-top:.75rem">
-        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">API access — the bot's key</summary>
-        <div class="s-grid" style="margin-top:.9rem">
+        <div class="s-grid" style="margin-top:1rem">
             <div>
                 <label class="s-label" for="librarian_api_token">Bot access key</label>
                 <div style="display:flex;gap:.5rem">
@@ -981,7 +932,6 @@
                 <p class="s-help">Lets the Media Manager bot use the Librarian API (batches, plans, fixes). No streaming or admin access. If you regenerate it, the bot's saved copy stops working until it is updated too.</p>
             </div>
         </div>
-    </details>
 </div>
 
 <!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
@@ -2188,11 +2138,7 @@ async function saveSettings() {
         librarian_enabled:             document.getElementById('librarian_enabled').checked,
         librarian_dry_run:             document.getElementById('librarian_dry_run').checked,
         librarian_auto_apply:          document.getElementById('librarian_auto_apply').value,
-        librarian_digest:              document.getElementById('librarian_digest').value,
         librarian_edit_budget_per_day: parseInt(document.getElementById('librarian_edit_budget_per_day').value, 10) || 0,
-        librarian_batch_size:          parseInt(document.getElementById('librarian_batch_size').value, 10) || 60,
-        librarian_gate_strict_year:    document.getElementById('librarian_gate_strict_year').checked,
-        librarian_specials_policy:     document.getElementById('librarian_specials_policy').value,
         librarian_api_token:           document.getElementById('librarian_api_token').value.trim(),
     };
     const dsEl = document.getElementById('default_streaming');
@@ -2349,11 +2295,7 @@ function renderSettings(s) {
     document.getElementById('librarian_enabled').checked = !!s.librarian_enabled;
     document.getElementById('librarian_dry_run').checked = (s.librarian_dry_run ?? true);
     document.getElementById('librarian_auto_apply').value = (s.librarian_auto_apply ?? (s.librarian_auto_apply_tier_a ? 'safe' : 'off'));
-    document.getElementById('librarian_digest').value = (s.librarian_digest ?? 'manual');
     document.getElementById('librarian_edit_budget_per_day').value = (s.librarian_edit_budget_per_day ?? 50);
-    document.getElementById('librarian_batch_size').value = (s.librarian_batch_size ?? 60);
-    document.getElementById('librarian_gate_strict_year').checked = !!s.librarian_gate_strict_year;
-    document.getElementById('librarian_specials_policy').value = (s.librarian_specials_policy ?? 'guard');
     document.getElementById('librarian_api_token').value = s.librarian_api_token || '';
     toggleBufferFields();
     applyBufferProfile();
