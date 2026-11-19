@@ -143,26 +143,13 @@
 
         <hr class="divider">
 
-        <!-- Live logs -->
+        <!-- Logs: one-tap download only (no on-page viewer) -->
         <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
             <label class="s-label" style="margin-bottom:0">Logs</label>
-            <div class="flex items-center gap-3 flex-wrap">
-                <label class="anime-check" title="Auto-refresh the log every 2s">
-                    <input type="checkbox" id="log-live-toggle" onchange="toggleLiveLogs()">
-                    <span>Live</span>
-                </label>
-                <button class="add-btn" type="button" onclick="loadLogs(this)">
-                    <i class="fa-solid fa-rotate"></i> Refresh
-                </button>
-                <button class="add-btn" type="button" onclick="window.open('/api/admin/logs/download','_blank')">
-                    <i class="fa-solid fa-download"></i> Download
-                </button>
-            </div>
+            <button class="add-btn" type="button" onclick="window.open('/api/admin/logs/download','_blank')">
+                <i class="fa-solid fa-download"></i> Download logs
+            </button>
         </div>
-        <pre id="log-view" style="background:color-mix(in srgb,var(--bg) 80%,#000);border:1px solid var(--border);
-            border-radius:0.75rem;padding:1rem;font-family:'JetBrains Mono',monospace;font-size:0.75rem;
-            line-height:1.5;color:var(--text);max-height:340px;overflow:auto;white-space:pre-wrap;
-            word-break:break-word;margin:0">Loading logs…</pre>
 
         <hr class="divider">
 
@@ -2269,7 +2256,6 @@ const STAT_FIELDS = [
     ['streams', 'Streams'], ['db_size', 'DB Size'],
     ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
 ];
-let logLiveTimer = null;
 
 /* Spin the clicked refresh button's icon while an async action runs */
 function spinIcon(btn, on) {
@@ -2295,32 +2281,6 @@ async function loadDbStats(btn) {
     }
 }
 
-async function loadLogs(btn) {
-    const view = document.getElementById('log-view');
-    spinIcon(btn, true);
-    try {
-        const res = await fetch('/api/admin/logs');
-        const data = await res.json();
-        if (data.status === 'success') {
-            const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 40;
-            view.textContent = data.log || '(log is empty)';
-            if (atBottom) view.scrollTop = view.scrollHeight;
-        } else {
-            view.textContent = data.message || 'Could not read log.';
-        }
-    } catch (e) {
-        view.textContent = 'Network error while loading logs.';
-    } finally {
-        spinIcon(btn, false);
-    }
-}
-
-function toggleLiveLogs() {
-    const on = document.getElementById('log-live-toggle').checked;
-    if (logLiveTimer) { clearInterval(logLiveTimer); logLiveTimer = null; }
-    if (on) { loadLogs(); logLiveTimer = setInterval(loadLogs, 2000); }
-}
-
 async function restartApp() {
     if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
 
@@ -2337,7 +2297,6 @@ async function restartApp() {
     }
 
     // Web app goes down during restart — poll health until start_time changes, then reload.
-    if (logLiveTimer) { clearInterval(logLiveTimer); logLiveTimer = null; }
     const overlay = document.getElementById('restart-overlay');
     overlay.hidden = false;
     document.documentElement.classList.add('rs-lock');
@@ -2385,7 +2344,6 @@ window.addEventListener('DOMContentLoaded', () => {
     toggleDuplicateProtection();
     toggleMediaflowFields();
     loadDbStats();
-    loadLogs();
 });
 </script>
 

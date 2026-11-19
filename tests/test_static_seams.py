@@ -157,6 +157,15 @@ def test_wave2_phase_b_seams():
     assert "offer_pooled" in dl
 
 
+def test_settings_logs_is_download_only():
+    # Yan's call (2026-11-19): no on-page log viewer on the Settings
+    # page — a single one-tap Download logs button, nothing else.
+    page = read("Backend/fastapi/templates/settings.html")
+    assert "log-view" not in page and "loadLogs" not in page
+    assert "toggleLiveLogs" not in page
+    assert page.count("/api/admin/logs/download") == 1
+
+
 def test_startup_policy_init_seam():
     text = read("Backend/__main__.py")
     assert "refresh_policy(SettingsManager.current().to_dict())" in text
