@@ -85,7 +85,10 @@ def test_dl_link_plugin_is_seamless():
     # setup_bot_commands() owns (and wipes) it at every startup.
     assert "set_bot_commands" not in text
     patch = read("patches/integrate.patch")
-    assert "diff --git a/Backend/pyrofork" not in patch  # no seam edits there
+    # No seam edits inside plugins/ — plugin files ship whole. (The
+    # one deliberate pyrofork seam is clients.py: the failed-client
+    # crash fix, asserted in test_clients_failed_start_is_skipped.)
+    assert "diff --git a/Backend/pyrofork/plugins" not in patch
     # The /dl menu entry lives in upstream's commands list instead.
     pyro = read("Backend/helper/pyro.py")
     assert 'BotCommand("dl"' in pyro
@@ -351,3 +354,12 @@ if __name__ == "__main__":
         fn()
         print(f"PASS {fn.__name__}")
     print(f"{len(fns)} static seam tests passed")
+
+
+def test_clients_failed_start_is_skipped():
+    clients = read("Backend/pyrofork/clients.py")
+    assert "_collect_started" in clients
+    assert clients.count("= _collect_started(results)") == 2
+    assert "for client_id, client in results if client" not in clients
+    patch = read("patches/integrate.patch")
+    assert "diff --git a/Backend/pyrofork/clients.py" in patch
