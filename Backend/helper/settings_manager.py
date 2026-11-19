@@ -96,7 +96,7 @@ _DEFAULTS: Dict[str, Any] = {
     "librarian_enabled": False,
     "librarian_dry_run": True,
     "librarian_auto_apply_tier_a": False,
-    "librarian_auto_apply": "off",
+    "librarian_auto_apply": "",
     "librarian_digest": "manual",
     "librarian_edit_budget_per_day": 50,
     "librarian_channels": [],
@@ -499,8 +499,10 @@ class Settings:
     def librarian_auto_apply(self) -> str:
         """The automation ladder (v5): off | safe | all. This setting IS
         the bot's permission to apply fixes without asking in Telegram.
-        Legacy migration: the old tier-a toggle was cosmetic; an owner
-        who had it ON gets 'safe', the behaviour it always promised."""
+        The stored default is "" (unset) on purpose: an explicit 'off'
+        must beat the legacy migration — the old tier-a toggle was
+        cosmetic, and an owner who had it ON gets 'safe', the
+        behaviour it always promised."""
         value = str(self._d.get("librarian_auto_apply") or "").strip().lower()
         if value in ("off", "safe", "all"):
             return value

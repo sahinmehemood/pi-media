@@ -1916,7 +1916,7 @@ index 49c2d40..a274d73 100644
                  LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
              return
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..a8be3f3 100644
+index 2b7712c..f5e0b1c 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,10 @@ from typing import Any, Dict, List
@@ -1970,7 +1970,7 @@ index 2b7712c..a8be3f3 100644
 +    "librarian_enabled": False,
 +    "librarian_dry_run": True,
 +    "librarian_auto_apply_tier_a": False,
-+    "librarian_auto_apply": "off",
++    "librarian_auto_apply": "",
 +    "librarian_digest": "manual",
 +    "librarian_edit_budget_per_day": 50,
 +    "librarian_channels": [],
@@ -2031,7 +2031,7 @@ index 2b7712c..a8be3f3 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +382,167 @@ class Settings:
+@@ -305,6 +382,169 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -2152,8 +2152,10 @@ index 2b7712c..a8be3f3 100644
 +    def librarian_auto_apply(self) -> str:
 +        """The automation ladder (v5): off | safe | all. This setting IS
 +        the bot's permission to apply fixes without asking in Telegram.
-+        Legacy migration: the old tier-a toggle was cosmetic; an owner
-+        who had it ON gets 'safe', the behaviour it always promised."""
++        The stored default is "" (unset) on purpose: an explicit 'off'
++        must beat the legacy migration — the old tier-a toggle was
++        cosmetic, and an owner who had it ON gets 'safe', the
++        behaviour it always promised."""
 +        value = str(self._d.get("librarian_auto_apply") or "").strip().lower()
 +        if value in ("off", "safe", "all"):
 +            return value
@@ -2199,7 +2201,7 @@ index 2b7712c..a8be3f3 100644
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +618,7 @@ class SettingsManager:
+@@ -380,7 +620,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -2208,7 +2210,7 @@ index 2b7712c..a8be3f3 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +765,23 @@ class SettingsManager:
+@@ -527,4 +767,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  
