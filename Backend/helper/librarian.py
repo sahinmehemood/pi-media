@@ -1316,7 +1316,7 @@ async def list_flagged(per_reason: int = 8) -> list[dict]:
     try:
         cursor = coll.find(
             {"status": {"$in": ["open", "unresolved"]}}).sort(
-            "updated_at", -1).limit(500)
+            "updated_at", -1).limit(5000)
         async for doc in cursor:
             docs.append(dict(doc))
     except Exception as e:
