@@ -161,6 +161,9 @@ the existing code so nothing already present is rebuilt.
 
 ## Phase C — DM Link / DL Channel evolution (dl_link.py grows)
 
+(Subtitle sidecar, formerly C4, was dropped by Yan 2026-11-19 —
+not built.)
+
 ### C1. Batch pooling
 - Per-user pending batch in the plugin: files arriving within a
   3 s quiet window — or sharing one media_group_id — pool as a
@@ -187,18 +190,6 @@ the existing code so nothing already present is rebuilt.
   and prunes map entries whose post no longer exists.
 - Sweep results are logged; nothing is deleted while the
   setting is 0.
-
-### C4. Subtitle sidecar
-- Subtitle files (.srt/.vtt/.ass) sent in DM are intercepted
-  before the generic auto-link: replied-to a pooled video, or
-  sent within 10 min of pooling one, the subtitle is pooled
-  too and stored on the video's map doc as sub_msg_id.
-- The bot's reply for such a video includes both links and
-  shows the pairing; the Index shows a "SUB" badge.
-- A standalone subtitle pools as a normal file.
-- Out of scope (stated, not faked): Stremio-native subtitle
-  injection — DL files have no library media id for the
-  addon's subtitle route to key on.
 
 ## Phase D — Update Manager
 
