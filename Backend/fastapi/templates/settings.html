@@ -792,6 +792,77 @@
     </div>
 </div>
 
+<!-- ── Pre-Warm ───────────────────────────────────────────────────── -->
+<div class="settings-card">
+    <h2><i class="fa-solid fa-fire"></i> Pre-Warm</h2>
+    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
+        <i class="fa-solid fa-circle-info"></i>
+        Fetches the start (and end) of files into the streaming cache <strong>before</strong> you press play —
+        the next episode while you watch, files landing in the DL Channel, and new channel posts.
+        Runs only while nothing is playing, one file at a time, inside a hard daily budget.
+        <strong>Off by default</strong>: pre-warming spends bandwidth and battery ahead of need.
+    </p>
+    <div class="s-grid">
+        <div>
+            <label class="s-label" for="prewarm_enabled">Pre-Warm</label>
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="prewarm_enabled"
+                    {% if settings.prewarm_enabled %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">Enable background pre-warming</span>
+            </label>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_profile">Profile</label>
+            <select id="prewarm_profile" class="s-input">
+                <option value="lite" {% if settings.prewarm_profile == 'lite' %}selected{% endif %}>Lite — 8 MB head only</option>
+                <option value="balanced" {% if settings.prewarm_profile == 'balanced' %}selected{% endif %}>Balanced — 24 MB head + 8 MB tail</option>
+                <option value="aggressive" {% if settings.prewarm_profile == 'aggressive' %}selected{% endif %}>Aggressive — next episode (almost) whole</option>
+                <option value="smart" {% if settings.prewarm_profile == 'smart' %}selected{% endif %}>Smart — balanced, backs off on floods / low memory</option>
+            </select>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_trigger_pct">Next-episode trigger (%)</label>
+            <input type="number" id="prewarm_trigger_pct" class="s-input" min="10" max="95"
+                value="{{ settings.prewarm_trigger_pct if settings.prewarm_trigger_pct is not none else 70 }}">
+            <p class="s-help">Warm the next episode once you've watched this much of the current one.</p>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_episodes_ahead">Episodes ahead</label>
+            <input type="number" id="prewarm_episodes_ahead" class="s-input" min="1" max="2"
+                value="{{ settings.prewarm_episodes_ahead if settings.prewarm_episodes_ahead is not none else 1 }}">
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_mb_per_file">Per-file cap (MB, aggressive)</label>
+            <input type="number" id="prewarm_mb_per_file" class="s-input" min="16" max="4096"
+                value="{{ settings.prewarm_mb_per_file if settings.prewarm_mb_per_file is not none else 256 }}">
+            <p class="s-help">Only used by the aggressive profile's whole-episode warms.</p>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_daily_budget_mb">Daily budget (MB)</label>
+            <input type="number" id="prewarm_daily_budget_mb" class="s-input" min="0" max="102400"
+                value="{{ settings.prewarm_daily_budget_mb if settings.prewarm_daily_budget_mb is not none else 2048 }}">
+            <p class="s-help">Hard stop for all pre-warming each day. 0 disables warming.</p>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_only_charging">Only while charging</label>
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="prewarm_only_charging"
+                    {% if settings.prewarm_only_charging %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">Pause pre-warming on battery</span>
+            </label>
+        </div>
+    </div>
+    {% if prewarm_health %}
+    <p style="font-size:0.78rem;color:var(--text-sec);margin-top:0.75rem">
+        Today: <strong>{{ prewarm_health['used_mb_today'] }} / {{ prewarm_health['budget_mb'] }} MB</strong> used ·
+        <strong>{{ prewarm_health['warmed_today'] }}</strong> files warmed ·
+        <strong>{{ prewarm_health['queued'] }}</strong> queued
+    </p>
+    {% endif %}
+</div>
+
 <!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
 <div class="settings-card">
     <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
@@ -1909,6 +1980,13 @@ async function saveSettings() {
         buffer_disk_cache_mb:          parseInt(document.getElementById('buffer_disk_cache_mb').value, 10) || 0,
         buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value, 10) || 90,
         buffer_seek_burst:             document.getElementById('buffer_seek_burst').checked,
+        prewarm_enabled:               document.getElementById('prewarm_enabled').checked,
+        prewarm_profile:               document.getElementById('prewarm_profile').value,
+        prewarm_trigger_pct:           parseInt(document.getElementById('prewarm_trigger_pct').value, 10) || 70,
+        prewarm_episodes_ahead:        parseInt(document.getElementById('prewarm_episodes_ahead').value, 10) || 1,
+        prewarm_mb_per_file:           parseInt(document.getElementById('prewarm_mb_per_file').value, 10) || 256,
+        prewarm_daily_budget_mb:       parseInt(document.getElementById('prewarm_daily_budget_mb').value, 10) || 0,
+        prewarm_only_charging:         document.getElementById('prewarm_only_charging').checked,
         flood_alert_enabled:           document.getElementById('flood_alert_enabled').checked,
     };
     const dsEl = document.getElementById('default_streaming');
@@ -2054,6 +2132,13 @@ function renderSettings(s) {
     document.getElementById('buffer_disk_cache_mb').value = (s.buffer_disk_cache_mb ?? 512);
     document.getElementById('buffer_stall_timeout').value = (s.buffer_stall_timeout ?? 90);
     document.getElementById('buffer_seek_burst').checked = (s.buffer_seek_burst ?? true);
+    document.getElementById('prewarm_enabled').checked = !!s.prewarm_enabled;
+    document.getElementById('prewarm_profile').value = (s.prewarm_profile ?? 'smart');
+    document.getElementById('prewarm_trigger_pct').value = (s.prewarm_trigger_pct ?? 70);
+    document.getElementById('prewarm_episodes_ahead').value = (s.prewarm_episodes_ahead ?? 1);
+    document.getElementById('prewarm_mb_per_file').value = (s.prewarm_mb_per_file ?? 256);
+    document.getElementById('prewarm_daily_budget_mb').value = (s.prewarm_daily_budget_mb ?? 2048);
+    document.getElementById('prewarm_only_charging').checked = !!s.prewarm_only_charging;
     document.getElementById('flood_alert_enabled').checked = !!s.flood_alert_enabled;
     toggleBufferFields();
     applyBufferProfile();

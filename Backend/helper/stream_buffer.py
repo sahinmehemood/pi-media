@@ -720,6 +720,41 @@ async def publish_flood_event(event: Dict[str, Any]) -> None:
         pass
 
 
+#----- Stream progress listener (Pre-Warm trigger source)
+
+_PROGRESS_LISTENER = None
+
+# Marks at which the adapter reports a stream's progress (fraction of
+# the file served). Coarse on purpose: listeners apply their own
+# thresholds, and a stream produces at most len(PROGRESS_MARKS) events.
+PROGRESS_MARKS = (0.25, 0.5, 0.7, 0.9)
+
+
+def set_progress_listener(fn) -> None:
+    """Register the sync callable receiving stream progress events.
+
+    Registered by the Pre-Warm hooks plugin; the callable must be
+    cheap and non-blocking (it runs inside the stream consumer).
+    """
+    global _PROGRESS_LISTENER
+    _PROGRESS_LISTENER = fn
+
+
+def get_progress_listener():
+    return _PROGRESS_LISTENER
+
+
+def notify_progress(event: Dict[str, Any]) -> None:
+    """Forward one progress event to the listener (best-effort)."""
+    fn = _PROGRESS_LISTENER
+    if fn is None:
+        return
+    try:
+        fn(event)
+    except Exception:
+        pass
+
+
 #----- Metrics
 
 

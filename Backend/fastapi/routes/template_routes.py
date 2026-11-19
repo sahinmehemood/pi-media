@@ -268,6 +268,12 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
         buffer_health = _buffer_snapshot()
     except Exception:
         buffer_health = {}
+    try:
+        from Backend.pyrofork.plugins.prewarm_hooks import prewarm_snapshot
+
+        prewarm_health = prewarm_snapshot()
+    except Exception:
+        prewarm_health = {}
     ctx = _base_context(request)
     ctx.update({
         "current_user": get_current_user(request),
@@ -275,5 +281,6 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
         "userbot_configured": botmod.Userbot is not None,
         "formatter_presets": PRESETS,
         "buffer_health": buffer_health,
+        "prewarm_health": prewarm_health,
     })
     return templates.TemplateResponse("settings.html", ctx)

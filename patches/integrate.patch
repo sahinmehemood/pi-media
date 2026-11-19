@@ -18,7 +18,7 @@ index 4b43288..4128675 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index 7d42083..f4bd88a 100644
+index 7d42083..3049187 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -604,6 +604,16 @@ async def get_dead_links_api() -> dict:
@@ -47,7 +47,7 @@ index 7d42083..f4bd88a 100644
      for key in bool_keys:
          if key in payload:
              payload[key] = bool(payload[key])
-@@ -1845,6 +1855,27 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1845,6 +1855,45 @@ async def update_settings_api(payload: dict) -> dict:
          except (ValueError, TypeError):
              payload["fanart_shuffle_interval"] = 5
  
@@ -72,10 +72,28 @@ index 7d42083..f4bd88a 100644
 +    if "buffer_seek_burst" in payload:
 +        payload["buffer_seek_burst"] = bool(payload["buffer_seek_burst"])
 +
++    #----- Pre-Warm: same strict pattern (ranges from prewarm.RANGES)
++    if "prewarm_profile" in payload:
++        if payload["prewarm_profile"] not in ("lite", "balanced", "aggressive", "smart"):
++            raise HTTPException(status_code=400, detail="prewarm_profile must be lite, balanced, aggressive or smart")
++    from Backend.helper.prewarm import RANGES as _prewarm_ranges
++
++    for _key in ("prewarm_mb_per_file", "prewarm_episodes_ahead", "prewarm_trigger_pct", "prewarm_daily_budget_mb"):
++        if _key in payload:
++            _v = payload[_key]
++            if isinstance(_v, bool) or not isinstance(_v, int):
++                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
++            _lo, _hi = _prewarm_ranges[_key]
++            payload[_key] = max(_lo, min(_hi, _v))
++    if "prewarm_enabled" in payload:
++        payload["prewarm_enabled"] = bool(payload["prewarm_enabled"])
++    if "prewarm_only_charging" in payload:
++        payload["prewarm_only_charging"] = bool(payload["prewarm_only_charging"])
++
      if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
          raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
  
-@@ -1925,11 +1956,17 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1925,11 +1974,17 @@ async def update_settings_api(payload: dict) -> dict:
              payload["skip_channel"], "skip channel"
          )
  
@@ -94,7 +112,7 @@ index 7d42083..f4bd88a 100644
      if any(field in payload for field in _channel_fields):
          current = SettingsManager.current()
  
-@@ -1945,6 +1982,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1945,6 +2000,7 @@ async def update_settings_api(payload: dict) -> dict:
              "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
              "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
              "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
@@ -102,7 +120,7 @@ index 7d42083..f4bd88a 100644
          }
  
          allowed_overlap = frozenset({"AUTH", "ANIME"})
-@@ -1966,7 +2004,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1966,7 +2022,7 @@ async def update_settings_api(payload: dict) -> dict:
                  "admin_username", "admin_password", "session_secret", "http_proxy_url",
                  "cf_stream_url", "cf_stream_secret", "cf_stream_mode",
                  "mediaflow_password", "payment_instructions", "payment_qr_url",
@@ -111,7 +129,7 @@ index 7d42083..f4bd88a 100644
          if key in payload and isinstance(payload[key], str):
              payload[key] = payload[key].strip()
  
-@@ -2584,6 +2622,8 @@ def _bot_served_channels() -> list[dict]:
+@@ -2584,6 +2640,8 @@ def _bot_served_channels() -> list[dict]:
          add(s.announcement_channel, "announce")
      if s.skip_channel:
          add(s.skip_channel, "skip")
@@ -200,10 +218,10 @@ index 1dc8c44..aca7a37 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..96e5b27 100644
+index c53ee43..a099da9 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
-@@ -262,11 +262,18 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +262,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -213,6 +231,12 @@ index c53ee43..96e5b27 100644
 +        buffer_health = _buffer_snapshot()
 +    except Exception:
 +        buffer_health = {}
++    try:
++        from Backend.pyrofork.plugins.prewarm_hooks import prewarm_snapshot
++
++        prewarm_health = prewarm_snapshot()
++    except Exception:
++        prewarm_health = {}
      ctx = _base_context(request)
      ctx.update({
          "current_user": get_current_user(request),
@@ -220,6 +244,7 @@ index c53ee43..96e5b27 100644
          "userbot_configured": botmod.Userbot is not None,
          "formatter_presets": PRESETS,
 +        "buffer_health": buffer_health,
++        "prewarm_health": prewarm_health,
      })
      return templates.TemplateResponse("settings.html", ctx)
 diff --git a/Backend/fastapi/templates/admin_dashboard.html b/Backend/fastapi/templates/admin_dashboard.html
@@ -303,10 +328,10 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 2a5a120..f48768f 100644
+index 2a5a120..5cf0518 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
-@@ -693,6 +693,134 @@
+@@ -693,6 +693,205 @@
      {% endif %}
  </div>
  
@@ -409,6 +434,77 @@ index 2a5a120..f48768f 100644
 +    </div>
 +</div>
 +
++<!-- ── Pre-Warm ───────────────────────────────────────────────────── -->
++<div class="settings-card">
++    <h2><i class="fa-solid fa-fire"></i> Pre-Warm</h2>
++    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
++        <i class="fa-solid fa-circle-info"></i>
++        Fetches the start (and end) of files into the streaming cache <strong>before</strong> you press play —
++        the next episode while you watch, files landing in the DL Channel, and new channel posts.
++        Runs only while nothing is playing, one file at a time, inside a hard daily budget.
++        <strong>Off by default</strong>: pre-warming spends bandwidth and battery ahead of need.
++    </p>
++    <div class="s-grid">
++        <div>
++            <label class="s-label" for="prewarm_enabled">Pre-Warm</label>
++            <label class="toggle-wrap">
++                <input type="checkbox" class="toggle-input" id="prewarm_enabled"
++                    {% if settings.prewarm_enabled %}checked{% endif %}>
++                <span class="toggle-track"></span>
++                <span class="toggle-label">Enable background pre-warming</span>
++            </label>
++        </div>
++        <div>
++            <label class="s-label" for="prewarm_profile">Profile</label>
++            <select id="prewarm_profile" class="s-input">
++                <option value="lite" {% if settings.prewarm_profile == 'lite' %}selected{% endif %}>Lite — 8 MB head only</option>
++                <option value="balanced" {% if settings.prewarm_profile == 'balanced' %}selected{% endif %}>Balanced — 24 MB head + 8 MB tail</option>
++                <option value="aggressive" {% if settings.prewarm_profile == 'aggressive' %}selected{% endif %}>Aggressive — next episode (almost) whole</option>
++                <option value="smart" {% if settings.prewarm_profile == 'smart' %}selected{% endif %}>Smart — balanced, backs off on floods / low memory</option>
++            </select>
++        </div>
++        <div>
++            <label class="s-label" for="prewarm_trigger_pct">Next-episode trigger (%)</label>
++            <input type="number" id="prewarm_trigger_pct" class="s-input" min="10" max="95"
++                value="{{ settings.prewarm_trigger_pct if settings.prewarm_trigger_pct is not none else 70 }}">
++            <p class="s-help">Warm the next episode once you've watched this much of the current one.</p>
++        </div>
++        <div>
++            <label class="s-label" for="prewarm_episodes_ahead">Episodes ahead</label>
++            <input type="number" id="prewarm_episodes_ahead" class="s-input" min="1" max="2"
++                value="{{ settings.prewarm_episodes_ahead if settings.prewarm_episodes_ahead is not none else 1 }}">
++        </div>
++        <div>
++            <label class="s-label" for="prewarm_mb_per_file">Per-file cap (MB, aggressive)</label>
++            <input type="number" id="prewarm_mb_per_file" class="s-input" min="16" max="4096"
++                value="{{ settings.prewarm_mb_per_file if settings.prewarm_mb_per_file is not none else 256 }}">
++            <p class="s-help">Only used by the aggressive profile's whole-episode warms.</p>
++        </div>
++        <div>
++            <label class="s-label" for="prewarm_daily_budget_mb">Daily budget (MB)</label>
++            <input type="number" id="prewarm_daily_budget_mb" class="s-input" min="0" max="102400"
++                value="{{ settings.prewarm_daily_budget_mb if settings.prewarm_daily_budget_mb is not none else 2048 }}">
++            <p class="s-help">Hard stop for all pre-warming each day. 0 disables warming.</p>
++        </div>
++        <div>
++            <label class="s-label" for="prewarm_only_charging">Only while charging</label>
++            <label class="toggle-wrap">
++                <input type="checkbox" class="toggle-input" id="prewarm_only_charging"
++                    {% if settings.prewarm_only_charging %}checked{% endif %}>
++                <span class="toggle-track"></span>
++                <span class="toggle-label">Pause pre-warming on battery</span>
++            </label>
++        </div>
++    </div>
++    {% if prewarm_health %}
++    <p style="font-size:0.78rem;color:var(--text-sec);margin-top:0.75rem">
++        Today: <strong>{{ prewarm_health['used_mb_today'] }} / {{ prewarm_health['budget_mb'] }} MB</strong> used ·
++        <strong>{{ prewarm_health['warmed_today'] }}</strong> files warmed ·
++        <strong>{{ prewarm_health['queued'] }}</strong> queued
++    </p>
++    {% endif %}
++</div>
++
 +<!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
 +<div class="settings-card">
 +    <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
@@ -441,7 +537,7 @@ index 2a5a120..f48768f 100644
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1656,6 +1784,37 @@ function toggleWebdavPwdVisibility() {
+@@ -1656,6 +1855,37 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -479,7 +575,7 @@ index 2a5a120..f48768f 100644
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1739,7 +1898,18 @@ async function saveSettings() {
+@@ -1739,7 +1969,25 @@ async function saveSettings() {
          announce_new_content:          document.getElementById('announce_new_content').checked,
          announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
          skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
@@ -494,11 +590,18 @@ index 2a5a120..f48768f 100644
 +        buffer_disk_cache_mb:          parseInt(document.getElementById('buffer_disk_cache_mb').value, 10) || 0,
 +        buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value, 10) || 90,
 +        buffer_seek_burst:             document.getElementById('buffer_seek_burst').checked,
++        prewarm_enabled:               document.getElementById('prewarm_enabled').checked,
++        prewarm_profile:               document.getElementById('prewarm_profile').value,
++        prewarm_trigger_pct:           parseInt(document.getElementById('prewarm_trigger_pct').value, 10) || 70,
++        prewarm_episodes_ahead:        parseInt(document.getElementById('prewarm_episodes_ahead').value, 10) || 1,
++        prewarm_mb_per_file:           parseInt(document.getElementById('prewarm_mb_per_file').value, 10) || 256,
++        prewarm_daily_budget_mb:       parseInt(document.getElementById('prewarm_daily_budget_mb').value, 10) || 0,
++        prewarm_only_charging:         document.getElementById('prewarm_only_charging').checked,
 +        flood_alert_enabled:           document.getElementById('flood_alert_enabled').checked,
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1875,6 +2045,18 @@ function renderSettings(s) {
+@@ -1875,6 +2123,25 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -511,13 +614,20 @@ index 2a5a120..f48768f 100644
 +    document.getElementById('buffer_disk_cache_mb').value = (s.buffer_disk_cache_mb ?? 512);
 +    document.getElementById('buffer_stall_timeout').value = (s.buffer_stall_timeout ?? 90);
 +    document.getElementById('buffer_seek_burst').checked = (s.buffer_seek_burst ?? true);
++    document.getElementById('prewarm_enabled').checked = !!s.prewarm_enabled;
++    document.getElementById('prewarm_profile').value = (s.prewarm_profile ?? 'smart');
++    document.getElementById('prewarm_trigger_pct').value = (s.prewarm_trigger_pct ?? 70);
++    document.getElementById('prewarm_episodes_ahead').value = (s.prewarm_episodes_ahead ?? 1);
++    document.getElementById('prewarm_mb_per_file').value = (s.prewarm_mb_per_file ?? 256);
++    document.getElementById('prewarm_daily_budget_mb').value = (s.prewarm_daily_budget_mb ?? 2048);
++    document.getElementById('prewarm_only_charging').checked = !!s.prewarm_only_charging;
 +    document.getElementById('flood_alert_enabled').checked = !!s.flood_alert_enabled;
 +    toggleBufferFields();
 +    applyBufferProfile();
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1917,6 +2099,15 @@ function renderSettings(s) {
+@@ -1917,6 +2184,15 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -563,18 +673,20 @@ index 0a0418f..a8e0b59 100644
  
  
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 5ba6a9f..a7df7ce 100644
+index 5ba6a9f..17c5476 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
-@@ -5,6 +5,7 @@ from typing import Any, Dict, List
+@@ -5,6 +5,9 @@ from typing import Any, Dict, List
  
  import Backend.pyrofork.bot as botmod
  from Backend.config import Telegram
 +from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
++from Backend.helper.prewarm import PROFILES as _PREWARM_PROFILES
++from Backend.helper.prewarm import RANGES as _PREWARM_RANGES
  from Backend.helper.passwords import hash_password
  from Backend.logger import LOGGER
  
-@@ -47,6 +48,8 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -47,6 +50,8 @@ _DEFAULTS: Dict[str, Any] = {
      "announce_new_content": False,
      "announcement_channel": "",
      "skip_channel": "",
@@ -583,7 +695,7 @@ index 5ba6a9f..a7df7ce 100644
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -62,6 +65,17 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -62,6 +67,24 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -598,10 +710,17 @@ index 5ba6a9f..a7df7ce 100644
 +    "buffer_seek_burst": True,
 +    "buffer_stall_timeout": 90,
 +    "flood_alert_enabled": False,
++    "prewarm_enabled": False,
++    "prewarm_profile": "smart",
++    "prewarm_mb_per_file": 256,
++    "prewarm_episodes_ahead": 1,
++    "prewarm_trigger_pct": 70,
++    "prewarm_daily_budget_mb": 2048,
++    "prewarm_only_charging": False,
  }
  
  
-@@ -169,6 +183,17 @@ class Settings:
+@@ -169,6 +192,17 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -619,7 +738,7 @@ index 5ba6a9f..a7df7ce 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -304,6 +329,60 @@ class Settings:
+@@ -304,6 +338,103 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -677,10 +796,53 @@ index 5ba6a9f..a7df7ce 100644
 +    def flood_alert_enabled(self) -> bool:
 +        return bool(self._d.get("flood_alert_enabled", False))
 +
++    #----- Pre-Warm (ranges shared with prewarm.RANGES; the planner
++    #----- reads settings live on every decision, so changes apply
++    #----- without any restart or rebuild)
++    def _prewarm_int(self, key: str, default: int) -> int:
++        value = self._d.get(key, default)
++        if isinstance(value, bool):
++            return default
++        if isinstance(value, float) and value.is_integer():
++            value = int(value)
++        if not isinstance(value, int):
++            return default
++        low, high = _PREWARM_RANGES[key]
++        return max(low, min(high, value))
++
++    @property
++    def prewarm_enabled(self) -> bool:
++        return bool(self._d.get("prewarm_enabled", False))
++
++    @property
++    def prewarm_profile(self) -> str:
++        profile = str(self._d.get("prewarm_profile") or "smart").strip().lower()
++        return profile if profile in _PREWARM_PROFILES else "smart"
++
++    @property
++    def prewarm_mb_per_file(self) -> int:
++        return self._prewarm_int("prewarm_mb_per_file", 256)
++
++    @property
++    def prewarm_episodes_ahead(self) -> int:
++        return self._prewarm_int("prewarm_episodes_ahead", 1)
++
++    @property
++    def prewarm_trigger_pct(self) -> int:
++        return self._prewarm_int("prewarm_trigger_pct", 70)
++
++    @property
++    def prewarm_daily_budget_mb(self) -> int:
++        return self._prewarm_int("prewarm_daily_budget_mb", 2048)
++
++    @property
++    def prewarm_only_charging(self) -> bool:
++        return bool(self._d.get("prewarm_only_charging", False))
++
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -375,7 +454,7 @@ class SettingsManager:
+@@ -375,7 +506,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -689,7 +851,7 @@ index 5ba6a9f..a7df7ce 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -518,4 +597,23 @@ class SettingsManager:
+@@ -518,4 +649,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  

@@ -128,6 +128,35 @@ def test_wave2_phase_a_seams():
     assert "class DiskTier" in read("Backend/helper/stream_buffer.py")
 
 
+def test_wave2_phase_b_seams():
+    # Core + hooks plugin exist; hooks register the progress listener
+    assert (ROOT / "Backend/helper/prewarm.py").exists()
+    hooks = read("Backend/pyrofork/plugins/prewarm_hooks.py")
+    assert "set_progress_listener" in hooks and "offer_pooled" in hooks
+    assert "group=12" in hooks  # ingest handler runs after the receiver
+    # Adapter: progress marks + pre-warm analytics skip
+    adapter = read("Backend/helper/buffered_streamer.py")
+    assert "notify_progress" in adapter and 'get("prewarm")' in adapter
+    engine = read("Backend/helper/stream_buffer.py")
+    assert "PROGRESS_MARKS" in engine and "set_progress_listener" in engine
+    # Settings end-to-end: defaults, API validation, page card, dl hook
+    sm = read("Backend/helper/settings_manager.py")
+    for key in ("prewarm_enabled", "prewarm_profile", "prewarm_mb_per_file",
+                "prewarm_episodes_ahead", "prewarm_trigger_pct",
+                "prewarm_daily_budget_mb", "prewarm_only_charging"):
+        assert f'"{key}"' in sm, key
+    api = read("Backend/fastapi/routes/api_routes.py")
+    assert "prewarm_profile" in api and "prewarm_daily_budget_mb" in api
+    page = read("Backend/fastapi/templates/settings.html")
+    for cid in ("prewarm_enabled", "prewarm_profile", "prewarm_trigger_pct",
+                "prewarm_episodes_ahead", "prewarm_mb_per_file",
+                "prewarm_daily_budget_mb", "prewarm_only_charging"):
+        assert f'id="{cid}"' in page, cid
+    assert "prewarm_health" in read("Backend/fastapi/routes/template_routes.py")
+    dl = read("Backend/pyrofork/plugins/dl_link.py")
+    assert "offer_pooled" in dl
+
+
 def test_startup_policy_init_seam():
     text = read("Backend/__main__.py")
     assert "refresh_policy(SettingsManager.current().to_dict())" in text

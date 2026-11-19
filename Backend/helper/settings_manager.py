@@ -6,6 +6,8 @@ from typing import Any, Dict, List
 import Backend.pyrofork.bot as botmod
 from Backend.config import Telegram
 from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
+from Backend.helper.prewarm import PROFILES as _PREWARM_PROFILES
+from Backend.helper.prewarm import RANGES as _PREWARM_RANGES
 from Backend.helper.passwords import hash_password
 from Backend.logger import LOGGER
 
@@ -76,6 +78,13 @@ _DEFAULTS: Dict[str, Any] = {
     "buffer_seek_burst": True,
     "buffer_stall_timeout": 90,
     "flood_alert_enabled": False,
+    "prewarm_enabled": False,
+    "prewarm_profile": "smart",
+    "prewarm_mb_per_file": 256,
+    "prewarm_episodes_ahead": 1,
+    "prewarm_trigger_pct": 70,
+    "prewarm_daily_budget_mb": 2048,
+    "prewarm_only_charging": False,
 }
 
 
@@ -382,6 +391,49 @@ class Settings:
     @property
     def flood_alert_enabled(self) -> bool:
         return bool(self._d.get("flood_alert_enabled", False))
+
+    #----- Pre-Warm (ranges shared with prewarm.RANGES; the planner
+    #----- reads settings live on every decision, so changes apply
+    #----- without any restart or rebuild)
+    def _prewarm_int(self, key: str, default: int) -> int:
+        value = self._d.get(key, default)
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if not isinstance(value, int):
+            return default
+        low, high = _PREWARM_RANGES[key]
+        return max(low, min(high, value))
+
+    @property
+    def prewarm_enabled(self) -> bool:
+        return bool(self._d.get("prewarm_enabled", False))
+
+    @property
+    def prewarm_profile(self) -> str:
+        profile = str(self._d.get("prewarm_profile") or "smart").strip().lower()
+        return profile if profile in _PREWARM_PROFILES else "smart"
+
+    @property
+    def prewarm_mb_per_file(self) -> int:
+        return self._prewarm_int("prewarm_mb_per_file", 256)
+
+    @property
+    def prewarm_episodes_ahead(self) -> int:
+        return self._prewarm_int("prewarm_episodes_ahead", 1)
+
+    @property
+    def prewarm_trigger_pct(self) -> int:
+        return self._prewarm_int("prewarm_trigger_pct", 70)
+
+    @property
+    def prewarm_daily_budget_mb(self) -> int:
+        return self._prewarm_int("prewarm_daily_budget_mb", 2048)
+
+    @property
+    def prewarm_only_charging(self) -> bool:
+        return bool(self._d.get("prewarm_only_charging", False))
 
     #----- Lists
     @property

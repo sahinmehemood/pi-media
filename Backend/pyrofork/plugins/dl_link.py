@@ -334,6 +334,13 @@ async def _send_pool_link(client: Client, message: Message, target: Message,
             parse_mode=enums.ParseMode.HTML,
         )
         return
+    # Pre-Warm trigger: a file just landed in the DL Channel.
+    try:
+        from Backend.pyrofork.plugins.prewarm_hooks import offer_pooled
+
+        offer_pooled(dl_id, msg_id, size)
+    except Exception:
+        pass
     encoded = await encode_string(pool_payload(dl_id, msg_id))
     base_url = SettingsManager.current().base_url
     link = build_link(base_url, token, encoded, name)
@@ -446,6 +453,13 @@ async def _send_dl_post_link(client: Client, message: Message, dl_id: int,
     name, size = media
     # Remember the mapping so DMing the same file later dedupes to this post.
     await _dedupe_put(media_unique_id(message), origin_msg_id)
+    # Pre-Warm trigger: this pooled post is being linked right now.
+    try:
+        from Backend.pyrofork.plugins.prewarm_hooks import offer_pooled
+
+        offer_pooled(dl_id, origin_msg_id, size)
+    except Exception:
+        pass
     encoded = await encode_string(pool_payload(dl_id, origin_msg_id))
     base_url = SettingsManager.current().base_url
     link = build_link(base_url, token, encoded, name)

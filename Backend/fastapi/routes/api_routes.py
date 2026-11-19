@@ -1876,6 +1876,24 @@ async def update_settings_api(payload: dict) -> dict:
     if "buffer_seek_burst" in payload:
         payload["buffer_seek_burst"] = bool(payload["buffer_seek_burst"])
 
+    #----- Pre-Warm: same strict pattern (ranges from prewarm.RANGES)
+    if "prewarm_profile" in payload:
+        if payload["prewarm_profile"] not in ("lite", "balanced", "aggressive", "smart"):
+            raise HTTPException(status_code=400, detail="prewarm_profile must be lite, balanced, aggressive or smart")
+    from Backend.helper.prewarm import RANGES as _prewarm_ranges
+
+    for _key in ("prewarm_mb_per_file", "prewarm_episodes_ahead", "prewarm_trigger_pct", "prewarm_daily_budget_mb"):
+        if _key in payload:
+            _v = payload[_key]
+            if isinstance(_v, bool) or not isinstance(_v, int):
+                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
+            _lo, _hi = _prewarm_ranges[_key]
+            payload[_key] = max(_lo, min(_hi, _v))
+    if "prewarm_enabled" in payload:
+        payload["prewarm_enabled"] = bool(payload["prewarm_enabled"])
+    if "prewarm_only_charging" in payload:
+        payload["prewarm_only_charging"] = bool(payload["prewarm_only_charging"])
+
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
 

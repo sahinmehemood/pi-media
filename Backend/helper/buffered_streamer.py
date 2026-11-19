@@ -422,6 +422,16 @@ class BufferedByteStreamer(ByteStreamer):
             producer_task = asyncio.create_task(producer())
             current_part_idx = 1
             disconnect_counter = 0
+            # Progress events (Pre-Warm triggers): fired at coarse marks
+            # of the file served, only when a listener is registered and
+            # this is a real stream (never for pre-warm streams — a warm
+            # must not chain-trigger further warms).
+            progress_marks = ()
+            approx_total = part_count * chunk_size if part_count > 0 and chunk_size > 0 else 0
+            if (approx_total > 0 and not (meta or {}).get("prewarm")
+                    and sb.get_progress_listener() is not None):
+                progress_marks = sb.PROGRESS_MARKS
+            fired_marks = set()
             try:
                 while True:
                     disconnect_counter += 1
@@ -477,6 +487,19 @@ class BufferedByteStreamer(ByteStreamer):
                     else:
                         instant_mbps = 0.0
                     stream_entry["total_bytes"] = stream_entry.get("total_bytes", 0) + chunk_len
+                    if progress_marks:
+                        ratio = stream_entry["total_bytes"] / approx_total
+                        for mark in progress_marks:
+                            if ratio >= mark and mark not in fired_marks:
+                                fired_marks.add(mark)
+                                sb.notify_progress({
+                                    "stream_id": stream_id,
+                                    "chat_id": chat_id,
+                                    "msg_id": message_id,
+                                    "ratio": round(ratio, 3),
+                                    "title": (meta or {}).get("title") or "",
+                                    "meta": meta or {},
+                                })
                     stream_entry["last_ts"] = now_ts
                     total_time = max(now_ts - (stream_entry.get("start_ts") or now_ts), 1e-6)
                     stream_entry["avg_mbps"] = (stream_entry["total_bytes"] / (1024 * 1024)) / total_time
@@ -535,7 +558,8 @@ class BufferedByteStreamer(ByteStreamer):
                     prev = client_avg_mbps.get(client_index, 0.0)
                     client_avg_mbps[client_index] = avg_mbps if prev == 0.0 else 0.5 * prev + 0.5 * avg_mbps
 
-                    asyncio.create_task(db.log_stream_stats(stream_entry))
+                    if not (meta or {}).get("prewarm"):
+                        asyncio.create_task(db.log_stream_stats(stream_entry))
 
                     async def delayed_pop():
                         await asyncio.sleep(3)
