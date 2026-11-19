@@ -237,3 +237,42 @@ itself, and dry-run remains the master brake.
 3. Bangumi lookups need web access from the bot — the profile already
    has web tooling via Hermes; confirm that's acceptable for structure
    checks (captions only, no personal data).
+
+---
+
+# v5.1 ADDENDUM (2026-11-19 ~19:57 IST) — full media-type scope
+
+Yan's correction: v5 was anime-brained. The library is five channels of
+EVERYTHING, and every media type has its own naming culture. The bot's
+first step on any run is now: classify the media type, then follow that
+type's playbook. The skills library grows from 6 to 10:
+
+7. **movie-naming** — year disambiguation; remakes with identical
+   titles; editions (Director's Cut / Extended / Unrated / IMAX /
+   Remastered) as non-recoverable info that must survive in captions;
+   franchise/collection ordering; multi-part films; dubbed vs subbed.
+8. **tv-naming** (Western TV) — season packs; multi-episode files
+   (S01E01-E02); aired vs DVD vs absolute orderings; date-based daily
+   shows; miniseries (filed as TV by TVDB, as movies elsewhere);
+   Part 1/2 finales; series-name aliases and year-suffixed remakes.
+9. **cartoon-naming** — segment episodes (11a/11b); double-length
+   episodes split differently by TVDB vs TMDB; production vs aired
+   order; the general numbering chaos of Western animation.
+10. **drama-naming** — K-drama / C-drama / Indian content:
+    romanization variants with no canonical English form; episode
+    counts that differ per provider; title translations; weekend vs
+    daily drama numbering.
+
+The existing skills (release-naming, anime-naming, donghua-naming,
+telegram-uploaders, provider-research, librarian) stand; the librarian
+skill gains the classify-first step and per-type branches.
+
+## Settings honesty fixes (from Yan's screenshot, 2026-11-19 19:50 IST)
+
+- The **API token field must be masked** (password-style with reveal),
+  never plaintext on screen.
+- The Phase-1 **auto-apply toggle is cosmetic** — it must not pretend.
+  Phase 3 replaces it with the real `librarian_auto_apply` ladder;
+  until then its label will say it is not yet active, or it is removed.
+- The Librarian card's Advanced sprawl is replaced by the grouped,
+  properly collapsed layout of Section 6.
