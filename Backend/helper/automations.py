@@ -86,22 +86,22 @@ def job_def(job_id: str) -> dict | None:
 # ---------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------
-def _cfg_coll():
+def _tracking():
     try:
         from Backend import db
-        tdb = db.get_tracking_db()
-        return tdb["automations"] if tdb is not None else None
+        return (getattr(db, "dbs", None) or {}).get("tracking")
     except Exception:
         return None
+
+
+def _cfg_coll():
+    tdb = _tracking()
+    return tdb["automations"] if tdb is not None else None
 
 
 def _runs_coll():
-    try:
-        from Backend import db
-        tdb = db.get_tracking_db()
-        return tdb["automation_runs"] if tdb is not None else None
-    except Exception:
-        return None
+    tdb = _tracking()
+    return tdb["automation_runs"] if tdb is not None else None
 
 
 async def get_config(job_id: str) -> dict:

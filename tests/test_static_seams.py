@@ -373,3 +373,13 @@ def test_automations_imports_logger_from_backend_logger():
     text = read("Backend/helper/automations.py")
     assert "from Backend.logger import LOGGER" in text
     assert "from Backend import LOGGER" not in text
+
+
+def test_automations_uses_real_tracking_accessor():
+    # Regression guard: db.get_tracking_db() does not exist on the
+    # Database class — calling it silently disabled ALL automations
+    # persistence in production (configs never saved, runs never
+    # recorded) while the stubbed unit tests stayed green.
+    text = read("Backend/helper/automations.py")
+    assert "get_tracking_db" not in text
+    assert 'get("tracking")' in text
