@@ -131,7 +131,7 @@
       <div class="row-title" style="font-size:.92rem"><code>{{ g.reason_code }}</code> — {{ g.count }} file(s)</div>
       <details style="margin-top:.35rem">
         <summary style="cursor:pointer;font-size:.78rem;color:var(--text-sec)">Show sample files</summary>
-        {% for it in g.items %}
+        {% for it in g.sample %}
         <div style="display:flex;gap:.5rem;align-items:flex-start;margin-top:.45rem;flex-wrap:wrap">
           <div style="flex:1 1 220px;min-width:0;font-size:.78rem;word-break:break-word">
             {{ it.caption or it.file_name or '(no name)' }}

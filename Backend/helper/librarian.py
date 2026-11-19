@@ -1401,12 +1401,15 @@ async def list_flagged(per_reason: int = 8) -> list[dict]:
     groups: dict[str, dict] = {}
     for d in docs:
         code = d.get("reason_code") or "unknown"
+        # NB: the sample list is keyed "sample", never "items" — in
+        # Jinja, dict.items resolves to the dict METHOD, which crashed
+        # the control-room page render (2026-11-19).
         g = groups.setdefault(code, {"reason_code": code, "count": 0,
-                                     "items": []})
+                                     "sample": []})
         g["count"] += 1
-        if len(g["items"]) < per_reason:
+        if len(g["sample"]) < per_reason:
             loc = located.get(d["_id"]) or {}
-            g["items"].append(_jsonable({
+            g["sample"].append(_jsonable({
                 "key": d["_id"],
                 "caption": ((loc.get("caption") or d.get("caption") or "")
                             .split("\n")[0]),

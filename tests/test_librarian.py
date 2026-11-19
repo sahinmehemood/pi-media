@@ -724,7 +724,7 @@ def test_list_flagged_groups_by_reason():
         groups = run(lib.list_flagged())
         assert [g["reason_code"] for g in groups] == ["no-match", "no-quality"]
         assert groups[0]["count"] == 2 and groups[1]["count"] == 1
-        assert groups[0]["items"][0]["caption"] == "A E01"
+        assert groups[0]["sample"][0]["caption"] == "A E01"
     finally:
         _unwire(lib, saved)
 
