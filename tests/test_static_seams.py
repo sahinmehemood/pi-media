@@ -179,6 +179,16 @@ def test_wave2_phase_c_seams():
     assert "/admin/dl-index" in read("Backend/fastapi/templates/base.html")
 
 
+def test_health_fixes_seams():
+    # TMDB: themoviedb v2 wants api_key= (key= crashes client builds)
+    tmdb = read("Backend/helper/metadata/providers/tmdb.py")
+    assert "aioTMDb(api_key=current_key" in tmdb
+    assert "aioTMDb(key=" not in tmdb
+    # Base URL check: loopback fallback before reporting an error
+    health = read("Backend/helper/health.py")
+    assert "127.0.0.1" in health and "does not resolve on the server itself" in health
+
+
 def test_settings_logs_is_download_only():
     # Yan's call (2026-11-19): no on-page log viewer on the Settings
     # page — a single one-tap Download logs button, nothing else.

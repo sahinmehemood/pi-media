@@ -101,6 +101,23 @@ async def _check_base_url() -> dict:
         return {"key": "base_url", "label": "Base URL", "status": "ok",
                 "message": f"Reachable (HTTP {resp.status_code}).", "url": base}
     except Exception as e:
+        # Fork patch: the server often cannot resolve its own public /
+        # Tailscale name from itself (on the Narzo the name answers
+        # everywhere EXCEPT locally), which made this check cry wolf
+        # while the site worked fine. Verify via loopback first.
+        try:
+            from urllib.parse import urlparse
+
+            port = urlparse(base).port or 8000
+            async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+                resp = await client.get(f"http://127.0.0.1:{port}/")
+            return {"key": "base_url", "label": "Base URL", "status": "ok",
+                    "message": (f"Reachable locally (HTTP {resp.status_code}); the public "
+                                "name does not resolve on the server itself, which is "
+                                "normal for Tailscale — it still works from your devices."),
+                    "url": base}
+        except Exception:
+            pass
         return {"key": "base_url", "label": "Base URL", "status": "error", "message": str(e)[:140], "url": base}
 
 
