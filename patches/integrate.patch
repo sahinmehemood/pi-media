@@ -151,7 +151,7 @@ index 9ae7925..eeaa78e 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..0d25b9a 100644
+index e6d9542..6d4654d 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -535,7 +535,7 @@ index e6d9542..0d25b9a 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3124,206 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3124,251 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -628,6 +628,42 @@ index e6d9542..0d25b9a 100644
 +        return await librarian.delete_alias(str(payload.get("alias_id") or ""))
 +    if action == "dismiss":
 +        return await librarian.dismiss_item(str(payload.get("key") or ""))
++    if action == "approve":
++        return await librarian.apply_proposal(
++            str(payload.get("proposal_id") or ""), approver="yan-page")
++    if action == "reject":
++        return await librarian.reject_proposal(
++            str(payload.get("proposal_id") or ""))
++    if action == "candidate_clear":
++        return await librarian.clear_candidate(str(payload.get("key") or ""))
++    if action == "bot_state":
++        state = str(payload.get("state") or "").strip().lower()
++        if state not in ("active", "paused", "killed"):
++            return {"status": "error", "message": "Unknown bot state."}
++        await SettingsManager.update(db, {"librarian_bot_state": state})
++        return {"ok": True, "state": state,
++                "message": f"Media Manager is now {state}."}
++    if action == "policies":
++        channel = str(payload.get("channel") or "")
++        if not channel:
++            return {"status": "error", "message": "A channel is required."}
++        auto = str(payload.get("auto") or "inherit")
++        if auto not in librarian.POLICY_AUTO_LEVELS:
++            return {"status": "error", "message": "Unknown auto level."}
++        scopes = {}
++        raw_scopes = payload.get("scopes") or {}
++        for s in librarian.POLICY_SCOPES:
++            value = str(raw_scopes.get(s) or "allow")
++            if value not in librarian.POLICY_SCOPE_LEVELS:
++                return {"status": "error",
++                        "message": f"Unknown level for scope {s}."}
++            scopes[s] = value
++        stored = dict(SettingsManager.current().librarian_channel_policies)
++        stored[channel] = {"auto": auto, "scopes": scopes}
++        await SettingsManager.update(
++            db, {"librarian_channel_policies": stored})
++        return {"ok": True, "message": "Channel policy saved.",
++                "policy": librarian.resolve_channel_policy(stored, channel)}
 +    if action == "job_run":
 +        from Backend.helper import automations
 +        return automations.run_now(str(payload.get("job") or ""))
@@ -666,12 +702,14 @@ index e6d9542..0d25b9a 100644
 +        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
 +    from Backend.helper import librarian
 +
++    await librarian.record_bot_activity("status")
 +    settings = SettingsManager.current()
 +    return {
 +        "enabled": settings.librarian_enabled,
 +        "dry_run": settings.librarian_dry_run,
 +        "auto_apply": settings.librarian_auto_apply,
 +        "digest": settings.librarian_digest,
++        "bot_state": settings.librarian_bot_state,
 +        "counts": await librarian.panel_counts(),
 +        "action_state": librarian.ACTION_STATE,
 +    }
@@ -691,6 +729,7 @@ index e6d9542..0d25b9a 100644
 +    except ValueError:
 +        limit = None
 +    scope = request.query_params.get("scope") or "waiting"
++    await librarian.record_bot_activity("packet")
 +    return await librarian.get_packet(channel, limit, scope)
 +
 +
@@ -700,6 +739,7 @@ index e6d9542..0d25b9a 100644
 +    from Backend.helper import librarian
 +
 +    payload = await request.json()
++    await librarian.record_bot_activity("proposals")
 +    return await librarian.submit_proposal(payload)
 +
 +
@@ -709,6 +749,11 @@ index e6d9542..0d25b9a 100644
 +    from Backend.helper import librarian
 +
 +    payload = await request.json()
++    await librarian.record_bot_activity("apply")
++    if librarian.bot_state() == "killed":
++        return {"ok": False,
++                "message": "The bot is stopped (killed) from the "
++                           "Librarian page — applies are refused."}
 +    return await librarian.apply_proposal(
 +        str(payload.get("proposal_id") or ""),
 +        approver=str(payload.get("approver") or "yan"))
@@ -822,7 +867,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..9519c95 100644
+index c53ee43..4286948 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -886,7 +931,7 @@ index c53ee43..9519c95 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -262,11 +316,99 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +316,135 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -985,6 +1030,42 @@ index c53ee43..9519c95 100644
 +        from Backend.helper import automations
 +        ctx["lib_jobs"] = await automations.jobs_view()
 +        ctx["lib_schedule_labels"] = automations.SCHEDULE_LABELS
++    elif name == "agent":
++        import time as _time
++
++        activity = await librarian.bot_activity()
++        last_seen = float(activity.get("last_seen") or 0)
++        age = _time.time() - last_seen if last_seen else None
++        if age is None:
++            presence = "never seen"
++        elif age < 120:
++            presence = "online now"
++        elif age < 3600:
++            presence = "idle"
++        else:
++            presence = "away"
++        ctx["lib_bot"] = {
++            "state": settings.librarian_bot_state,
++            "activity": activity,
++            "last_seen": last_seen,
++            "presence": presence,
++            "counts": await librarian.panel_counts(),
++            "auto_apply": settings.librarian_auto_apply,
++            "dry_run": settings.librarian_dry_run,
++        }
++        stored = settings.librarian_channel_policies
++        titles = settings.channel_titles or {}
++        ctx["lib_policy_rows"] = [
++            {"id": ch,
++             "name": titles.get(str(ch)) or str(ch),
++             "policy": librarian.resolve_channel_policy(stored, ch)}
++            for ch in settings.auth_channels]
++        ctx["lib_pending"] = [
++            p for p in await librarian.list_proposals(limit=15)
++            if p.get("status") == "pending"]
++        ctx["lib_fixes"] = await librarian.list_audit(limit=10)
++    elif name == "preidentified":
++        ctx["lib_preidentified"] = await librarian.list_preidentified()
 +    return templates.TemplateResponse(f"librarian/_{name}.html", ctx)
 diff --git a/Backend/fastapi/templates/admin_dashboard.html b/Backend/fastapi/templates/admin_dashboard.html
 index 914b18b..3d989fc 100644
@@ -1921,7 +2002,7 @@ index 49c2d40..a274d73 100644
                  LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
              return
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..696543c 100644
+index 2b7712c..611ae45 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,10 @@ from typing import Any, Dict, List
@@ -1950,7 +2031,7 @@ index 2b7712c..696543c 100644
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -63,6 +75,36 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -63,6 +75,38 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -1977,6 +2058,8 @@ index 2b7712c..696543c 100644
 +    "librarian_auto_apply_tier_a": False,
 +    "librarian_auto_apply": "",
 +    "librarian_modules": {},
++    "librarian_channel_policies": {},
++    "librarian_bot_state": "active",
 +    "librarian_digest": "manual",
 +    "librarian_edit_budget_per_day": 50,
 +    "librarian_channels": [],
@@ -1987,7 +2070,7 @@ index 2b7712c..696543c 100644
  }
  
  
-@@ -158,6 +200,17 @@ class Settings:
+@@ -158,6 +202,17 @@ class Settings:
      def announce_new_content(self) -> bool:
          return bool(self._d.get("announce_new_content", False))
  
@@ -2005,7 +2088,7 @@ index 2b7712c..696543c 100644
      @property
      def delete_on_metadata_fail(self) -> bool:
          return bool(self._d.get("delete_on_metadata_fail", False))
-@@ -170,6 +223,31 @@ class Settings:
+@@ -170,6 +225,31 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -2037,7 +2120,7 @@ index 2b7712c..696543c 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +383,176 @@ class Settings:
+@@ -305,6 +385,192 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -2175,6 +2258,22 @@ index 2b7712c..696543c 100644
 +        return raw if isinstance(raw, dict) else {}
 +
 +    @property
++    def librarian_channel_policies(self) -> dict:
++        """Per-channel permission matrix for the Media Manager:
++        {channel_id: {"auto": inherit|off|safe|all, "scopes":
++        {"waiting"|"indexed"|"unindexed": allow|ask|deny}}}."""
++        raw = self._d.get("librarian_channel_policies") or {}
++        return raw if isinstance(raw, dict) else {}
++
++    @property
++    def librarian_bot_state(self) -> str:
++        """The Hermes agent panel's master control for the Media
++        Manager: active | paused (no new work) | killed (no bot API
++        work at all until Yan restarts it)."""
++        value = str(self._d.get("librarian_bot_state") or "active").strip().lower()
++        return value if value in ("active", "paused", "killed") else "active"
++
++    @property
 +    def librarian_digest(self) -> str:
 +        value = str(self._d.get("librarian_digest") or "manual").strip().lower()
 +        return value if value in ("manual", "daily", "weekly") else "manual"
@@ -2214,7 +2313,7 @@ index 2b7712c..696543c 100644
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +628,7 @@ class SettingsManager:
+@@ -380,7 +646,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -2223,7 +2322,7 @@ index 2b7712c..696543c 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +775,23 @@ class SettingsManager:
+@@ -527,4 +793,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  
@@ -2272,6 +2371,49 @@ index aed6a5c..08d538a 100644
 +        await record_from_message(message, origin)
 +    except Exception:
 +        pass
+diff --git a/Backend/pyrofork/clients.py b/Backend/pyrofork/clients.py
+index 4ae9cb1..0303daf 100644
+--- a/Backend/pyrofork/clients.py
++++ b/Backend/pyrofork/clients.py
+@@ -64,6 +64,20 @@ async def stop_client(client_id: int) -> None:
+             LOGGER.warning(f"Error stopping Client {client_id}: {e}")
+ 
+ 
++def _collect_started(results) -> dict:
++    """Map client_id -> client from start_client results. Failures
++    come back as None (already logged) and are skipped — one bad bot
++    login must never take the whole app down."""
++    started = {}
++    for item in results:
++        if not item:
++            continue
++        client_id, client = item
++        if client:
++            started[client_id] = client
++    return started
++
++
+ #----- Bring up the main client plus every configured extra client
+ async def initialize_clients() -> None:
+     multi_clients[0], work_loads[0] = StreamBot, 0
+@@ -84,7 +98,7 @@ async def initialize_clients() -> None:
+     tasks = [create_task(start_client(i, token)) for i, token in all_tokens.items()]
+     results = await gather(*tasks)
+ 
+-    started = {client_id: client for client_id, client in results if client}
++    started = _collect_started(results)
+     multi_clients.update(started)
+     for client_id, token in all_tokens.items():
+         if client_id in started:
+@@ -112,7 +126,7 @@ async def reload_multi_token_clients() -> dict:
+     if to_start:
+         tasks = [create_task(start_client(cid, tok)) for cid, tok in to_start.items()]
+         results = await gather(*tasks)
+-        started = {cid: client for cid, client in results if client}
++        started = _collect_started(results)
+         multi_clients.update(started)
+         for cid, tok in to_start.items():
+             if cid in started:
 diff --git a/README.md b/README.md
 index 96c31cd..4210ee6 100644
 --- a/README.md
