@@ -387,6 +387,8 @@ def test_gate_passes_and_fails_on_numbering():
         ledger.docs["k1"].pop("proposal_id", None)
         res2 = run(lib.submit_proposal(_plan(episode=7)))
         assert res2["ok"] is True and res2["status"] == "gate_failed", res2
+        # A gate-failed plan releases its items back to the pool.
+        assert ledger.docs["k1"].get("proposal_id") is None
     finally:
         entry.metadata = None
         _unwire(lib, saved)

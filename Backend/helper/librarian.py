@@ -830,6 +830,12 @@ async def submit_proposal(payload: dict) -> dict:
     status = "pending" if gate.get("ok") else "gate_failed"
     await coll.update_one({"_id": pid},
                           {"$set": {"gate": gate, "status": status}})
+    if status == "gate_failed" and ledger is not None:
+        # A rejected plan must not strand its items: release them back
+        # to the pool so a corrected plan can pick them up.
+        for it in clean_items:
+            await ledger.update_one({"_id": it["key"]},
+                                    {"$set": {"proposal_id": None}})
     doc.update({"gate": gate, "status": status})
     return {"ok": True, "proposal_id": pid, "status": status, "gate": gate}
 
