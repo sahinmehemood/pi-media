@@ -18,18 +18,25 @@ index 4b43288..4128675 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 4ee25b8..f71ba53 100644
+index 4ee25b8..aeeafb4 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
-@@ -70,6 +70,7 @@ from Backend.fastapi.routes.api_routes import (
+@@ -70,8 +70,14 @@ from Backend.fastapi.routes.api_routes import (
      get_system_stats_api,
      get_tools_channels_api,
      bot_admin_scan_api,
 +    dl_index_action_api,
      bot_admin_apply_api,
      bot_admin_apply_status_api,
++    update_manager_check_api,
++    update_manager_deploy_api,
++    update_manager_rollback_api,
++    update_manager_stage_api,
++    update_manager_status_api,
      clear_manual_session_api,
-@@ -123,6 +124,7 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+     search_manual_session_api,
+     set_manual_session_api,
+@@ -123,6 +129,7 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
  from Backend.fastapi.routes.template_routes import (
      admin_access_page,
      admin_dashboard_page,
@@ -37,7 +44,7 @@ index 4ee25b8..f71ba53 100644
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -292,6 +294,14 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -292,6 +299,14 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -52,8 +59,35 @@ index 4ee25b8..f71ba53 100644
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
+@@ -808,6 +823,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+ async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
+     return await bot_admin_apply_status_api()
+ 
++@app.get("/api/admin/tools/update-manager/status")
++async def tools_update_manager_status(_: bool = Depends(require_auth)):
++    return await update_manager_status_api()
++
++@app.post("/api/admin/tools/update-manager/check")
++async def tools_update_manager_check(_: bool = Depends(require_auth)):
++    return await update_manager_check_api()
++
++@app.post("/api/admin/tools/update-manager/stage")
++async def tools_update_manager_stage(_: bool = Depends(require_auth)):
++    return await update_manager_stage_api()
++
++@app.post("/api/admin/tools/update-manager/deploy")
++async def tools_update_manager_deploy(_: bool = Depends(require_auth)):
++    return await update_manager_deploy_api()
++
++@app.post("/api/admin/tools/update-manager/rollback")
++async def tools_update_manager_rollback(_: bool = Depends(require_auth)):
++    return await update_manager_rollback_api()
++
+ @app.get("/api/admin/tools/manual-session")
+ async def tools_manual_session_get(_: bool = Depends(require_auth)):
+     return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index 7d42083..e57eaf1 100644
+index 7d42083..6f8b363 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -604,6 +604,16 @@ async def get_dead_links_api() -> dict:
@@ -239,6 +273,69 @@ index 7d42083..e57eaf1 100644
      return [mapping[k] for k in order]
  
  
+@@ -2872,3 +2989,62 @@ async def bot_admin_apply_status_api() -> dict:
+             "error": st["error"],
+         },
+     }
++
++
++# ── Update Manager (Wave 2 Phase D) ────────────────────────────────
++# Check / Stage & Test / Deploy / Roll back for upstream updates.
++# All git work happens in Backend.helper.update_manager (stdlib-only);
++# long operations run on a background task and the Tools page polls
++# the status endpoint, same shape as the Bot Admin apply flow.
++
++_update_run_state: dict = {"running": False, "action": ""}
++
++
++async def _um_background(fn) -> None:
++    try:
++        await asyncio.to_thread(fn)
++    except Exception:
++        pass
++    finally:
++        _update_run_state.update({"running": False, "action": ""})
++
++
++def _um_start(action: str, fn) -> dict:
++    if _update_run_state["running"]:
++        raise HTTPException(status_code=409, detail="An update operation is already running.")
++    _update_run_state.update({"running": True, "action": action})
++    asyncio.create_task(_um_background(fn))
++    return {"status": "started", "action": action}
++
++
++async def update_manager_status_api() -> dict:
++    from Backend.helper import update_manager as um
++
++    snap = await asyncio.to_thread(um.status_snapshot)
++    snap["running"] = _update_run_state["running"]
++    snap["action"] = _update_run_state["action"]
++    return {"status": "success", "data": snap}
++
++
++async def update_manager_check_api() -> dict:
++    from Backend.helper import update_manager as um
++
++    return _um_start("check", um.do_check)
++
++
++async def update_manager_stage_api() -> dict:
++    from Backend.helper import update_manager as um
++
++    return _um_start("stage", um.do_stage)
++
++
++async def update_manager_deploy_api() -> dict:
++    from Backend.helper import update_manager as um
++
++    return _um_start("deploy", um.do_deploy)
++
++
++async def update_manager_rollback_api() -> dict:
++    from Backend.helper import update_manager as um
++
++    return _um_start("rollback", um.do_rollback)
 diff --git a/Backend/fastapi/routes/stream_routes.py b/Backend/fastapi/routes/stream_routes.py
 index 1ec874f..2a35d71 100644
 --- a/Backend/fastapi/routes/stream_routes.py
@@ -907,6 +1004,126 @@ index 2a5a120..e1e858a 100644
  });
  </script>
  
+diff --git a/Backend/fastapi/templates/tools.html b/Backend/fastapi/templates/tools.html
+index a642921..4c852bd 100644
+--- a/Backend/fastapi/templates/tools.html
++++ b/Backend/fastapi/templates/tools.html
+@@ -314,6 +314,37 @@
+         <p class="hint mt-3" id="scan-error" style="color:var(--danger);display:none"></p>
+     </div>
+ 
++    <!-- ══ Update Manager ════════════════════════════════════════════ -->
++    <div class="tool-card">
++        <div class="flex items-center justify-between flex-wrap gap-2">
++            <h2 style="margin-bottom:0"><i class="fa-solid fa-code-branch"></i> Update Manager</h2>
++            <span id="um-pill" class="status-pill status-idle">Idle</span>
++        </div>
++
++        <p class="hint mt-3 mb-4">
++            Update this fork when the official Telegram-Stremio releases changes. The fork is
++            re-applied and fully tested in a staging copy first — the live install is only
++            moved after a green test run, and the previous build stays one tap away.
++        </p>
++
++        <div class="flex items-center gap-2 flex-wrap mb-3">
++            <button class="btn btn-ghost" type="button" id="um-check-btn" onclick="umAct('check')">
++                <i class="fa-solid fa-magnifying-glass"></i> Check
++            </button>
++            <button class="btn btn-ghost" type="button" id="um-stage-btn" onclick="umAct('stage')">
++                <i class="fa-solid fa-flask"></i> Stage &amp; Test
++            </button>
++            <button class="btn btn-primary" type="button" id="um-deploy-btn" onclick="umAct('deploy')" disabled>
++                <i class="fa-solid fa-rocket"></i> Deploy
++            </button>
++            <button class="btn btn-ghost" type="button" id="um-rollback-btn" onclick="umAct('rollback')" disabled>
++                <i class="fa-solid fa-rotate-left"></i> Roll back
++            </button>
++        </div>
++
++        <div id="um-report" class="hint" style="white-space:normal">Loading update status…</div>
++    </div>
++
+     <!-- ══ Bot Admin Manager ════════════════════════════════════════════ -->
+     <div class="tool-card">
+         <div class="flex items-center justify-between flex-wrap gap-2">
+@@ -1230,6 +1261,77 @@ const BA_SESSION = {
+     unknown:           '<span class="ba-cell ba-muted"><i class="fa-solid fa-question"></i> Unknown</span>',
+ };
+ 
++// ── Update Manager ──────────────────────────────────────────────
++let umTimer = null;
++
++function umEsc(s) { const d = document.createElement('div'); d.textContent = (s == null ? '' : String(s)); return d.innerHTML; }
++
++async function umLoad() {
++    try {
++        const res = await fetch('/api/admin/tools/update-manager/status');
++        const j = await res.json();
++        umRender(j.data || {});
++        if (j.data && j.data.running) { if (!umTimer) umTimer = setInterval(umLoad, 2500); }
++        else if (umTimer) { clearInterval(umTimer); umTimer = null; }
++    } catch (e) { /* transient — next manual refresh retries */ }
++}
++
++function umRender(d) {
++    const pill = document.getElementById('um-pill');
++    const phase = d.phase || 'idle';
++    const busy = !!d.running || ['checking', 'staging', 'deploying', 'rolling_back'].includes(phase);
++    const green = phase === 'deployed' || phase === 'rolled_back' || (phase === 'tested' && d.stage && d.stage.green);
++    const red = phase === 'error' || (phase === 'tested' && d.stage && !d.stage.green);
++    pill.textContent = d.running ? (d.action + '…') : phase;
++    pill.className = 'status-pill ' + (red ? 'status-error' : (busy || green) ? 'status-running' : 'status-idle');
++
++    document.getElementById('um-check-btn').disabled = !!d.running;
++    document.getElementById('um-stage-btn').disabled = !!d.running;
++    document.getElementById('um-deploy-btn').disabled = !!d.running || !d.deploy_armed;
++    document.getElementById('um-rollback-btn').disabled = !!d.running || !d.rollback_available;
++
++    let h = '';
++    if (!d.staging_present) h += '<p>⚠ Staging clone not found on this device — updates can be checked from the workstation instead.</p>';
++    if (d.message) h += '<p>' + umEsc(d.message) + '</p>';
++    if (d.commits_ahead) {
++        h += '<p><strong>' + d.commits_ahead + ' upstream commit(s)</strong> — base ' + umEsc((d.base || '').slice(0, 10)) + ' → upstream ' + umEsc((d.upstream_head || '').slice(0, 10)) + '</p>';
++        if (d.risky_files && d.risky_files.length) {
++            h += '<p>⚠ <strong>Risk:</strong> upstream changed ' + d.risky_files.length + ' file(s) this fork also edits:</p><ul style="margin:0.2rem 0 0.6rem 1.1rem;font-family:monospace;font-size:0.8rem">'
++               + d.risky_files.map(f => '<li>' + umEsc(f) + '</li>').join('') + '</ul>';
++        } else {
++            h += '<p>No fork-edited files touched upstream — low breakage risk.</p>';
++        }
++        if (d.commits && d.commits.length) {
++            h += '<ul style="margin:0.2rem 0 0.6rem 1.1rem;font-family:monospace;font-size:0.8rem">'
++               + d.commits.slice(0, 15).map(c => '<li>' + umEsc(c) + '</li>').join('') + '</ul>';
++        }
++    } else if (phase === 'checked') {
++        h += '<p>Fork base ' + umEsc((d.base || '').slice(0, 10)) + ' matches upstream ' + umEsc((d.upstream_head || '').slice(0, 10)) + '.</p>';
++    }
++    if (d.stage) {
++        h += '<p><strong>Stage &amp; Test: ' + (d.stage.green ? 'GREEN ✅' : 'RED ❌') + '</strong>'
++           + (d.stage.tests ? ' — suite: ' + d.stage.tests.passed + ' passed, ' + d.stage.tests.failed + ' failed' : '') + '</p>';
++        h += '<ul style="margin:0.2rem 0 0.6rem 1.1rem;font-size:0.85rem">'
++           + (d.stage.steps || []).map(s => '<li>' + (s.ok ? '✓' : '✗') + ' ' + umEsc(s.name)
++             + (s.ok ? '' : '<br><span style="font-family:monospace;font-size:0.75rem">' + umEsc((s.detail || '').slice(-400)) + '</span>') + '</li>').join('') + '</ul>';
++    }
++    if (d.previous_head) h += '<p>Rollback point: <span style="font-family:monospace">' + umEsc(d.previous_head.slice(0, 10)) + '</span></p>';
++    document.getElementById('um-report').innerHTML = h || 'No update check run yet.';
++}
++
++async function umAct(action) {
++    if (action === 'deploy' && !confirm('Deploy the tested update now? The app will restart.')) return;
++    if (action === 'rollback' && !confirm('Roll back to the previous build? The app will restart.')) return;
++    try {
++        const res = await fetch('/api/admin/tools/update-manager/' + action, { method: 'POST' });
++        if (!res.ok) { const j = await res.json().catch(() => ({})); showToast(j.detail || 'Could not start.', 'error', 'Update Manager'); }
++    } catch (e) { showToast('Could not start.', 'error', 'Update Manager'); }
++    umLoad();
++    if (!umTimer) umTimer = setInterval(umLoad, 2500);
++}
++
++if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', umLoad); else umLoad();
++
+ async function loadBotAdmin() {
+     const body = document.getElementById('ba-body');
+     if (!body) return;
 diff --git a/Backend/helper/database.py b/Backend/helper/database.py
 index 57a9f61..ce322eb 100644
 --- a/Backend/helper/database.py

@@ -73,6 +73,11 @@ from Backend.fastapi.routes.api_routes import (
     dl_index_action_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
+    update_manager_check_api,
+    update_manager_deploy_api,
+    update_manager_rollback_api,
+    update_manager_stage_api,
+    update_manager_status_api,
     clear_manual_session_api,
     search_manual_session_api,
     set_manual_session_api,
@@ -817,6 +822,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
 @app.get("/api/admin/tools/bot-admin/apply/status")
 async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
     return await bot_admin_apply_status_api()
+
+@app.get("/api/admin/tools/update-manager/status")
+async def tools_update_manager_status(_: bool = Depends(require_auth)):
+    return await update_manager_status_api()
+
+@app.post("/api/admin/tools/update-manager/check")
+async def tools_update_manager_check(_: bool = Depends(require_auth)):
+    return await update_manager_check_api()
+
+@app.post("/api/admin/tools/update-manager/stage")
+async def tools_update_manager_stage(_: bool = Depends(require_auth)):
+    return await update_manager_stage_api()
+
+@app.post("/api/admin/tools/update-manager/deploy")
+async def tools_update_manager_deploy(_: bool = Depends(require_auth)):
+    return await update_manager_deploy_api()
+
+@app.post("/api/admin/tools/update-manager/rollback")
+async def tools_update_manager_rollback(_: bool = Depends(require_auth)):
+    return await update_manager_rollback_api()
 
 @app.get("/api/admin/tools/manual-session")
 async def tools_manual_session_get(_: bool = Depends(require_auth)):

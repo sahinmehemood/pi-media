@@ -2989,3 +2989,62 @@ async def bot_admin_apply_status_api() -> dict:
             "error": st["error"],
         },
     }
+
+
+# ── Update Manager (Wave 2 Phase D) ────────────────────────────────
+# Check / Stage & Test / Deploy / Roll back for upstream updates.
+# All git work happens in Backend.helper.update_manager (stdlib-only);
+# long operations run on a background task and the Tools page polls
+# the status endpoint, same shape as the Bot Admin apply flow.
+
+_update_run_state: dict = {"running": False, "action": ""}
+
+
+async def _um_background(fn) -> None:
+    try:
+        await asyncio.to_thread(fn)
+    except Exception:
+        pass
+    finally:
+        _update_run_state.update({"running": False, "action": ""})
+
+
+def _um_start(action: str, fn) -> dict:
+    if _update_run_state["running"]:
+        raise HTTPException(status_code=409, detail="An update operation is already running.")
+    _update_run_state.update({"running": True, "action": action})
+    asyncio.create_task(_um_background(fn))
+    return {"status": "started", "action": action}
+
+
+async def update_manager_status_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    snap = await asyncio.to_thread(um.status_snapshot)
+    snap["running"] = _update_run_state["running"]
+    snap["action"] = _update_run_state["action"]
+    return {"status": "success", "data": snap}
+
+
+async def update_manager_check_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    return _um_start("check", um.do_check)
+
+
+async def update_manager_stage_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    return _um_start("stage", um.do_stage)
+
+
+async def update_manager_deploy_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    return _um_start("deploy", um.do_deploy)
+
+
+async def update_manager_rollback_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    return _um_start("rollback", um.do_rollback)

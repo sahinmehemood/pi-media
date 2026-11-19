@@ -179,6 +179,27 @@ def test_wave2_phase_c_seams():
     assert "/admin/dl-index" in read("Backend/fastapi/templates/base.html")
 
 
+def test_wave2_phase_d_seams():
+    # Update Manager: module + API + routes + Tools card
+    um = read("Backend/helper/update_manager.py")
+    assert "def do_check" in um and "def do_stage" in um
+    assert "def do_deploy" in um and "def do_rollback" in um
+    assert "STAGED_BRANCH" in um and "restart_service" in um
+    api = read("Backend/fastapi/routes/api_routes.py")
+    for fn in ("update_manager_status_api", "update_manager_check_api",
+               "update_manager_stage_api", "update_manager_deploy_api",
+               "update_manager_rollback_api"):
+        assert fn in api, fn
+    main = read("Backend/fastapi/main.py")
+    assert '"/api/admin/tools/update-manager/status"' in main
+    assert '"/api/admin/tools/update-manager/deploy"' in main
+    tools = read("Backend/fastapi/templates/tools.html")
+    for marker in ('id="um-pill"', 'id="um-report"', "umAct('check')",
+                   "umAct('stage')", "umAct('deploy')", "umAct('rollback')",
+                   "/api/admin/tools/update-manager/status"):
+        assert marker in tools, marker
+
+
 def test_health_fixes_seams():
     # TMDB: themoviedb v2 wants api_key= (key= crashes client builds)
     tmdb = read("Backend/helper/metadata/providers/tmdb.py")

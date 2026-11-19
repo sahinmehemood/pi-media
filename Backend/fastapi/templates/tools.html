@@ -314,6 +314,37 @@
         <p class="hint mt-3" id="scan-error" style="color:var(--danger);display:none"></p>
     </div>
 
+    <!-- ══ Update Manager ════════════════════════════════════════════ -->
+    <div class="tool-card">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+            <h2 style="margin-bottom:0"><i class="fa-solid fa-code-branch"></i> Update Manager</h2>
+            <span id="um-pill" class="status-pill status-idle">Idle</span>
+        </div>
+
+        <p class="hint mt-3 mb-4">
+            Update this fork when the official Telegram-Stremio releases changes. The fork is
+            re-applied and fully tested in a staging copy first — the live install is only
+            moved after a green test run, and the previous build stays one tap away.
+        </p>
+
+        <div class="flex items-center gap-2 flex-wrap mb-3">
+            <button class="btn btn-ghost" type="button" id="um-check-btn" onclick="umAct('check')">
+                <i class="fa-solid fa-magnifying-glass"></i> Check
+            </button>
+            <button class="btn btn-ghost" type="button" id="um-stage-btn" onclick="umAct('stage')">
+                <i class="fa-solid fa-flask"></i> Stage &amp; Test
+            </button>
+            <button class="btn btn-primary" type="button" id="um-deploy-btn" onclick="umAct('deploy')" disabled>
+                <i class="fa-solid fa-rocket"></i> Deploy
+            </button>
+            <button class="btn btn-ghost" type="button" id="um-rollback-btn" onclick="umAct('rollback')" disabled>
+                <i class="fa-solid fa-rotate-left"></i> Roll back
+            </button>
+        </div>
+
+        <div id="um-report" class="hint" style="white-space:normal">Loading update status…</div>
+    </div>
+
     <!-- ══ Bot Admin Manager ════════════════════════════════════════════ -->
     <div class="tool-card">
         <div class="flex items-center justify-between flex-wrap gap-2">
@@ -1229,6 +1260,77 @@ const BA_SESSION = {
     not_admin:         '<span class="ba-cell ba-no"><i class="fa-solid fa-lock"></i> Not admin</span>',
     unknown:           '<span class="ba-cell ba-muted"><i class="fa-solid fa-question"></i> Unknown</span>',
 };
+
+// ── Update Manager ──────────────────────────────────────────────
+let umTimer = null;
+
+function umEsc(s) { const d = document.createElement('div'); d.textContent = (s == null ? '' : String(s)); return d.innerHTML; }
+
+async function umLoad() {
+    try {
+        const res = await fetch('/api/admin/tools/update-manager/status');
+        const j = await res.json();
+        umRender(j.data || {});
+        if (j.data && j.data.running) { if (!umTimer) umTimer = setInterval(umLoad, 2500); }
+        else if (umTimer) { clearInterval(umTimer); umTimer = null; }
+    } catch (e) { /* transient — next manual refresh retries */ }
+}
+
+function umRender(d) {
+    const pill = document.getElementById('um-pill');
+    const phase = d.phase || 'idle';
+    const busy = !!d.running || ['checking', 'staging', 'deploying', 'rolling_back'].includes(phase);
+    const green = phase === 'deployed' || phase === 'rolled_back' || (phase === 'tested' && d.stage && d.stage.green);
+    const red = phase === 'error' || (phase === 'tested' && d.stage && !d.stage.green);
+    pill.textContent = d.running ? (d.action + '…') : phase;
+    pill.className = 'status-pill ' + (red ? 'status-error' : (busy || green) ? 'status-running' : 'status-idle');
+
+    document.getElementById('um-check-btn').disabled = !!d.running;
+    document.getElementById('um-stage-btn').disabled = !!d.running;
+    document.getElementById('um-deploy-btn').disabled = !!d.running || !d.deploy_armed;
+    document.getElementById('um-rollback-btn').disabled = !!d.running || !d.rollback_available;
+
+    let h = '';
+    if (!d.staging_present) h += '<p>⚠ Staging clone not found on this device — updates can be checked from the workstation instead.</p>';
+    if (d.message) h += '<p>' + umEsc(d.message) + '</p>';
+    if (d.commits_ahead) {
+        h += '<p><strong>' + d.commits_ahead + ' upstream commit(s)</strong> — base ' + umEsc((d.base || '').slice(0, 10)) + ' → upstream ' + umEsc((d.upstream_head || '').slice(0, 10)) + '</p>';
+        if (d.risky_files && d.risky_files.length) {
+            h += '<p>⚠ <strong>Risk:</strong> upstream changed ' + d.risky_files.length + ' file(s) this fork also edits:</p><ul style="margin:0.2rem 0 0.6rem 1.1rem;font-family:monospace;font-size:0.8rem">'
+               + d.risky_files.map(f => '<li>' + umEsc(f) + '</li>').join('') + '</ul>';
+        } else {
+            h += '<p>No fork-edited files touched upstream — low breakage risk.</p>';
+        }
+        if (d.commits && d.commits.length) {
+            h += '<ul style="margin:0.2rem 0 0.6rem 1.1rem;font-family:monospace;font-size:0.8rem">'
+               + d.commits.slice(0, 15).map(c => '<li>' + umEsc(c) + '</li>').join('') + '</ul>';
+        }
+    } else if (phase === 'checked') {
+        h += '<p>Fork base ' + umEsc((d.base || '').slice(0, 10)) + ' matches upstream ' + umEsc((d.upstream_head || '').slice(0, 10)) + '.</p>';
+    }
+    if (d.stage) {
+        h += '<p><strong>Stage &amp; Test: ' + (d.stage.green ? 'GREEN ✅' : 'RED ❌') + '</strong>'
+           + (d.stage.tests ? ' — suite: ' + d.stage.tests.passed + ' passed, ' + d.stage.tests.failed + ' failed' : '') + '</p>';
+        h += '<ul style="margin:0.2rem 0 0.6rem 1.1rem;font-size:0.85rem">'
+           + (d.stage.steps || []).map(s => '<li>' + (s.ok ? '✓' : '✗') + ' ' + umEsc(s.name)
+             + (s.ok ? '' : '<br><span style="font-family:monospace;font-size:0.75rem">' + umEsc((s.detail || '').slice(-400)) + '</span>') + '</li>').join('') + '</ul>';
+    }
+    if (d.previous_head) h += '<p>Rollback point: <span style="font-family:monospace">' + umEsc(d.previous_head.slice(0, 10)) + '</span></p>';
+    document.getElementById('um-report').innerHTML = h || 'No update check run yet.';
+}
+
+async function umAct(action) {
+    if (action === 'deploy' && !confirm('Deploy the tested update now? The app will restart.')) return;
+    if (action === 'rollback' && !confirm('Roll back to the previous build? The app will restart.')) return;
+    try {
+        const res = await fetch('/api/admin/tools/update-manager/' + action, { method: 'POST' });
+        if (!res.ok) { const j = await res.json().catch(() => ({})); showToast(j.detail || 'Could not start.', 'error', 'Update Manager'); }
+    } catch (e) { showToast('Could not start.', 'error', 'Update Manager'); }
+    umLoad();
+    if (!umTimer) umTimer = setInterval(umLoad, 2500);
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', umLoad); else umLoad();
 
 async function loadBotAdmin() {
     const body = document.getElementById('ba-body');
