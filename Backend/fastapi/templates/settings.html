@@ -143,26 +143,13 @@
 
         <hr class="divider">
 
-        <!-- Live logs -->
+        <!-- Logs: one-tap download only (no on-page viewer) -->
         <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
             <label class="s-label" style="margin-bottom:0">Logs</label>
-            <div class="flex items-center gap-3 flex-wrap">
-                <label class="anime-check" title="Auto-refresh the log every 2s">
-                    <input type="checkbox" id="log-live-toggle" onchange="toggleLiveLogs()">
-                    <span>Live</span>
-                </label>
-                <button class="add-btn" type="button" onclick="loadLogs(this)">
-                    <i class="fa-solid fa-rotate"></i> Refresh
-                </button>
-                <button class="add-btn" type="button" onclick="window.open('/api/admin/logs/download','_blank')">
-                    <i class="fa-solid fa-download"></i> Download
-                </button>
-            </div>
+            <button class="add-btn" type="button" onclick="window.open('/api/admin/logs/download','_blank')">
+                <i class="fa-solid fa-download"></i> Download logs
+            </button>
         </div>
-        <pre id="log-view" style="background:color-mix(in srgb,var(--bg) 80%,#000);border:1px solid var(--border);
-            border-radius:0.75rem;padding:1rem;font-family:'JetBrains Mono',monospace;font-size:0.75rem;
-            line-height:1.5;color:var(--text);max-height:340px;overflow:auto;white-space:pre-wrap;
-            word-break:break-word;margin:0">Loading logs…</pre>
 
         <hr class="divider">
 
@@ -691,6 +678,209 @@
         </span>
     </label>
     {% endif %}
+</div>
+
+<div class="settings-card">
+    <h2><i class="fa-solid fa-gauge-high"></i> Streaming Buffer</h2>
+    <label class="toggle-wrap">
+        <input type="checkbox" class="toggle-input" id="buffer_enabled"
+            {% if settings.buffer_enabled %}checked{% endif %} onchange="toggleBufferFields()">
+        <span class="toggle-track"></span>
+        <span class="toggle-label">
+            <strong>Enable streaming buffer</strong>
+            <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                Adaptive prefetch, multi-client scheduling, flood shielding and a chunk cache for
+                Stremio playback and /dl links. Off = upstream streaming behaviour, unchanged.
+            </span>
+        </span>
+    </label>
+    <div id="buffer-fields" style="{% if not settings.buffer_enabled %}display:none{% endif %}">
+        <div class="sess-grid">
+            <div>
+                <label class="s-label" for="buffer_profile">Profile</label>
+                <select id="buffer_profile" class="s-input" onchange="applyBufferProfile()">
+                    <option value="conservative" {% if settings.buffer_profile == 'conservative' %}selected{% endif %}>Conservative — lowest memory, fewest workers</option>
+                    <option value="balanced" {% if settings.buffer_profile == 'balanced' %}selected{% endif %}>Balanced — recommended</option>
+                    <option value="aggressive" {% if settings.buffer_profile == 'aggressive' %}selected{% endif %}>Aggressive — fastest links, more RAM</option>
+                    <option value="custom" {% if settings.buffer_profile == 'custom' %}selected{% endif %}>Custom — set the values below</option>
+                </select>
+            </div>
+            <div>
+                <label class="s-label" for="buffer_adaptive">Adaptive window</label>
+                <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="buffer_adaptive"
+                        {% if settings.buffer_adaptive %}checked{% endif %}>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">Grow/shrink concurrency live from measured speed and FloodWaits</span>
+                </label>
+            </div>
+            <div>
+                <label class="s-label" for="buffer_readahead_mb">Read-ahead (MiB)</label>
+                <input type="number" id="buffer_readahead_mb" class="s-input" min="2" max="256" step="1"
+                    value="{{ settings.buffer_readahead_mb }}" oninput="updateBufferEstimate()">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_workers">Workers</label>
+                <input type="number" id="buffer_workers" class="s-input" min="1" max="16" step="1"
+                    value="{{ settings.buffer_workers }}" oninput="updateBufferEstimate()">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_cache_mb">Chunk cache (MiB)</label>
+                <input type="number" id="buffer_cache_mb" class="s-input" min="0" max="1024" step="1"
+                    value="{{ settings.buffer_cache_mb }}" oninput="updateBufferEstimate()">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_stall_timeout">Stall timeout (s)</label>
+                <input type="number" id="buffer_stall_timeout" class="s-input" min="15" max="600" step="1"
+                    value="{{ settings.buffer_stall_timeout }}" oninput="updateBufferEstimate()">
+            </div>
+            <div>
+                <label class="s-label" for="buffer_disk_cache_mb">Disk cache (MiB)</label>
+                <input type="number" id="buffer_disk_cache_mb" class="s-input" min="0" max="8192" step="1"
+                    value="{{ settings.buffer_disk_cache_mb }}">
+                <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem">
+                    Chunks evicted from the memory cache spill to disk and survive restarts. 0 = off.
+                </p>
+            </div>
+            <div>
+                <label class="s-label" for="buffer_seek_burst">Seek burst</label>
+                <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="buffer_seek_burst"
+                        {% if settings.buffer_seek_burst %}checked{% endif %}>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">Open at full window for seeks &amp; tail probes (mid-file starts)</span>
+                </label>
+            </div>
+            <div>
+                <label class="s-label" for="flood_alert_enabled">Flood alerts</label>
+                <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="flood_alert_enabled"
+                        {% if settings.flood_alert_enabled %}checked{% endif %}>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">DM the owner when a bot hits a big FloodWait (≥10s, batched)</span>
+                </label>
+            </div>
+        </div>
+        <p id="buffer-estimate" style="font-size:0.8rem;color:var(--text-sec);margin-top:0.7rem"></p>
+        {% if buffer_health and buffer_health.policy %}
+        <p style="font-size:0.8rem;color:var(--text-sec);margin-top:0.4rem">
+            Live: profile <strong>{{ buffer_health['policy']['profile'] }}</strong> ·
+            speed EWMA <strong>{{ buffer_health['speed_mbps'] }} Mbps</strong> ({{ buffer_health['speed_samples'] }} samples) ·
+            cache <strong>{{ (buffer_health['cache']['size_bytes'] / 1048576) | round(1) }} / {{ (buffer_health['cache']['budget_bytes'] / 1048576) | round(0) }} MiB</strong>
+            ({{ buffer_health['cache']['hits'] }} hits / {{ buffer_health['cache']['misses'] }} misses)
+            {% if buffer_health['cache']['disk'] %}· disk <strong>{{ (buffer_health['cache']['disk']['size_bytes'] / 1048576) | round(1) }} / {{ (buffer_health['cache']['disk']['budget_bytes'] / 1048576) | round(0) }} MiB</strong>
+            ({{ buffer_health['cache']['disk']['entries'] }} chunks, {{ buffer_health['cache']['disk']['hits'] }} hits){% endif %}
+            {% if buffer_health['dc_speed_entries'] %}· DC speeds tracked for {{ buffer_health['dc_speed_entries'] }} client/DC pairs{% endif %} ·
+            chunks fetched {{ buffer_health['metrics']['chunks_fetched'] }}, failed {{ buffer_health['metrics']['chunks_failed'] }},
+            floods {{ buffer_health['metrics']['floods_seen'] }}, workers shed {{ buffer_health['metrics']['workers_shed'] }},
+            stalls {{ buffer_health['metrics']['stall_timeouts'] }}
+        </p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- ── Pre-Warm ───────────────────────────────────────────────────── -->
+<div class="settings-card">
+    <h2><i class="fa-solid fa-fire"></i> Pre-Warm</h2>
+    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
+        <i class="fa-solid fa-circle-info"></i>
+        Fetches the start (and end) of files into the streaming cache <strong>before</strong> you press play —
+        the next episode while you watch, files landing in the DL Channel, and new channel posts.
+        Runs only while nothing is playing, one file at a time, inside a hard daily budget.
+        <strong>Off by default</strong>: pre-warming spends bandwidth and battery ahead of need.
+    </p>
+    <div class="s-grid">
+        <div>
+            <label class="s-label" for="prewarm_enabled">Pre-Warm</label>
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="prewarm_enabled"
+                    {% if settings.prewarm_enabled %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">Enable background pre-warming</span>
+            </label>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_profile">Profile</label>
+            <select id="prewarm_profile" class="s-input">
+                <option value="lite" {% if settings.prewarm_profile == 'lite' %}selected{% endif %}>Lite — 8 MB head only</option>
+                <option value="balanced" {% if settings.prewarm_profile == 'balanced' %}selected{% endif %}>Balanced — 24 MB head + 8 MB tail</option>
+                <option value="aggressive" {% if settings.prewarm_profile == 'aggressive' %}selected{% endif %}>Aggressive — next episode (almost) whole</option>
+                <option value="smart" {% if settings.prewarm_profile == 'smart' %}selected{% endif %}>Smart — balanced, backs off on floods / low memory</option>
+            </select>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_trigger_pct">Next-episode trigger (%)</label>
+            <input type="number" id="prewarm_trigger_pct" class="s-input" min="10" max="95"
+                value="{{ settings.prewarm_trigger_pct if settings.prewarm_trigger_pct is not none else 70 }}">
+            <p class="s-help">Warm the next episode once you've watched this much of the current one.</p>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_episodes_ahead">Episodes ahead</label>
+            <input type="number" id="prewarm_episodes_ahead" class="s-input" min="1" max="2"
+                value="{{ settings.prewarm_episodes_ahead if settings.prewarm_episodes_ahead is not none else 1 }}">
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_mb_per_file">Per-file cap (MB, aggressive)</label>
+            <input type="number" id="prewarm_mb_per_file" class="s-input" min="16" max="4096"
+                value="{{ settings.prewarm_mb_per_file if settings.prewarm_mb_per_file is not none else 256 }}">
+            <p class="s-help">Only used by the aggressive profile's whole-episode warms.</p>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_daily_budget_mb">Daily budget (MB)</label>
+            <input type="number" id="prewarm_daily_budget_mb" class="s-input" min="0" max="102400"
+                value="{{ settings.prewarm_daily_budget_mb if settings.prewarm_daily_budget_mb is not none else 2048 }}">
+            <p class="s-help">Hard stop for all pre-warming each day. 0 disables warming.</p>
+        </div>
+        <div>
+            <label class="s-label" for="prewarm_only_charging">Only while charging</label>
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="prewarm_only_charging"
+                    {% if settings.prewarm_only_charging %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">Pause pre-warming on battery</span>
+            </label>
+        </div>
+    </div>
+    {% if prewarm_health %}
+    <p style="font-size:0.78rem;color:var(--text-sec);margin-top:0.75rem">
+        Today: <strong>{{ prewarm_health['used_mb_today'] }} / {{ prewarm_health['budget_mb'] }} MB</strong> used ·
+        <strong>{{ prewarm_health['warmed_today'] }}</strong> files warmed ·
+        <strong>{{ prewarm_health['queued'] }}</strong> queued
+    </p>
+    {% endif %}
+</div>
+
+<!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
+<div class="settings-card">
+    <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
+    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
+        <i class="fa-solid fa-circle-info"></i>
+        Optional. Create a <strong>private</strong> channel, add all your bots as admins
+        (Tools → Bot Admin Manager does it in one click), and paste its ID here.
+        Files you DM to the bot are copied into this channel and streamed by the
+        whole bot pool — your Userbot session is then never used for DM links.
+        Leave empty to keep the current userbot-based DM links.<br>
+        Tip: forward any post from the channel to the bot in DM and it replies with the channel ID.
+    </p>
+    <label class="s-label" for="dl_channel_id">DL CHANNEL</label>
+    <div class="multi-item" style="margin-top:0.25rem">
+        {% set dl_t = (settings.channel_titles or {}).get(settings.dl_channel_id|string, settings.dl_channel_id) %}
+        <input type="text" id="dl_channel_id" class="s-input"
+            value="{{ dl_t if settings.dl_channel_id else '' }}"
+            data-id="{{ settings.dl_channel_id or '' }}"
+            {% if settings.dl_channel_id %}readonly{% endif %}
+            placeholder="-100xxxxxxxxxx (channels only)"
+            oninput="if(!this.readOnly){this.dataset.id='';}">
+        <button type="button" class="remove-btn" id="dl_channel_id_clear"
+            style="{% if not settings.dl_channel_id %}display:none{% endif %}"
+            onclick="clearSingleChannel('dl_channel_id')" title="Remove">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    </div>
+    <label class="s-label" for="dl_expire_days" style="margin-top:1rem">POOLED FILE EXPIRY (DAYS)</label>
+    <input type="number" id="dl_expire_days" class="s-input" min="0" max="3650"
+        value="{{ settings.dl_expire_days if settings.dl_expire_days is not none else 0 }}">
+    <p class="s-help">Pooled files older than this are deleted from the channel by a daily sweep. 0 = keep forever. Pinned files (📌 via /dl pin or the DL Index page) never expire.</p>
 </div>
 
 <style>
@@ -1682,6 +1872,37 @@ function toggleWebdavPwdVisibility() {
     }
 }
 
+const BUFFER_PRESETS = {
+    conservative: { readahead: 8,  workers: 2, cache: 16  },
+    balanced:     { readahead: 16, workers: 4, cache: 48  },
+    aggressive:   { readahead: 32, workers: 8, cache: 128 },
+};
+function toggleBufferFields() {
+    const on = document.getElementById('buffer_enabled').checked;
+    document.getElementById('buffer-fields').style.display = on ? '' : 'none';
+}
+function applyBufferProfile() {
+    const profile = document.getElementById('buffer_profile').value;
+    const preset = BUFFER_PRESETS[profile];
+    const fields = ['buffer_readahead_mb', 'buffer_workers', 'buffer_cache_mb'];
+    if (preset) {
+        document.getElementById('buffer_readahead_mb').value = preset.readahead;
+        document.getElementById('buffer_workers').value = preset.workers;
+        document.getElementById('buffer_cache_mb').value = preset.cache;
+    }
+    fields.forEach(id => { document.getElementById(id).disabled = !!preset; });
+    updateBufferEstimate();
+}
+function updateBufferEstimate() {
+    const el = document.getElementById('buffer-estimate');
+    if (!el) return;
+    const r = parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 0;
+    const w = parseInt(document.getElementById('buffer_workers').value, 10) || 0;
+    const c = parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0;
+    el.textContent = `≈ ${r} MiB read-ahead · ${w} workers across your bot clients · ${c} MiB chunk cache`;
+}
+document.addEventListener('DOMContentLoaded', () => { applyBufferProfile(); toggleBufferFields(); });
+
 async function saveSettings() {
     const btn   = document.getElementById('save-btn');
     const label = document.getElementById('save-label');
@@ -1766,7 +1987,26 @@ async function saveSettings() {
         announce_new_content:          document.getElementById('announce_new_content').checked,
         announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
+        dl_channel_id:                 (function(){const el=document.getElementById('dl_channel_id');return el.dataset.id||extractChannelId(el.value.trim());})(),
+        dl_expire_days:                parseInt(document.getElementById('dl_expire_days').value, 10) || 0,
         delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
+        buffer_enabled:                document.getElementById('buffer_enabled').checked,
+        buffer_profile:                document.getElementById('buffer_profile').value,
+        buffer_adaptive:               document.getElementById('buffer_adaptive').checked,
+        buffer_readahead_mb:           parseInt(document.getElementById('buffer_readahead_mb').value, 10) || 16,
+        buffer_workers:                parseInt(document.getElementById('buffer_workers').value, 10) || 4,
+        buffer_cache_mb:               parseInt(document.getElementById('buffer_cache_mb').value, 10) || 0,
+        buffer_disk_cache_mb:          parseInt(document.getElementById('buffer_disk_cache_mb').value, 10) || 0,
+        buffer_stall_timeout:          parseInt(document.getElementById('buffer_stall_timeout').value, 10) || 90,
+        buffer_seek_burst:             document.getElementById('buffer_seek_burst').checked,
+        prewarm_enabled:               document.getElementById('prewarm_enabled').checked,
+        prewarm_profile:               document.getElementById('prewarm_profile').value,
+        prewarm_trigger_pct:           parseInt(document.getElementById('prewarm_trigger_pct').value, 10) || 70,
+        prewarm_episodes_ahead:        parseInt(document.getElementById('prewarm_episodes_ahead').value, 10) || 1,
+        prewarm_mb_per_file:           parseInt(document.getElementById('prewarm_mb_per_file').value, 10) || 256,
+        prewarm_daily_budget_mb:       parseInt(document.getElementById('prewarm_daily_budget_mb').value, 10) || 0,
+        prewarm_only_charging:         document.getElementById('prewarm_only_charging').checked,
+        flood_alert_enabled:           document.getElementById('flood_alert_enabled').checked,
     };
     const dsEl = document.getElementById('default_streaming');
     if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
@@ -1902,6 +2142,25 @@ function renderSettings(s) {
     document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
     document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
     document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
+    document.getElementById('buffer_enabled').checked = (s.buffer_enabled ?? true);
+    document.getElementById('buffer_profile').value = s.buffer_profile || 'balanced';
+    document.getElementById('buffer_adaptive').checked = (s.buffer_adaptive ?? true);
+    document.getElementById('buffer_readahead_mb').value = (s.buffer_readahead_mb ?? 16);
+    document.getElementById('buffer_workers').value = (s.buffer_workers ?? 4);
+    document.getElementById('buffer_cache_mb').value = (s.buffer_cache_mb ?? 48);
+    document.getElementById('buffer_disk_cache_mb').value = (s.buffer_disk_cache_mb ?? 512);
+    document.getElementById('buffer_stall_timeout').value = (s.buffer_stall_timeout ?? 90);
+    document.getElementById('buffer_seek_burst').checked = (s.buffer_seek_burst ?? true);
+    document.getElementById('prewarm_enabled').checked = !!s.prewarm_enabled;
+    document.getElementById('prewarm_profile').value = (s.prewarm_profile ?? 'smart');
+    document.getElementById('prewarm_trigger_pct').value = (s.prewarm_trigger_pct ?? 70);
+    document.getElementById('prewarm_episodes_ahead').value = (s.prewarm_episodes_ahead ?? 1);
+    document.getElementById('prewarm_mb_per_file').value = (s.prewarm_mb_per_file ?? 256);
+    document.getElementById('prewarm_daily_budget_mb').value = (s.prewarm_daily_budget_mb ?? 2048);
+    document.getElementById('prewarm_only_charging').checked = !!s.prewarm_only_charging;
+    document.getElementById('flood_alert_enabled').checked = !!s.flood_alert_enabled;
+    toggleBufferFields();
+    applyBufferProfile();
     togglePosterProvider();
     toggleFanartShuffle();
     document.getElementById('upstream_repo').value = s.upstream_repo || '';
@@ -1945,6 +2204,16 @@ function renderSettings(s) {
         const scBtn = document.getElementById('skip_channel_clear');
         if (scBtn) scBtn.style.display = scid ? '' : 'none';
     }
+    const dc = document.getElementById('dl_channel_id');
+    if (dc) {
+        const dcid = s.dl_channel_id || '';
+        dc.dataset.id = dcid;
+        dc.value = dcid ? (titles[String(dcid)] || dcid) : '';
+        dc.readOnly = !!dcid;
+        const dcBtn = document.getElementById('dl_channel_id_clear');
+        if (dcBtn) dcBtn.style.display = dcid ? '' : 'none';
+    }
+    document.getElementById('dl_expire_days').value = (s.dl_expire_days ?? 0);
     toggleSkipDeleteField();
 
     rebuildDatabaseList(s.database_list || []);
@@ -2021,7 +2290,6 @@ const STAT_FIELDS = [
     ['streams', 'Streams'], ['db_size', 'DB Size'],
     ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
 ];
-let logLiveTimer = null;
 
 /* Spin the clicked refresh button's icon while an async action runs */
 function spinIcon(btn, on) {
@@ -2047,32 +2315,6 @@ async function loadDbStats(btn) {
     }
 }
 
-async function loadLogs(btn) {
-    const view = document.getElementById('log-view');
-    spinIcon(btn, true);
-    try {
-        const res = await fetch('/api/admin/logs');
-        const data = await res.json();
-        if (data.status === 'success') {
-            const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 40;
-            view.textContent = data.log || '(log is empty)';
-            if (atBottom) view.scrollTop = view.scrollHeight;
-        } else {
-            view.textContent = data.message || 'Could not read log.';
-        }
-    } catch (e) {
-        view.textContent = 'Network error while loading logs.';
-    } finally {
-        spinIcon(btn, false);
-    }
-}
-
-function toggleLiveLogs() {
-    const on = document.getElementById('log-live-toggle').checked;
-    if (logLiveTimer) { clearInterval(logLiveTimer); logLiveTimer = null; }
-    if (on) { loadLogs(); logLiveTimer = setInterval(loadLogs, 2000); }
-}
-
 async function restartApp() {
     if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
 
@@ -2089,7 +2331,6 @@ async function restartApp() {
     }
 
     // Web app goes down during restart — poll health until start_time changes, then reload.
-    if (logLiveTimer) { clearInterval(logLiveTimer); logLiveTimer = null; }
     const overlay = document.getElementById('restart-overlay');
     overlay.hidden = false;
     document.documentElement.classList.add('rs-lock');
@@ -2137,7 +2378,6 @@ window.addEventListener('DOMContentLoaded', () => {
     toggleDuplicateProtection();
     toggleMediaflowFields();
     loadDbStats();
-    loadLogs();
 });
 </script>
 

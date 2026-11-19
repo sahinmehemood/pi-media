@@ -176,6 +176,7 @@
                             <tr>
                                 <th>Stream ID</th>
                                 <th>Title</th>
+                                <th>Source</th>
                                 <th class="text-center">Bot (DC)</th>
                                 <th class="text-right">Transferred</th>
                                 <th class="text-right">Avg / Peak</th>
@@ -186,7 +187,7 @@
                         </thead>
                         <tbody id="analytics-tbody">
                             <tr>
-                                <td colspan="8" class="empty-state">
+                                <td colspan="9" class="empty-state">
                                     <i class="fas fa-spinner fa-spin mr-2 text-primary"></i> Loading analytics...
                                 </td>
                             </tr>
@@ -400,7 +401,7 @@
             const streams = data?.data?.recent || [];
 
             if (!streams.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No recent streams recorded.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No recent streams recorded.</td></tr>';
                 mobile.innerHTML = '<div class="empty-state">No recent streams recorded.</div>';
                 return;
             }
@@ -426,6 +427,7 @@
                     <tr>
                         <td><span class="stream-id muted font-mono text-xs" title="${escapeHtml(s.stream_id)}">${escapeHtml(s.stream_id)}</span></td>
                         <td><div class="title-cell font-semibold" title="${escapeHtml(titleStr)}">${escapeHtml(titleStr)}</div></td>
+                        <td><span class="muted text-xs" title="${escapeHtml(s.source_kind || '')}">${escapeHtml(s.source_label || '—')}</span></td>
                         <td class="text-center">Bot ${Number(s.client_index ?? 0) + 1} <span class="muted text-xs ml-1">(DC${escapeHtml(s.dc_id)})</span></td>
                         <td class="text-right font-semibold">${bytesStr}</td>
                         <td class="text-right font-semibold">${avg.toFixed(1)} <span class="muted">/ ${peak.toFixed(1)} MB/s</span></td>
@@ -442,6 +444,7 @@
                             <span class="${getStatusBadge(status)}">${escapeHtml(status)}</span>
                         </div>
                         <div class="flex flex-wrap gap-x-3 gap-y-1 muted text-xs mt-2">
+                            ${s.source_label ? `<span>${escapeHtml(s.source_label)}</span>` : ''}
                             <span>Bot ${Number(s.client_index ?? 0) + 1} · DC${escapeHtml(s.dc_id)}</span>
                             <span class="font-semibold text-text">${bytesStr}</span>
                             <span>${avg.toFixed(1)}/${peak.toFixed(1)} MB/s</span>

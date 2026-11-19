@@ -338,6 +338,11 @@ async def restart_notification():
 commands = [
     BotCommand("start", "🚀 Start the bot"),
     BotCommand("set", "🎬 Manually add IMDb metadata"),
+    # Menu entry for the DM Link plugin (handler: Backend/pyrofork/plugins/dl_link.py).
+    # The list must live here: setup_bot_commands() wipes and rewrites it at
+    # every startup, so a plugin registering itself at runtime loses the race.
+    BotCommand("dl", "🔗 Stream/download link for a file"),
+    BotCommand("check", "🩺 Pre-flight check for a file's link"),
 ]
 
 

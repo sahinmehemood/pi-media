@@ -1,0 +1,56 @@
+name: upstream-check
+
+# Weekly (and on demand): verify the streaming buffer plugin still
+# applies cleanly to the latest official Telegram-Stremio master.
+# If upstream breaks a seam, this fails and opens an issue — the owner
+# hears about it from a test, not from a broken stream.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  reapply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this fork (own branch)
+        uses: actions/checkout@v4
+
+      - name: Clone official upstream
+        run: git clone --depth 50 https://github.com/weebzone/Telegram-Stremio.git /tmp/official
+
+      - name: Reapply plugin to upstream master
+        id: reapply
+        run: |
+          chmod +x tools/reapply.sh
+          tools/reapply.sh /tmp/official master 2>&1 | tee /tmp/reapply.log
+
+      - name: Open an issue when the plugin breaks
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '';
+            try { log = fs.readFileSync('/tmp/reapply.log', 'utf8').slice(-3000); } catch (e) {}
+            const title = 'upstream-check: plugin no longer applies to official master';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'upstream-break',
+            });
+            if (existing.data.some(i => i.title === title)) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title, labels: ['upstream-break'],
+              body: 'The weekly upstream check failed: the streaming buffer plugin ' +
+                    'does not apply cleanly (or its tests fail) against the latest ' +
+                    'official weebzone/Telegram-Stremio master.\n\n' +
+                    'A seam listed in docs/stream-buffer/DESIGN.md §6 probably moved. ' +
+                    'Fix the seam, regenerate patches/integrate.patch, and close this.\n\n' +
+                    '```\n' + log + '\n```',
+            });

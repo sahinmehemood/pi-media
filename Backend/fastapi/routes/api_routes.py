@@ -612,6 +612,16 @@ async def get_dead_links_api() -> dict:
 async def get_stream_analytics_api() -> dict:
     try:
         data = await db.get_stream_analytics(limit=200)
+        try:
+            from Backend.helper.stream_source import build_source_context, classify_source
+
+            _ctx = build_source_context(SettingsManager.current())
+            for _r in data.get("recent", []):
+                _src = classify_source(_r.get("chat_id"), _ctx)
+                _r["source_label"] = _src["label"]
+                _r["source_kind"] = _src["kind"]
+        except Exception:
+            pass
         return {"status": "success", "data": data}
     except Exception as e:
         LOGGER.error(f"Stream analytics API error: {e}")
@@ -1808,7 +1818,7 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["session_secret"]
 
     #----- Type coercion and validation
-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
+    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
     for key in bool_keys:
         if key in payload:
             payload[key] = bool(payload[key])
@@ -1855,6 +1865,50 @@ async def update_settings_api(payload: dict) -> dict:
             payload["fanart_shuffle_interval"] = max(0, int(payload["fanart_shuffle_interval"]))
         except (ValueError, TypeError):
             payload["fanart_shuffle_interval"] = 5
+
+    #----- Streaming buffer: strict validation (an integer setting must
+    #----- arrive as an integer — bools, floats and strings are rejected,
+    #----- never silently coerced; in-type out-of-range values clamp to
+    #----- the shared ranges from stream_buffer.RANGES)
+    if "buffer_profile" in payload:
+        if payload["buffer_profile"] not in ("conservative", "balanced", "aggressive", "custom"):
+            raise HTTPException(status_code=400, detail="buffer_profile must be conservative, balanced, aggressive or custom")
+    from Backend.helper.stream_buffer import RANGES as _buffer_ranges
+
+    for _key in ("buffer_workers", "buffer_readahead_mb", "buffer_cache_mb", "buffer_stall_timeout", "buffer_disk_cache_mb"):
+        if _key in payload:
+            _v = payload[_key]
+            if isinstance(_v, bool) or not isinstance(_v, int):
+                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
+            _lo, _hi = _buffer_ranges[_key]
+            payload[_key] = max(_lo, min(_hi, _v))
+    if "flood_alert_enabled" in payload:
+        payload["flood_alert_enabled"] = bool(payload["flood_alert_enabled"])
+    if "buffer_seek_burst" in payload:
+        payload["buffer_seek_burst"] = bool(payload["buffer_seek_burst"])
+
+    #----- Pre-Warm: same strict pattern (ranges from prewarm.RANGES)
+    if "prewarm_profile" in payload:
+        if payload["prewarm_profile"] not in ("lite", "balanced", "aggressive", "smart"):
+            raise HTTPException(status_code=400, detail="prewarm_profile must be lite, balanced, aggressive or smart")
+    from Backend.helper.prewarm import RANGES as _prewarm_ranges
+
+    for _key in ("prewarm_mb_per_file", "prewarm_episodes_ahead", "prewarm_trigger_pct", "prewarm_daily_budget_mb"):
+        if _key in payload:
+            _v = payload[_key]
+            if isinstance(_v, bool) or not isinstance(_v, int):
+                raise HTTPException(status_code=400, detail=f"'{_key}' must be an integer.")
+            _lo, _hi = _prewarm_ranges[_key]
+            payload[_key] = max(_lo, min(_hi, _v))
+    if "prewarm_enabled" in payload:
+        payload["prewarm_enabled"] = bool(payload["prewarm_enabled"])
+    if "prewarm_only_charging" in payload:
+        payload["prewarm_only_charging"] = bool(payload["prewarm_only_charging"])
+    if "dl_expire_days" in payload:
+        _v = payload["dl_expire_days"]
+        if isinstance(_v, bool) or not isinstance(_v, int):
+            raise HTTPException(status_code=400, detail="'dl_expire_days' must be an integer.")
+        payload["dl_expire_days"] = max(0, min(3650, _v))
 
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
@@ -1936,11 +1990,17 @@ async def update_settings_api(payload: dict) -> dict:
             payload["skip_channel"], "skip channel"
         )
 
+    if "dl_channel_id" in payload and payload["dl_channel_id"]:
+        payload["dl_channel_id"] = _validate_channel_id(
+            payload["dl_channel_id"], "DL channel"
+        )
+
     #----- The same channel id may not appear in more than one channel field.
     #----- Only AUTH ∩ ANIME is allowed, because an anime channel is an auth channel
     #----- that's flagged as anime (the receiver only indexes files from auth channels).
     _channel_fields = ("auth_channels", "manual_channels", "global_search_channels",
-                       "anime_channels", "announcement_channel", "skip_channel")
+                       "anime_channels", "announcement_channel", "skip_channel",
+                       "dl_channel_id")
     if any(field in payload for field in _channel_fields):
         current = SettingsManager.current()
 
@@ -1956,6 +2016,7 @@ async def update_settings_api(payload: dict) -> dict:
             "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
             "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
             "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
+            "DL": _norm_ids(payload.get("dl_channel_id", str(current.dl_channel_id or ""))),
         }
 
         allowed_overlap = frozenset({"AUTH", "ANIME"})
@@ -1977,7 +2038,7 @@ async def update_settings_api(payload: dict) -> dict:
                 "admin_username", "admin_password", "session_secret", "http_proxy_url",
                 "cf_stream_url", "cf_stream_secret", "cf_stream_mode",
                 "mediaflow_password", "payment_instructions", "payment_qr_url",
-                "announcement_channel", "skip_channel"):
+                "announcement_channel", "skip_channel", "dl_channel_id"):
         if key in payload and isinstance(payload[key], str):
             payload[key] = payload[key].strip()
 
@@ -2501,6 +2562,60 @@ async def download_logs_api():
     return FileResponse(path, filename="log.txt", media_type="text/plain")
 
 
+#----- DL Index actions (pin toggle, delete post + entry, re-issue link)
+async def dl_index_action_api(payload: dict) -> dict:
+    from urllib.parse import quote as _quote
+
+    from Backend.config import Telegram as _Telegram
+
+    action = str(payload.get("action") or "")
+    unique_id = payload.get("unique_id")
+    tracking = (getattr(db, "dbs", None) or {}).get("tracking")
+    coll = tracking["dl_link_map"] if tracking is not None else None
+    if coll is None or not unique_id:
+        return {"status": "error", "message": "DL Index is unavailable."}
+    doc = await coll.find_one({"_id": unique_id})
+    if doc is None:
+        return {"status": "error", "message": "That entry no longer exists."}
+    settings = SettingsManager.current()
+    dl_id = settings.dl_channel_id
+
+    if action == "pin":
+        new_state = not bool(doc.get("pinned"))
+        await coll.update_one({"_id": unique_id}, {"$set": {"pinned": new_state}})
+        return {"status": "success", "pinned": new_state}
+
+    if action == "delete":
+        if dl_id is not None:
+            try:
+                import Backend.pyrofork.bot as _botmod
+
+                bot = getattr(_botmod, "StreamBot", None)
+                if bot is not None:
+                    await bot.delete_messages(dl_id, int(doc["msg_id"]))
+            except Exception as e:
+                return {"status": "error",
+                        "message": f"Could not delete the channel post: {e}"}
+        await coll.delete_one({"_id": unique_id})
+        return {"status": "success"}
+
+    if action == "link":
+        token_doc = await db.add_api_token(name="Admin", user_id=_Telegram.OWNER_ID)
+        if not token_doc:
+            return {"status": "error", "message": "Could not resolve the owner token."}
+        raw = str(int(dl_id)) if dl_id is not None else ""
+        if raw.startswith("-100"):
+            raw = raw[4:]
+        if not raw:
+            return {"status": "error", "message": "No DL Channel is configured."}
+        encoded = await encode_string({"chat_id": int(raw), "msg_id": int(doc["msg_id"])})
+        name = doc.get("name") or f"DL post {doc.get('msg_id')}"
+        link = f"{settings.base_url}/dl/{token_doc['token']}/{encoded}/{_quote(str(name))}"
+        return {"status": "success", "link": link}
+
+    return {"status": "error", "message": "Unknown action."}
+
+
 #----- Run the updater then re-exec the app; runs after the HTTP response is flushed
 async def _perform_restart(delay: float = 1.0) -> None:
     await asyncio.sleep(delay)
@@ -2595,6 +2710,8 @@ def _bot_served_channels() -> list[dict]:
         add(s.announcement_channel, "announce")
     if s.skip_channel:
         add(s.skip_channel, "skip")
+    if s.dl_channel_id:
+        add(s.dl_channel_id, "dl")
     return [mapping[k] for k in order]
 
 
@@ -2883,3 +3000,62 @@ async def bot_admin_apply_status_api() -> dict:
             "error": st["error"],
         },
     }
+
+
+# ── Update Manager (Wave 2 Phase D) ────────────────────────────────
+# Check / Stage & Test / Deploy / Roll back for upstream updates.
+# All git work happens in Backend.helper.update_manager (stdlib-only);
+# long operations run on a background task and the Tools page polls
+# the status endpoint, same shape as the Bot Admin apply flow.
+
+_update_run_state: dict = {"running": False, "action": ""}
+
+
+async def _um_background(fn) -> None:
+    try:
+        await asyncio.to_thread(fn)
+    except Exception:
+        pass
+    finally:
+        _update_run_state.update({"running": False, "action": ""})
+
+
+def _um_start(action: str, fn) -> dict:
+    if _update_run_state["running"]:
+        raise HTTPException(status_code=409, detail="An update operation is already running.")
+    _update_run_state.update({"running": True, "action": action})
+    asyncio.create_task(_um_background(fn))
+    return {"status": "started", "action": action}
+
+
+async def update_manager_status_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    snap = await asyncio.to_thread(um.status_snapshot)
+    snap["running"] = _update_run_state["running"]
+    snap["action"] = _update_run_state["action"]
+    return {"status": "success", "data": snap}
+
+
+async def update_manager_check_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    return _um_start("check", um.do_check)
+
+
+async def update_manager_stage_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    return _um_start("stage", um.do_stage)
+
+
+async def update_manager_deploy_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    return _um_start("deploy", um.do_deploy)
+
+
+async def update_manager_rollback_api() -> dict:
+    from Backend.helper import update_manager as um
+
+    return _um_start("rollback", um.do_rollback)

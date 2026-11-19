@@ -35,6 +35,14 @@ async def start_services():
         await asyncio.sleep(1.2)
 
         await SettingsManager.initialize(db)
+
+        #----- Streaming buffer plugin: load the policy from saved settings
+        try:
+            from Backend.helper.stream_buffer import refresh_policy
+
+            refresh_policy(SettingsManager.current().to_dict())
+        except Exception as exc:
+            LOGGER.warning(f"Streaming buffer policy init failed (defaults apply): {exc}")
         app.add_middleware(SessionMiddleware, secret_key=SettingsManager.current().session_secret or secrets.token_hex(32))
         await asyncio.sleep(0.5)
 

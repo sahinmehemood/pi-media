@@ -5,6 +5,9 @@ from typing import Any, Dict, List
 
 import Backend.pyrofork.bot as botmod
 from Backend.config import Telegram
+from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
+from Backend.helper.prewarm import PROFILES as _PREWARM_PROFILES
+from Backend.helper.prewarm import RANGES as _PREWARM_RANGES
 from Backend.helper.passwords import hash_password
 from Backend.logger import LOGGER
 
@@ -48,6 +51,9 @@ _DEFAULTS: Dict[str, Any] = {
     "announce_new_content": False,
     "announcement_channel": "",
     "skip_channel": "",
+    #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
+    "dl_channel_id": "",
+    "dl_expire_days": 0,
     "delete_on_metadata_fail": False,
     "better_poster_enabled": False,
     "better_poster": "",
@@ -63,6 +69,24 @@ _DEFAULTS: Dict[str, Any] = {
     "fanart_shuffle": False,
     "fanart_shuffle_interval": 5,
     "fanart_low_res_poster": True,
+    #----- Streaming buffer (see Backend/helper/stream_buffer.py)
+    "buffer_enabled": True,
+    "buffer_profile": "balanced",
+    "buffer_adaptive": True,
+    "buffer_readahead_mb": 16,
+    "buffer_workers": 4,
+    "buffer_cache_mb": 48,
+    "buffer_disk_cache_mb": 512,
+    "buffer_seek_burst": True,
+    "buffer_stall_timeout": 90,
+    "flood_alert_enabled": False,
+    "prewarm_enabled": False,
+    "prewarm_profile": "smart",
+    "prewarm_mb_per_file": 256,
+    "prewarm_episodes_ahead": 1,
+    "prewarm_trigger_pct": 70,
+    "prewarm_daily_budget_mb": 2048,
+    "prewarm_only_charging": False,
 }
 
 
@@ -169,6 +193,31 @@ class Settings:
     @property
     def skip_channel(self) -> str:
         return str(self._d.get("skip_channel") or "").strip()
+
+    @property
+    def dl_channel_id(self):
+        """DM Link pool channel as an int id, or None when not configured."""
+        raw = str(self._d.get("dl_channel_id") or "").strip()
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    @property
+    def dl_expire_days(self) -> int:
+        """Days a pooled file may live in the DL Channel (0 = forever).
+
+        Pinned index entries are exempt; enforced by the DL sweep.
+        """
+        value = self._d.get("dl_expire_days", 0)
+        if isinstance(value, bool):
+            return 0
+        try:
+            return max(0, min(3650, int(value)))
+        except (TypeError, ValueError):
+            return 0
 
     #----- Strings
     @property
@@ -305,6 +354,103 @@ class Settings:
         except (ValueError, TypeError):
             return 5
 
+    #----- Streaming buffer (ranges shared with stream_buffer.RANGES;
+    #----- a stored value that is not an integer falls back to the
+    #----- default instead of being silently truncated)
+    def _buffer_int(self, key: str, default: int) -> int:
+        value = self._d.get(key, default)
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if not isinstance(value, int):
+            return default
+        low, high = _BUFFER_RANGES[key]
+        return max(low, min(high, value))
+
+    @property
+    def buffer_enabled(self) -> bool:
+        return bool(self._d.get("buffer_enabled", True))
+
+    @property
+    def buffer_adaptive(self) -> bool:
+        return bool(self._d.get("buffer_adaptive", True))
+
+    @property
+    def buffer_profile(self) -> str:
+        return str(self._d.get("buffer_profile") or "balanced").strip().lower()
+
+    @property
+    def buffer_readahead_mb(self) -> int:
+        return self._buffer_int("buffer_readahead_mb", 16)
+
+    @property
+    def buffer_workers(self) -> int:
+        return self._buffer_int("buffer_workers", 4)
+
+    @property
+    def buffer_cache_mb(self) -> int:
+        return self._buffer_int("buffer_cache_mb", 48)
+
+    @property
+    def buffer_stall_timeout(self) -> int:
+        return self._buffer_int("buffer_stall_timeout", 90)
+
+    @property
+    def buffer_disk_cache_mb(self) -> int:
+        return self._buffer_int("buffer_disk_cache_mb", 512)
+
+    @property
+    def buffer_seek_burst(self) -> bool:
+        return bool(self._d.get("buffer_seek_burst", True))
+
+    @property
+    def flood_alert_enabled(self) -> bool:
+        return bool(self._d.get("flood_alert_enabled", False))
+
+    #----- Pre-Warm (ranges shared with prewarm.RANGES; the planner
+    #----- reads settings live on every decision, so changes apply
+    #----- without any restart or rebuild)
+    def _prewarm_int(self, key: str, default: int) -> int:
+        value = self._d.get(key, default)
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if not isinstance(value, int):
+            return default
+        low, high = _PREWARM_RANGES[key]
+        return max(low, min(high, value))
+
+    @property
+    def prewarm_enabled(self) -> bool:
+        return bool(self._d.get("prewarm_enabled", False))
+
+    @property
+    def prewarm_profile(self) -> str:
+        profile = str(self._d.get("prewarm_profile") or "smart").strip().lower()
+        return profile if profile in _PREWARM_PROFILES else "smart"
+
+    @property
+    def prewarm_mb_per_file(self) -> int:
+        return self._prewarm_int("prewarm_mb_per_file", 256)
+
+    @property
+    def prewarm_episodes_ahead(self) -> int:
+        return self._prewarm_int("prewarm_episodes_ahead", 1)
+
+    @property
+    def prewarm_trigger_pct(self) -> int:
+        return self._prewarm_int("prewarm_trigger_pct", 70)
+
+    @property
+    def prewarm_daily_budget_mb(self) -> int:
+        return self._prewarm_int("prewarm_daily_budget_mb", 2048)
+
+    @property
+    def prewarm_only_charging(self) -> bool:
+        return bool(self._d.get("prewarm_only_charging", False))
+
     #----- Lists
     @property
     def auth_channels(self) -> List[str]:
@@ -380,7 +526,7 @@ class SettingsManager:
                 c = str(c).strip()
                 if c:
                     ids.add(c)
-        for key in ("announcement_channel", "skip_channel"):
+        for key in ("announcement_channel", "skip_channel", "dl_channel_id"):
             v = str(data.get(key) or "").strip()
             if v:
                 ids.add(v)
@@ -526,5 +672,24 @@ class SettingsManager:
         #----- Global Search toggle changed (module reads current() live per call)
         if old.get("global_search") != new.get("global_search") and "global_search" not in results:
             results["global_search"] = "enabled" if new.get("global_search") else "disabled"
+
+        #----- Streaming buffer changed: rebuild the policy, resize the cache
+        buffer_keys = {
+            "buffer_enabled", "buffer_profile", "buffer_adaptive",
+            "buffer_readahead_mb", "buffer_workers", "buffer_cache_mb",
+            "buffer_disk_cache_mb", "buffer_seek_burst", "buffer_stall_timeout",
+        }
+        if any(old.get(k) != new.get(k) for k in buffer_keys):
+            try:
+                from Backend.helper.stream_buffer import refresh_policy
+
+                policy = refresh_policy(new)
+                results["buffer"] = (
+                    f"policy rebuilt — profile={policy.profile}, "
+                    f"workers={policy.workers}, cache={policy.cache_mb} MiB"
+                )
+            except Exception as exc:
+                LOGGER.error(f"SettingsManager reinit buffer: {exc}")
+                results["buffer"] = f"error: {exc}"
 
         return results

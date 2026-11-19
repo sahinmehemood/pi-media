@@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
     return templates.TemplateResponse("admin_dashboard.html", ctx)
 
 
+#----- DL Index: files pooled in the DL Channel (DM Link)
+async def dl_index_page(request: Request, _: bool = Depends(require_auth)):
+    from datetime import datetime as _dt
+
+    def _human(num) -> str:
+        size = float(num or 0)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if size < 1024 or unit == "TB":
+                return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+            size /= 1024
+        return f"{size:.1f} TB"
+
+    ctx = _base_context(request)
+    ctx["current_user"] = get_current_user(request)
+    entries = []
+    dl_id = None
+    try:
+        dl_id = SettingsManager.current().dl_channel_id
+        tracking = (getattr(db, "dbs", None) or {}).get("tracking")
+        if tracking is not None:
+            docs = []
+            async for doc in tracking["dl_link_map"].find({}):
+                docs.append(doc)
+
+            def stamp(d):
+                return d.get("pooled_at") or d.get("ts") or 0
+
+            docs.sort(key=stamp, reverse=True)
+            q = (request.query_params.get("q") or "").strip().lower()
+            for d in docs:
+                name = d.get("name") or f"DL post {d.get('msg_id')}"
+                if q and q not in str(name).lower():
+                    continue
+                ts = stamp(d)
+                entries.append({
+                    "unique_id": str(d.get("_id")),
+                    "msg_id": d.get("msg_id"),
+                    "name": name,
+                    "size_h": _human(d.get("size") or 0),
+                    "pinned": bool(d.get("pinned")),
+                    "date": _dt.fromtimestamp(ts).strftime("%d %b %Y") if ts else "?",
+                })
+            entries = entries[:200]
+    except Exception:
+        entries = []
+    ctx.update({
+        "dl_entries": entries,
+        "dl_channel_id": dl_id,
+        "dl_query": request.query_params.get("q") or "",
+        "dl_expire_days": SettingsManager.current().dl_expire_days,
+    })
+    return templates.TemplateResponse("dl_index.html", ctx)
+
+
 #----- Login form (redirects to home when already authenticated)
 async def login_page(request: Request):
     if is_authenticated(request):
@@ -262,11 +316,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
         titles = {}
     settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
 
+    try:
+        from Backend.helper.stream_buffer import snapshot as _buffer_snapshot
+
+        buffer_health = _buffer_snapshot()
+    except Exception:
+        buffer_health = {}
+    try:
+        from Backend.pyrofork.plugins.prewarm_hooks import prewarm_snapshot
+
+        prewarm_health = prewarm_snapshot()
+    except Exception:
+        prewarm_health = {}
     ctx = _base_context(request)
     ctx.update({
         "current_user": get_current_user(request),
         "settings": settings,
         "userbot_configured": botmod.Userbot is not None,
         "formatter_presets": PRESETS,
+        "buffer_health": buffer_health,
+        "prewarm_health": prewarm_health,
     })
     return templates.TemplateResponse("settings.html", ctx)

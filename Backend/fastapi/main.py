@@ -70,8 +70,14 @@ from Backend.fastapi.routes.api_routes import (
     get_system_stats_api,
     get_tools_channels_api,
     bot_admin_scan_api,
+    dl_index_action_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
+    update_manager_check_api,
+    update_manager_deploy_api,
+    update_manager_rollback_api,
+    update_manager_stage_api,
+    update_manager_status_api,
     clear_manual_session_api,
     search_manual_session_api,
     set_manual_session_api,
@@ -124,6 +130,7 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
 from Backend.fastapi.routes.template_routes import (
     admin_access_page,
     admin_dashboard_page,
+    dl_index_page,
     admin_requests_page,
     admin_subscriptions_page,
     public_request_page,
@@ -292,6 +299,14 @@ async def root(request: Request, _: bool = Depends(require_auth)):
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
     return await admin_dashboard_page(request, _)
+
+@app.get("/admin/dl-index", response_class=HTMLResponse)
+async def admin_dl_index(request: Request, _: bool = Depends(require_auth)):
+    return await dl_index_page(request, _)
+
+@app.post("/api/admin/dl-index/action")
+async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
+    return await dl_index_action_api(payload)
 
 @app.get("/media/manage", response_class=HTMLResponse)
 async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
@@ -812,6 +827,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
 @app.get("/api/admin/tools/bot-admin/apply/status")
 async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
     return await bot_admin_apply_status_api()
+
+@app.get("/api/admin/tools/update-manager/status")
+async def tools_update_manager_status(_: bool = Depends(require_auth)):
+    return await update_manager_status_api()
+
+@app.post("/api/admin/tools/update-manager/check")
+async def tools_update_manager_check(_: bool = Depends(require_auth)):
+    return await update_manager_check_api()
+
+@app.post("/api/admin/tools/update-manager/stage")
+async def tools_update_manager_stage(_: bool = Depends(require_auth)):
+    return await update_manager_stage_api()
+
+@app.post("/api/admin/tools/update-manager/deploy")
+async def tools_update_manager_deploy(_: bool = Depends(require_auth)):
+    return await update_manager_deploy_api()
+
+@app.post("/api/admin/tools/update-manager/rollback")
+async def tools_update_manager_rollback(_: bool = Depends(require_auth)):
+    return await update_manager_rollback_api()
 
 @app.get("/api/admin/tools/manual-session")
 async def tools_manual_session_get(_: bool = Depends(require_auth)):
