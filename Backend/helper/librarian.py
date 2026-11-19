@@ -1418,7 +1418,7 @@ async def _bot_api(method: str, params: dict) -> dict:
 
 
 async def _verify_indexed(chat_id, msg_id, want_tmdb, want_imdb,
-                          tries: int = 10, delay: float = 3.0) -> bool:
+                          tries: int = 25, delay: float = 1.0) -> bool:
     from Backend import db as _db
     stripped = _norm_chat(chat_id)
     for _ in range(tries):
@@ -1516,6 +1516,62 @@ async def _live_identity_ok(chat_id, msg_id, key, expected_caption) -> tuple:
     return True, ""
 
 
+# ---------------------------------------------------------------------------
+# Apply engine: bounded-concurrency pipeline.
+#
+# The v4 loop applied one file at a time and summed every wait serially
+# (~8s/file: identity call + edit + a 3s-granularity verify poll + a fixed
+# 2s pause). The engine overlaps those stages across files while keeping
+# every safety invariant: the identity check still runs immediately before
+# each write, writes are paced per channel (Telegram's real ceiling is
+# about one edit per second inside one chat) and globally, verification
+# still gates skip-copy cleanup and alias teaching, and a FLOOD_WAIT
+# pauses the whole pool for the demanded duration instead of hammering.
+# Worker count: the librarian_apply_workers setting (1 = serial).
+# ---------------------------------------------------------------------------
+
+APPLY_GLOBAL_INTERVAL = 0.34   # ~3 writes/s across all channels
+APPLY_CHANNEL_INTERVAL = 1.0   # 1 write/s inside one channel
+
+
+class _Pacer:
+    """Reserves evenly spaced write slots; a flood pause pushes them."""
+
+    def __init__(self, interval: float):
+        self.interval = float(interval)
+        self._next = 0.0
+        self._pause_until = 0.0
+        self._lock = asyncio.Lock()
+
+    def pause(self, seconds: float) -> None:
+        until = time.monotonic() + max(0.0, float(seconds))
+        if until > self._pause_until:
+            self._pause_until = until
+
+    async def wait(self) -> None:
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                slot = max(self._next, self._pause_until)
+                if slot <= now:
+                    self._next = now + self.interval
+                    return
+                delay = slot - now
+            await asyncio.sleep(delay)
+
+
+def _flood_seconds(resp: dict) -> float:
+    """Seconds Telegram demands we wait, or 0 when resp is not a flood."""
+    try:
+        params = resp.get("parameters") or {}
+        if params.get("retry_after"):
+            return float(params["retry_after"])
+    except Exception:
+        pass
+    m = re.search(r"retry after (\d+)", str(resp.get("description") or ""))
+    return float(m.group(1)) if m else 0.0
+
+
 async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
     """Execute an approved, gate-passed proposal: edit originals in place
     (or re-post from the skip pile), verify indexing, clean skip copies,
@@ -1540,12 +1596,40 @@ async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
                 "would_apply": len(doc.get("items") or [])}
     budget = int(settings.librarian_edit_budget_per_day or 0)
     used = await _edits_today()
-    if budget <= 0 or used + len(doc.get("items") or []) > budget:
+    items = doc.get("items") or []
+    if budget <= 0 or used + len(items) > budget:
         return {"ok": False,
                 "message": f"Daily edit budget reached ({used}/{budget} used)."}
-    located = await _located_map([it["key"] for it in doc.get("items") or []])
-    results = []
-    for it in doc.get("items") or []:
+    located = await _located_map([it["key"] for it in items])
+    results: list = [None] * len(items)
+
+    global_pacer = _Pacer(APPLY_GLOBAL_INTERVAL)
+    channel_pacers: dict = {}
+
+    def pacer_for(channel) -> _Pacer:
+        return channel_pacers.setdefault(str(channel),
+                                         _Pacer(APPLY_CHANNEL_INTERVAL))
+
+    async def paced_write(channel, method: str, params: dict) -> dict:
+        cp = pacer_for(channel)
+        resp = {"ok": False, "description": "no attempt made"}
+        for _attempt in range(2):
+            await cp.wait()
+            await global_pacer.wait()
+            resp = await _bot_api(method, params)
+            if resp.get("ok"):
+                return resp
+            flood = _flood_seconds(resp)
+            if flood <= 0:
+                return resp
+            global_pacer.pause(flood)
+            cp.pause(flood)
+            LOGGER.warning(
+                f"[Librarian] FLOOD_WAIT {flood:.0f}s on {method}; "
+                "apply pool paused")
+        return resp
+
+    async def apply_item(idx: int, it: dict) -> None:
         item = await ledger.find_one({"_id": it["key"]}) or {}
         loc = located.get(it["key"]) or {}
         chat_id = item.get("chat_id") or loc.get("chat_id") or doc.get("channel")
@@ -1559,7 +1643,7 @@ async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
                     chat_id, msg_id, it["key"], before)
                 if not id_ok:
                     raise RuntimeError(id_reason)
-                resp = await _bot_api("editMessageCaption", {
+                resp = await paced_write(chat_id, "editMessageCaption", {
                     "chat_id": int(chat_id), "message_id": int(msg_id),
                     "caption": it["new_caption"], "parse_mode": "HTML"})
                 if not resp.get("ok"):
@@ -1579,7 +1663,7 @@ async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
                     item.get("caption") or "")
                 if not id_ok:
                     raise RuntimeError(id_reason)
-                resp = await _bot_api("copyMessage", {
+                resp = await paced_write(doc["channel"], "copyMessage", {
                     "chat_id": int(doc["channel"]), "from_chat_id": skip_channel,
                     "message_id": int(skip_ids[0]),
                     "caption": it["new_caption"], "parse_mode": "HTML"})
@@ -1607,8 +1691,31 @@ async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
                 "status": "fixed", "fixed_at": time.time(),
                 "fixed_via": entry.get("action")}})
             await _teach_alias(doc.get("channel"), item, it)
-        results.append(entry)
-        await asyncio.sleep(2)
+        results[idx] = entry
+
+    queue: asyncio.Queue = asyncio.Queue()
+    for _idx, _it in enumerate(items):
+        queue.put_nowait((_idx, _it))
+
+    async def worker() -> None:
+        while True:
+            try:
+                idx, it = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                await apply_item(idx, it)
+            except Exception as e:  # a worker must never die mid-proposal
+                results[idx] = {"key": it.get("key"), "ok": False,
+                                "reason": f"apply worker error: {e}"}
+
+    workers = max(1, min(len(items) or 1,
+                         int(getattr(settings, "librarian_apply_workers", 4) or 4)))
+    if items:
+        await asyncio.gather(*[worker() for _ in range(workers)])
+    results = [r if r is not None else {"key": "", "ok": False,
+                                        "reason": "not processed"}
+               for r in results]
     done = sum(1 for r in results if r["ok"])
     status = "applied" if done == len(results) else ("partial" if done else "failed")
     await coll.update_one({"_id": proposal_id}, {"$set": {

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -600,6 +601,119 @@ def test_apply_edit_path_dry_run_then_live():
         assert ledger.docs["k1"]["status"] == "open"
     finally:
         lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = orig
+        settings.librarian_dry_run = True
+        _unwire(lib, saved)
+
+
+# ---------------------------------------------------------------------------
+# Apply engine — pacing, overlap, flood pause
+# ---------------------------------------------------------------------------
+
+def _engine_setup(lib, n=6):
+    ledger, proposals, audit, alias = (_FakeColl(), _FakeColl(),
+                                       _FakeColl(), _FakeColl())
+    locator = _FakeColl()
+    saved = _wire(lib, ledger=ledger, locator=locator, proposals=proposals,
+                  audit=audit, alias=alias)
+    items = []
+    for i in range(1, n + 1):
+        k = f"e{i}"
+        cap = f"Show S01E0{i}"
+        ledger.docs[k] = {"_id": k, "status": "open", "caption": cap,
+                          "skip_msg_ids": [], "first_seen": 1.0}
+        locator.docs[k] = {"_id": k, "chat_id": -100111, "msg_id": 100 + i,
+                           "caption": cap, "file_name": ""}
+        items.append({"key": k, "new_caption": f"{cap} 1080p tt1234567",
+                      "media_type": "tv", "tmdb_id": 42,
+                      "imdb_id": "tt1234567", "season": 1, "episode": i})
+        lib._stubs["bot"].fake_ub.messages[(-100111, 100 + i)] = (
+            types.SimpleNamespace(
+                caption=cap, empty=False, document=None,
+                video=types.SimpleNamespace(file_unique_id=k)))
+    proposals.docs["pe"] = {"_id": "pe", "channel": -100111, "label": "eng",
+                            "status": "pending", "items": items}
+    return saved, ledger, proposals, audit
+
+
+def test_apply_engine_paces_and_overlaps():
+    lib = load_lib()
+    saved, ledger, proposals, audit = _engine_setup(lib, 6)
+    settings = lib._stubs["settings"]
+    settings.librarian_dry_run = False
+    stamps = []
+
+    async def fake_bot_api(method, params):
+        stamps.append(time.monotonic())
+        await asyncio.sleep(0.4)
+        return {"ok": True, "result": {"message_id": params.get("message_id", 0)}}
+
+    async def fake_verify(chat, msg, tmdb, imdb):
+        return True
+
+    async def fake_clean(item):
+        return None
+
+    orig = (lib._bot_api, lib._verify_indexed, lib._delete_skip_copies,
+            lib.APPLY_CHANNEL_INTERVAL, lib.APPLY_GLOBAL_INTERVAL)
+    lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = (
+        fake_bot_api, fake_verify, fake_clean)
+    lib.APPLY_CHANNEL_INTERVAL, lib.APPLY_GLOBAL_INTERVAL = 0.3, 0.05
+    try:
+        t0 = time.monotonic()
+        res = run(lib.apply_proposal("pe"))
+        elapsed = time.monotonic() - t0
+        assert res["ok"] is True and res["applied"] == 6, res
+        assert len(stamps) == 6
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        assert all(g >= 0.24 for g in gaps), gaps  # channel pacing held
+        # Serial would take >= 6 x (0.4 latency + 0.3 pace) = 4.2s; the
+        # pipeline is pacing-bound (~5 gaps x 0.3 + one latency).
+        assert elapsed < 3.0, elapsed
+        assert all(ledger.docs[f"e{i}"]["status"] == "fixed" for i in range(1, 7))
+        assert len(audit.docs) == 6
+    finally:
+        (lib._bot_api, lib._verify_indexed, lib._delete_skip_copies,
+         lib.APPLY_CHANNEL_INTERVAL, lib.APPLY_GLOBAL_INTERVAL) = orig
+        settings.librarian_dry_run = True
+        _unwire(lib, saved)
+
+
+def test_apply_engine_flood_pauses_and_retries():
+    lib = load_lib()
+    saved, ledger, proposals, audit = _engine_setup(lib, 2)
+    settings = lib._stubs["settings"]
+    settings.librarian_dry_run = False
+    attempts = []
+
+    async def fake_bot_api(method, params):
+        attempts.append(params["message_id"])
+        if len(attempts) == 1:
+            return {"ok": False, "error_code": 429,
+                    "description": "Too Many Requests: retry after 1",
+                    "parameters": {"retry_after": 1}}
+        return {"ok": True, "result": {"message_id": params["message_id"]}}
+
+    async def fake_verify(chat, msg, tmdb, imdb):
+        return True
+
+    async def fake_clean(item):
+        return None
+
+    orig = (lib._bot_api, lib._verify_indexed, lib._delete_skip_copies,
+            lib.APPLY_CHANNEL_INTERVAL, lib.APPLY_GLOBAL_INTERVAL)
+    lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = (
+        fake_bot_api, fake_verify, fake_clean)
+    lib.APPLY_CHANNEL_INTERVAL, lib.APPLY_GLOBAL_INTERVAL = 0.05, 0.02
+    try:
+        t0 = time.monotonic()
+        res = run(lib.apply_proposal("pe"))
+        elapsed = time.monotonic() - t0
+        assert res["ok"] is True and res["applied"] == 2, res
+        assert len(attempts) == 3, attempts  # one flood + its retry + item 2
+        assert elapsed >= 0.9, elapsed  # the pool honoured the pause
+    finally:
+        (lib._bot_api, lib._verify_indexed, lib._delete_skip_copies,
+         lib.APPLY_CHANNEL_INTERVAL, lib.APPLY_GLOBAL_INTERVAL) = orig
         settings.librarian_dry_run = True
         _unwire(lib, saved)
 

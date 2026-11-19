@@ -105,6 +105,7 @@ _DEFAULTS: Dict[str, Any] = {
     "librarian_channels": [],
     "librarian_api_token": "",
     "librarian_batch_size": 60,
+    "librarian_apply_workers": 4,
     "librarian_gate_strict_year": False,
     "librarian_specials_policy": "guard",
 }
@@ -561,6 +562,13 @@ class Settings:
         if isinstance(value, bool) or not isinstance(value, int):
             return 60
         return max(1, min(200, value))
+
+    @property
+    def librarian_apply_workers(self) -> int:
+        value = self._d.get("librarian_apply_workers", 4)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 4
+        return max(1, min(16, value))
 
     @property
     def librarian_gate_strict_year(self) -> bool:

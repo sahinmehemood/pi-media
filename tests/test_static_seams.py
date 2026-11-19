@@ -383,3 +383,11 @@ def test_automations_uses_real_tracking_accessor():
     text = read("Backend/helper/automations.py")
     assert "get_tracking_db" not in text
     assert 'get("tracking")' in text
+
+
+def test_apply_engine_present():
+    lib = read("Backend/helper/librarian.py")
+    assert "class _Pacer" in lib
+    assert "librarian_apply_workers" in lib
+    sm = read("Backend/helper/settings_manager.py")
+    assert '"librarian_apply_workers": 4' in sm
