@@ -3169,21 +3169,27 @@ async def update_manager_rollback_api() -> dict:
 
 
 
-#----- Librarian (Hermes curation — Phase 1: ledger, funnel, gate).
-#----- Admin actions run in the background (sweep/audit/funnel state is
-#----- polled by the Librarian page); the bot-facing status/queue pair
-#----- is guarded by the dedicated Librarian API token from Settings.
+#----- Librarian v4 (Hermes curation: locator, packets, proposals, gate,
+#----- apply). Admin actions run in the background (state is polled by the
+#----- Librarian page); the bot-facing API is guarded by the dedicated
+#----- Librarian API token from Settings.
 async def librarian_action_api(payload: dict) -> dict:
     from Backend.helper import librarian
 
     action = str(payload.get("action") or "")
     if action == "state":
         return {"status": "success", "state": librarian.ACTION_STATE}
-    if action in ("sweep", "audit", "funnel"):
+    if action in ("sweep", "audit", "locator"):
         if not SettingsManager.current().librarian_enabled:
             return {"status": "error",
                     "message": "Librarian is disabled — enable it in Settings first."}
-        return librarian.start_action(action)
+        channel = payload.get("channel")
+        if action == "locator" and not channel:
+            return {"status": "error",
+                    "message": "The locator needs a channel to walk."}
+        return librarian.start_action(action, channel)
+    if action == "rollback":
+        return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
     if action == "regen_token":
         import secrets
 
@@ -3205,20 +3211,74 @@ async def librarian_bot_status_api(request: Request) -> dict:
     from Backend.helper import librarian
 
     settings = SettingsManager.current()
-    counts = await librarian.ledger_counts()
     return {
         "enabled": settings.librarian_enabled,
         "dry_run": settings.librarian_dry_run,
-        "digest": settings.librarian_digest,
-        "counts": counts,
+        "counts": await librarian.panel_counts(),
         "action_state": librarian.ACTION_STATE,
     }
 
 
-async def librarian_bot_queue_api(request: Request) -> dict:
+async def librarian_bot_packet_api(request: Request) -> dict:
     if not _librarian_token_ok(request):
         raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
     from Backend.helper import librarian
 
-    runs = await librarian.list_runs(limit=100)
-    return {"runs": runs}
+    channel = request.query_params.get("channel")
+    if not channel:
+        raise HTTPException(status_code=400, detail="channel is required.")
+    try:
+        limit = int(request.query_params.get("limit") or 30)
+    except ValueError:
+        limit = 30
+    return await librarian.get_packet(channel, limit)
+
+
+async def librarian_bot_proposals_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian
+
+    payload = await request.json()
+    return await librarian.submit_proposal(payload)
+
+
+async def librarian_bot_apply_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian
+
+    payload = await request.json()
+    return await librarian.apply_proposal(
+        str(payload.get("proposal_id") or ""),
+        approver=str(payload.get("approver") or "yan"))
+
+
+async def librarian_bot_rollback_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian
+
+    payload = await request.json()
+    return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
+
+
+async def librarian_bot_search_api(request: Request) -> dict:
+    """The app's own /set candidate search, for the Media Manager."""
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper.metadata.entry import (
+        search_any_candidates,
+        search_movie_candidates,
+        search_tv_candidates,
+    )
+
+    query = request.query_params.get("q") or ""
+    media_type = (request.query_params.get("type") or "any").lower()
+    if media_type == "movie":
+        results = await search_movie_candidates(query)
+    elif media_type == "tv":
+        results = await search_tv_candidates(query)
+    else:
+        results = await search_any_candidates(query)
+    return {"results": results}

@@ -1,9 +1,8 @@
-"""Librarian Phase 1 tests: pure logic (name bits, clustering, tiers,
-reason codes, initials) plus funnel/gate behaviour against stubbed
-provider modules, loaded through the suite's path loader."""
+"""Librarian v4 tests: pure helpers (name bits, reason codes, initials),
+the ledger upsert, and the packet -> proposal -> gate -> apply -> rollback
+flow against fake collections and stubbed app modules."""
 
 import asyncio
-import difflib
 import logging
 import re
 import sys
@@ -23,7 +22,18 @@ def load_lib():
         return _LIB
 
     backend = types.ModuleType("Backend")
-    backend.db = types.SimpleNamespace(dbs={})
+    removed = []
+
+    async def _remove_media_part(chat, msg):
+        removed.append((chat, msg))
+        return True
+
+    async def _get_media_ids(chat, msg):
+        return None
+
+    backend.db = types.SimpleNamespace(
+        dbs={}, remove_media_part=_remove_media_part,
+        get_media_ids_by_part=_get_media_ids)
     logger_mod = types.ModuleType("Backend.logger")
     logger_mod.LOGGER = logging.getLogger("librarian-tests")
 
@@ -31,36 +41,37 @@ def load_lib():
     _ID_RE = re.compile(r"\btt\d{7,10}\b|themoviedb\.org/(?:movie|tv)/\d+", re.I)
 
     def extract_default_id(text):
-        m = _ID_RE.search(text or "")
-        return m.group(0) if m else None
-
-    def score_candidate(q_title, q_year, r_title, r_year, **kw):
-        return difflib.SequenceMatcher(None, (q_title or "").lower(),
-                                       (r_title or "").lower()).ratio()
+        m = re.search(r"\b(tt\d{7,10})\b", text or "")
+        if m:
+            return m.group(1)
+        m = re.search(r"/(?:movie|tv)/(\d+)", text or "")
+        return m.group(1) if m else None
 
     common.extract_default_id = extract_default_id
-    common.score_candidate = score_candidate
 
     entry = types.ModuleType("Backend.helper.metadata.entry")
-    entry.search_any_candidates = None  # set per-test
+    entry.metadata = None  # set per-test
+    entry.search_any_candidates = None
     entry.search_movie_candidates = None
     entry.search_tv_candidates = None
-
-    tmdb = types.ModuleType("Backend.helper.metadata.providers.tmdb")
-    tmdb.details = None
-    tmdb.episode_details = None
-    tmdb.external_imdb_id = None
 
     parse = types.ModuleType("Backend.helper.metadata.parse")
     parse.analyze_metadata_failure = lambda name: ""
     parse.parse_media_name = lambda name: {}
 
+    pyro = types.ModuleType("Backend.helper.pyro")
+    pyro.clean_filename = lambda s: s
+
+    settings_ns = types.SimpleNamespace(
+        librarian_enabled=True, librarian_dry_run=True,
+        librarian_edit_budget_per_day=50, hermes_bot_token="tok",
+        skip_channel=-100999)
     settings_manager = types.ModuleType("Backend.helper.settings_manager")
 
     class _SM:
         @staticmethod
         def current():
-            return types.SimpleNamespace(librarian_enabled=True)
+            return settings_ns
 
     settings_manager.SettingsManager = _SM
 
@@ -82,16 +93,15 @@ def load_lib():
         "Backend.helper.metadata.common": common,
         "Backend.helper.metadata.entry": entry,
         "Backend.helper.metadata.parse": parse,
-        "Backend.helper.metadata.providers":
-            types.ModuleType("Backend.helper.metadata.providers"),
-        "Backend.helper.metadata.providers.tmdb": tmdb,
+        "Backend.helper.pyro": pyro,
         "Backend.helper.settings_manager": settings_manager,
         "Backend.helper.encrypt": encrypt,
         "Backend.pyrofork": types.ModuleType("Backend.pyrofork"),
         "Backend.pyrofork.bot": bot,
     })
     _LIB = load_module("librarian_under_test", "Backend/helper/librarian.py")
-    _LIB._stubs = {"common": common, "entry": entry, "tmdb": tmdb}
+    _LIB._stubs = {"common": common, "entry": entry, "settings": settings_ns,
+                   "removed": removed}
     return _LIB
 
 
@@ -100,7 +110,7 @@ def run(coro):
 
 
 # ---------------------------------------------------------------------------
-# name_bits / clustering
+# Pure helpers
 # ---------------------------------------------------------------------------
 
 def test_name_bits_special_run():
@@ -132,23 +142,6 @@ def test_name_bits_movie_has_no_episode():
     assert bits["year"] == 2010
 
 
-def test_cluster_groups_run_and_reports_missing():
-    lib = load_lib()
-    items = [
-        {"key": "a", "chat_id": -1001, "caption": "BTTH 3YA - SP3 E01", "file_name": ""},
-        {"key": "b", "chat_id": -1001, "caption": "BTTH 3YA - SP3 E03", "file_name": ""},
-        {"key": "c", "chat_id": -1001, "caption": "Inception (2010) 1080p", "file_name": ""},
-    ]
-    for it in items:
-        it["bits"] = lib.name_bits(it["caption"], it["file_name"])
-    runs = lib.cluster_items(items)
-    assert len(runs) == 2
-    run = next(r for r in runs if r["stem"] == "btth 3ya sp3")
-    assert run["episodes"] == [1, 3]
-    assert run["missing_episodes"] == [2]
-    assert sorted(run["item_keys"]) == ["a", "b"]
-
-
 def test_reason_codes():
     lib = load_lib()
     assert lib.reason_code_for("No video quality/resolution was found.") == "no-quality"
@@ -164,55 +157,122 @@ def test_initials_matching():
     assert not lib.stem_title_match("btth", "Breaking Bad")
 
 
-def test_assign_tier():
-    lib = load_lib()
-    full = {"passed": True, "checks": [{"name": "id_exists", "ok": True}]}
-    skipped = {"passed": True, "checks": [{"name": "id_exists", "ok": True},
-                                          {"name": "episode_exists", "ok": None}]}
-    failed = {"passed": False, "checks": [{"name": "id_exists", "ok": False}]}
-    assert lib.assign_tier("L0", full) == "A"
-    assert lib.assign_tier("L1", full) == "A"
-    assert lib.assign_tier("L2", full) == "B"
-    assert lib.assign_tier("L0", skipped) == "B"
-    assert lib.assign_tier("L0", failed) == "C"
-    assert lib.assign_tier(None, full) == "C"
+# ---------------------------------------------------------------------------
+# Fake Mongo collection (mirrors the operator-conflict rule)
+# ---------------------------------------------------------------------------
+
+def _matches(doc, query):
+    for k, cond in (query or {}).items():
+        val = doc.get(k)
+        if isinstance(cond, dict):
+            if "$in" in cond and val not in cond["$in"]:
+                return False
+            if "$gte" in cond and not (val is not None and val >= cond["$gte"]):
+                return False
+        elif val != cond:
+            return False
+    return True
 
 
-# ---------------------------------------------------------------------------
-# Ledger store (fake collection)
-# ---------------------------------------------------------------------------
+class _FakeCursor:
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def sort(self, field, direction=1):
+        self._docs.sort(key=lambda d: d.get(field) or 0,
+                        reverse=(direction < 0))
+        return self
+
+    def limit(self, n):
+        self._docs = self._docs[:n]
+        return self
+
+    def __aiter__(self):
+        async def gen():
+            for d in self._docs:
+                yield dict(d)
+        return gen()
+
 
 class _FakeColl:
     def __init__(self):
         self.docs = {}
 
+    def find(self, query=None, projection=None):
+        return _FakeCursor([d for d in self.docs.values() if _matches(d, query)])
+
+    async def find_one(self, query):
+        for d in self.docs.values():
+            if _matches(d, query):
+                return dict(d)
+        return None
+
+    async def insert_one(self, doc):
+        doc = dict(doc)
+        doc.setdefault("_id", f"auto{len(self.docs)}")
+        self.docs[doc["_id"]] = doc
+
+    async def replace_one(self, filt, doc, upsert=False):
+        self.docs[filt["_id"]] = dict(doc)
+
+    async def count_documents(self, query):
+        return sum(1 for d in self.docs.values() if _matches(d, query))
+
     async def update_one(self, filt, update, upsert=False):
-        # Mirror MongoDB: one path may not be targeted by two operators.
         seen = {}
         for op, body in update.items():
             for path in (body or {}):
                 if path in seen:
                     raise ValueError(f"Updating the path '{path}' would create a conflict")
                 seen[path] = op
-        key = filt["_id"]
-        doc = self.docs.setdefault(key, {"_id": key, "history": [], "skip_msg_ids": []})
+        key = filt.get("_id")
+        doc = self.docs.get(key)
+        if doc is None:
+            if not upsert and "$setOnInsert" not in update:
+                # find the doc by query match instead of _id
+                doc = next((d for d in self.docs.values() if _matches(d, filt)), None)
+                if doc is None:
+                    return
+            doc = self.docs.setdefault(key, {"_id": key, "history": [],
+                                             "skip_msg_ids": []})
         for k, v in (update.get("$setOnInsert") or {}).items():
             doc.setdefault(k, v)
         for k, v in (update.get("$set") or {}).items():
             doc[k] = v
+        for k in (update.get("$unset") or {}):
+            doc.pop(k, None)
         pushed = (update.get("$push") or {}).get("history")
         if isinstance(pushed, dict):
-            doc["history"].append(pushed)
+            doc.setdefault("history", []).append(pushed)
         add = (update.get("$addToSet") or {}).get("skip_msg_ids")
-        if add is not None and add not in doc["skip_msg_ids"]:
-            doc["skip_msg_ids"].append(add)
+        if add is not None:
+            ids = doc.setdefault("skip_msg_ids", [])
+            vals = add.get("$each") if isinstance(add, dict) else [add]
+            for v in vals or []:
+                if v not in ids:
+                    ids.append(v)
+
+
+def _wire(lib, ledger=None, locator=None, proposals=None, audit=None, alias=None):
+    saved = {}
+    for name, fake in (("_ledger_coll", ledger), ("_locator_coll", locator),
+                       ("_proposals_coll", proposals), ("_audit_coll", audit),
+                       ("_alias_coll", alias)):
+        saved[name] = getattr(lib, name)
+        if fake is not None:
+            setattr(lib, name, lambda f=fake: f)
+    return saved
+
+
+def _unwire(lib, saved):
+    for name, fn in saved.items():
+        setattr(lib, name, fn)
 
 
 def test_record_reject_upserts_without_duplicating():
     lib = load_lib()
     fake = _FakeColl()
-    original = lib._ledger_coll
-    lib._ledger_coll = lambda: fake
+    saved = _wire(lib, ledger=fake)
     try:
         fields = {"key": "uid1", "file_unique_id": "uid1", "chat_id": -1001,
                   "msg_id": 5, "origin": "live-fail", "caption": "TDH E29",
@@ -221,89 +281,165 @@ def test_record_reject_upserts_without_duplicating():
         assert run(lib.record_reject(fields)) is True
         assert run(lib.record_reject(fields)) is True
     finally:
-        lib._ledger_coll = original
+        _unwire(lib, saved)
     assert len(fake.docs) == 1
     assert fake.docs["uid1"]["skip_msg_ids"] == [900]
 
 
 # ---------------------------------------------------------------------------
-# Funnel + gate with stubbed providers
+# Packet
 # ---------------------------------------------------------------------------
 
-def _fake_run(caption="Some Show S02E05 tt1234567"):
+def test_packet_returns_located_channel_items():
     lib = load_lib()
-    item = {"key": "k1", "chat_id": -1001, "caption": caption, "file_name": "",
-            "bits": lib.name_bits(caption, "")}
-    return {"run_id": "-1001|some show", "chat_id": -1001, "stem": "some show",
-            "season": 2, "special": None, "year": None, "episodes": [5],
-            "missing_episodes": [], "item_keys": ["k1"], "items": [item]}
+    ledger, locator = _FakeColl(), _FakeColl()
+    ledger.docs["u1"] = {"_id": "u1", "status": "open", "caption": "",
+                         "file_name": "Show E01.mkv", "first_seen": 1.0,
+                         "skip_msg_ids": [50]}
+    ledger.docs["u2"] = {"_id": "u2", "status": "open", "chat_id": -100111,
+                         "msg_id": 7, "caption": "Show E02", "first_seen": 2.0}
+    ledger.docs["u3"] = {"_id": "u3", "status": "open", "chat_id": -100222,
+                         "msg_id": 9, "caption": "Other E01", "first_seen": 3.0}
+    locator.docs["u1"] = {"_id": "u1", "chat_id": -100111, "msg_id": 5,
+                          "caption": "Show E01", "file_name": "Show E01.mkv"}
+    saved = _wire(lib, ledger=ledger, locator=locator, alias=_FakeColl())
+    orig_index = lib._channel_title_index
+
+    async def no_index():
+        return {}
+
+    lib._channel_title_index = no_index
+    try:
+        packet = run(lib.get_packet(-100111, limit=10))
+    finally:
+        lib._channel_title_index = orig_index
+        _unwire(lib, saved)
+    assert packet["ok"] is True
+    keys = sorted(i["key"] for i in packet["items"])
+    assert keys == ["u1", "u2"]
+    u1 = next(i for i in packet["items"] if i["key"] == "u1")
+    assert u1["located"] is True and u1["msg_id"] == 5
 
 
-def _install_provider_fakes(lib):
-    entry, tmdb = lib._stubs["entry"], lib._stubs["tmdb"]
+# ---------------------------------------------------------------------------
+# Proposals + gate
+# ---------------------------------------------------------------------------
 
-    async def fake_search(text, year=None, limit=8):
-        return [{"source": "tmdb", "media_type": "tv", "title": "Some Show",
-                 "year": "2020", "imdb_id": "tt1234567", "tmdb_id": 42}]
-
-    async def fake_details(media_type, item_id):
-        return {"id": item_id, "name": "Some Show"}
-
-    async def fake_episode(tv_id, season, episode):
-        return {"episode_number": episode} if episode <= 10 else None
-
-    async def fake_external(media_type, tmdb_id):
-        return "tt1234567"
-
-    entry.search_any_candidates = fake_search
-    tmdb.details = fake_details
-    tmdb.episode_details = fake_episode
-    tmdb.external_imdb_id = fake_external
+def _seed_proposal_env(lib):
+    ledger, proposals = _FakeColl(), _FakeColl()
+    ledger.docs["k1"] = {"_id": "k1", "status": "open",
+                         "caption": "Some Show S02E05", "first_seen": 1.0}
+    saved = _wire(lib, ledger=ledger, proposals=proposals)
+    return ledger, proposals, saved
 
 
-def test_funnel_l0_verified_tier_a():
+def _plan(caption="Some Show S02E05 1080p\n<a href=\"https://www.imdb.com/title/tt1234567/\">IMDB</a>",
+          episode=5):
+    return {"channel": -100111, "label": "Some Show S2",
+            "items": [{"key": "k1", "new_caption": caption, "media_type": "tv",
+                       "tmdb_id": 42, "imdb_id": "tt1234567",
+                       "season": 2, "episode": episode}]}
+
+
+def test_submit_proposal_requires_id_stamp():
     lib = load_lib()
-    _install_provider_fakes(lib)
-    outcome = run(lib.resolve_run(_fake_run(), {}))
-    assert outcome["proposal"]["layer"] == "L0"
-    assert outcome["gate"]["passed"] is True
-    assert outcome["tier"] == "A"
+    ledger, proposals, saved = _seed_proposal_env(lib)
+    try:
+        plan = _plan(caption="Some Show S02E05 1080p")
+        res = run(lib.submit_proposal(plan))
+    finally:
+        _unwire(lib, saved)
+    assert res["ok"] is False
+    assert "no ID link" in res["message"]
 
 
-def test_gate_rejects_missing_episode():
+def test_gate_passes_and_fails_on_numbering():
     lib = load_lib()
-    _install_provider_fakes(lib)
-    proposal = {"layer": "L2", "provider": "tmdb", "media_type": "tv",
-                "title": "Some Show", "year": 2020, "tmdb_id": 42,
-                "imdb_id": "tt1234567", "tvdb_id": None, "kitsu_id": None}
-    run_obj = _fake_run()
-    run_obj["episodes"] = [99]
-    gate = run(lib.verify_proposal(proposal, run_obj))
-    assert gate["passed"] is False
-    assert any(c["name"] == "episode_exists" and c["ok"] is False
-               for c in gate["checks"])
+    ledger, proposals, saved = _seed_proposal_env(lib)
+    entry = lib._stubs["entry"]
+
+    async def fake_metadata(name, channel, msg_id, override_id=None, season_hint=None):
+        return {"tmdb_id": 42, "imdb_id": "tt1234567", "title": "Some Show",
+                "season_number": 2, "episode_number": 5}
+
+    entry.metadata = fake_metadata
+    try:
+        res = run(lib.submit_proposal(_plan()))
+        assert res["ok"] is True and res["status"] == "pending", res
+        pid = res["proposal_id"]
+        assert ledger.docs["k1"].get("proposal_id") == pid
+
+        ledger.docs["k1"].pop("proposal_id", None)
+        res2 = run(lib.submit_proposal(_plan(episode=7)))
+        assert res2["ok"] is True and res2["status"] == "gate_failed", res2
+    finally:
+        entry.metadata = None
+        _unwire(lib, saved)
 
 
-def test_l2_coherence_unique_initials_only():
+# ---------------------------------------------------------------------------
+# Apply + rollback
+# ---------------------------------------------------------------------------
+
+def test_apply_edit_path_dry_run_then_live():
     lib = load_lib()
-    run_obj = _fake_run("BTTH 3YA - SP3 E01")
-    run_obj["stem"] = "btth 3ya sp3"
-    run_obj["chat_id"] = -1004395609351
-    index = {4395609351: {
-        "battle through the heavens": {
-            "title": "Battle Through The Heavens", "media_type": "tv",
-            "tmdb_id": 7, "imdb_id": None, "tvdb_id": None, "kitsu_id": None,
-            "year": 2018},
-    }}
-    proposal = run(lib._l2_coherence(run_obj, index))
-    assert proposal is not None and proposal["title"] == "Battle Through The Heavens"
-    index[4395609351]["breaking bad tales"] = {
-        "title": "Breaking Bad Tales", "media_type": "tv", "tmdb_id": 8,
-        "imdb_id": None, "tvdb_id": None, "kitsu_id": None, "year": 2020}
-    # 'bbt' != 'btth', still unique -> proposes; add a true second match
-    # (initials also spell 'btth') and the proposal must disappear:
-    index[4395609351]["beyond the thunder hill"] = {
-        "title": "Beyond The Thunder Hill", "media_type": "tv",
-        "tmdb_id": 9, "imdb_id": None, "tvdb_id": None, "kitsu_id": None,
-        "year": 2021}
-    assert run(lib._l2_coherence(run_obj, index)) is None
+    ledger, proposals, audit, alias = (_FakeColl(), _FakeColl(),
+                                       _FakeColl(), _FakeColl())
+    locator = _FakeColl()
+    ledger.docs["k1"] = {"_id": "k1", "status": "open",
+                         "caption": "Some Show S02E05", "skip_msg_ids": [50],
+                         "first_seen": 1.0}
+    locator.docs["k1"] = {"_id": "k1", "chat_id": -100111, "msg_id": 5,
+                          "caption": "Some Show S02E05", "file_name": ""}
+    proposals.docs["p1"] = {
+        "_id": "p1", "channel": -100111, "label": "Some Show S2",
+        "status": "pending",
+        "items": [{"key": "k1", "new_caption": "Some Show S02E05 1080p tt1234567",
+                   "media_type": "tv", "tmdb_id": 42,
+                   "imdb_id": "tt1234567", "season": 2, "episode": 5}]}
+    saved = _wire(lib, ledger=ledger, locator=locator, proposals=proposals,
+                  audit=audit, alias=alias)
+    calls = []
+    cleaned = []
+
+    async def fake_bot_api(method, params):
+        calls.append((method, params))
+        return {"ok": True, "result": {"message_id": 5}}
+
+    async def fake_verify(chat, msg, tmdb, imdb, tries=10, delay=3.0):
+        return True
+
+    async def fake_clean(item):
+        cleaned.append(item["_id"])
+
+    orig = (lib._bot_api, lib._verify_indexed, lib._delete_skip_copies)
+    lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = (
+        fake_bot_api, fake_verify, fake_clean)
+    settings = lib._stubs["settings"]
+    try:
+        settings.librarian_dry_run = True
+        res = run(lib.apply_proposal("p1"))
+        assert res["ok"] is True and res.get("dry_run") is True
+        assert calls == []  # dry run edits nothing
+
+        settings.librarian_dry_run = False
+        res = run(lib.apply_proposal("p1"))
+        assert res["ok"] is True and res["status"] == "applied", res
+        assert calls and calls[0][0] == "editMessageCaption"
+        assert ledger.docs["k1"]["status"] == "fixed"
+        assert cleaned == ["k1"]
+        assert len(audit.docs) == 1
+        assert any(d.get("stem") == "some show" for d in alias.docs.values())
+
+        # Rollback restores + un-indexes.
+        calls.clear()
+        res = run(lib.rollback_proposal("p1"))
+        assert res["ok"] is True and res["rolled_back"] == 1, res
+        assert calls and calls[0][0] == "editMessageCaption"
+        assert calls[0][1]["caption"] == "Some Show S02E05"
+        assert lib._stubs["removed"] == [(111, 5)]
+        assert ledger.docs["k1"]["status"] == "open"
+    finally:
+        lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = orig
+        settings.librarian_dry_run = True
+        _unwire(lib, saved)

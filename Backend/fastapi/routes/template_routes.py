@@ -341,19 +341,40 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
 
 
 
-#----- Librarian: reject ledger + resolution proposals (Phase 1)
+#----- Librarian v4: control panel (the bot DM is the working surface)
 async def librarian_page(request: Request, _: bool = Depends(require_auth)):
     from Backend.helper import librarian
 
+    settings = SettingsManager.current()
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
-    status = (request.query_params.get("status") or "").strip()
-    reason = (request.query_params.get("reason") or "").strip()
-    ctx["lib_status"] = status
-    ctx["lib_reason"] = reason
-    ctx["lib_counts"] = await librarian.ledger_counts()
-    ctx["lib_runs"] = await librarian.list_runs(limit=60)
-    ctx["lib_items"] = await librarian.list_ledger(status=status, reason=reason, limit=120)
+    counts = await librarian.panel_counts()
+    ctx["lib_counts"] = counts
+    ctx["lib_proposals"] = await librarian.list_proposals(limit=15)
+    ctx["lib_fixes"] = await librarian.list_audit(limit=15)
     ctx["lib_state"] = librarian.ACTION_STATE
-    ctx["librarian_enabled"] = SettingsManager.current().librarian_enabled
+    ctx["librarian_enabled"] = settings.librarian_enabled
+    ctx["librarian_dry_run"] = settings.librarian_dry_run
+    ctx["lib_budget"] = settings.librarian_edit_budget_per_day
+    # Channel rows: id, display name (best effort), files waiting.
+    waiting = counts.get("waiting_by_channel") or {}
+    rows = []
+    client = None
+    try:
+        from Backend.fastapi.routes.api_routes import _scan_client
+        client = _scan_client()
+    except Exception:
+        client = None
+    for ch in settings.auth_channels:
+        stripped = str(ch).replace("-100", "")
+        name = str(ch)
+        if client is not None:
+            try:
+                chat = await client.get_chat(int(ch))
+                name = getattr(chat, "title", None) or name
+            except Exception:
+                pass
+        rows.append({"id": str(ch), "name": name,
+                     "waiting": waiting.get(stripped, 0)})
+    ctx["lib_channels"] = rows
     return templates.TemplateResponse("librarian.html", ctx)

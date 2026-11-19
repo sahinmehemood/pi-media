@@ -1,18 +1,21 @@
-"""Hermes Librarian — Phase 1: reject ledger, run clustering, the
-deterministic resolution funnel (L0-L2) and the server-side verification
-gate.
+"""Hermes Librarian v4 — Hermes is the brain, the app is the hands.
 
-Phase 1 makes NO edits and applies NOTHING: it records every file the
-metadata pipeline rejects (the skip pile, live failures, scan failures,
-suspect matches), clusters them into runs, and produces gate-verified
-proposals with approval tiers for a human to review. The apply engine,
-approval digests and the Media Manager brain (L3) are later phases.
+The reject ledger records every file the metadata pipeline rejects (the
+skip pile, live failures, scan failures, suspect matches). A locator joins
+those files back to their original channel posts. The Media Manager
+(Hermes) pulls per-channel work packets, decides each series, and submits
+fix plans; a server-side gate dry-runs the app's OWN matcher on every
+proposed caption before Yan sees it. On Yan's approval in the bot DM, the
+apply engine edits the originals' captions through the Media Manager bot
+(the app then re-indexes natively), verifies, cleans the skip copies, and
+audits everything with rollback.
 
-Design: docs/librarian/DESIGN.md (v3). Hard rules honoured here:
+Design: docs/librarian/DESIGN-v4.md. Hard rules:
 - the Hermes/Media Manager bot is never involved in streaming;
-- the alias map is only READ (it is taught solely by human-confirmed
-  decisions, which happen in later phases);
-- personal titles and manual channels are never proposed for changes.
+- the alias map is taught ONLY by Yan-approved applies;
+- manual channels and subtitle files are never touched;
+- a fix caption always carries an ID link — without one the app will not
+  re-index an unindexed file (file_edited_handler).
 """
 
 from __future__ import annotations
@@ -433,264 +436,634 @@ async def lookup_alias(chat_id, stem: str) -> Optional[dict]:
 # Resolution funnel L0-L2 + verification gate
 # ---------------------------------------------------------------------------
 
-def _year_of(value) -> Optional[int]:
-    if value is None:
-        return None
-    m = re.search(r"\d{4}", str(value))
-    return int(m.group(0)) if m else None
 
 
-def _proposal_from_candidate(cand: dict, layer: str) -> dict:
-    return {
-        "layer": layer,
-        "provider": cand.get("source"),
-        "media_type": cand.get("media_type"),
-        "title": cand.get("title") or "",
-        "year": _year_of(cand.get("year")),
-        "tmdb_id": cand.get("tmdb_id"),
-        "imdb_id": cand.get("imdb_id"),
-        "tvdb_id": cand.get("tvdb_id"),
-        "kitsu_id": cand.get("kitsu_id"),
-    }
+# ---------------------------------------------------------------------------
+# v4 — Locator: join skip-pile files back to their original channel posts
+# ---------------------------------------------------------------------------
+
+def _locator_coll():
+    tracking = _tracking()
+    return tracking["locator"] if tracking is not None else None
 
 
-async def _l0(run: dict) -> Optional[dict]:
-    """L0: a caption/filename already carrying an ID ref resolves by ID."""
-    from Backend.helper.metadata.common import extract_default_id
-    from Backend.helper.metadata.entry import search_any_candidates
-    for item in run["items"]:
-        for text in (item.get("caption", ""), item.get("file_name", "")):
-            if text and extract_default_id(text):
-                try:
-                    cands = await search_any_candidates(text)
-                except Exception:
-                    cands = []
-                for cand in cands:
-                    if cand.get("title"):
-                        return _proposal_from_candidate(cand, "L0")
-    return None
+def _proposals_coll():
+    tracking = _tracking()
+    return tracking["curation_proposals"] if tracking is not None else None
 
 
-async def _l2_search(run: dict) -> Optional[dict]:
-    """L2a: deterministic provider search on the parsed title guess —
-    only when the stem reads as real words, not an abbreviation."""
-    from Backend.helper.metadata.common import score_candidate
-    from Backend.helper.metadata.entry import search_any_candidates
-    stem = run.get("stem") or ""
-    words = stem.split()
-    if not words or (len(words) == 1 and len(words[0]) <= 6 and words[0].isalpha()):
-        return None  # abbreviation stem — search cannot help; coherence/L3 territory
-    try:
-        cands = await search_any_candidates(stem, run.get("year"))
-    except Exception:
-        return None
-    best, best_score = None, 0.0
-    for cand in cands:
-        if not cand.get("title"):
-            continue
-        score = score_candidate(stem, run.get("year"), cand["title"],
-                                _year_of(cand.get("year")) or 0)
-        if score > best_score:
-            best, best_score = cand, score
-    if best is not None and best_score >= 0.6:
-        proposal = _proposal_from_candidate(best, "L2")
-        proposal["score"] = round(best_score, 3)
-        return proposal
-    return None
+def _audit_coll():
+    tracking = _tracking()
+    return tracking["curation_audit"] if tracking is not None else None
 
 
 def _norm_chat(value) -> Optional[int]:
     try:
-        raw = str(int(value))
+        return int(str(value).replace("-100", ""))
     except (TypeError, ValueError):
         return None
-    return int(raw.replace("-100", "", 1)) if raw.startswith("-100") else int(raw)
+
+
+def _full_chat(value) -> Optional[int]:
+    n = _norm_chat(value)
+    return int(f"-100{n}") if n is not None else None
+
+
+async def run_locator(channel_id) -> dict:
+    """Walk one auth channel with the userbot and record, for every media
+    message, file_unique_id -> (chat_id, msg_id, caption, file_name).
+
+    Read-only on Telegram. The walk is newest-first; the LOWEST msg_id wins
+    for a duplicated file (the original post), so later sightings overwrite.
+    """
+    channel_id = _full_chat(channel_id)
+    if channel_id is None:
+        return {"ok": False, "message": "Bad channel id."}
+    coll = _locator_coll()
+    if coll is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    from Backend.pyrofork import bot as botmod
+    userbot = getattr(botmod, "Userbot", None)
+    if userbot is None:
+        return {"ok": False, "message": "Userbot is not configured."}
+    seen: dict[str, dict] = {}
+    read = 0
+    try:
+        async for m in userbot.get_chat_history(channel_id):
+            read += 1
+            media = getattr(m, "video", None) or getattr(m, "document", None)
+            uid = getattr(media, "file_unique_id", None) if media else None
+            if not uid:
+                continue
+            seen[uid] = {
+                "_id": uid, "chat_id": channel_id, "msg_id": m.id,
+                "caption": m.caption or "",
+                "file_name": getattr(media, "file_name", None) or "",
+                "size": getattr(media, "file_size", None),
+                "height": getattr(media, "height", None),
+                "updated_at": time.time(),
+            }
+    except Exception as e:
+        return {"ok": False, "message": f"Locator walk failed: {e}"}
+    for doc in seen.values():
+        try:
+            await coll.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        except Exception as e:
+            LOGGER.warning(f"[Librarian] locator upsert failed: {e}")
+    located = 0
+    ledger = _ledger_coll()
+    if ledger is not None and seen:
+        try:
+            located = await ledger.count_documents(
+                {"_id": {"$in": list(seen.keys())}})
+        except Exception:
+            located = 0
+    LOGGER.info(f"[Librarian] locator channel {channel_id}: {read} read, "
+                f"{len(seen)} files, {located} ledger items located")
+    return {"ok": True, "channel": channel_id, "messages_read": read,
+            "files": len(seen), "ledger_items_located": located}
+
+
+async def _located_map(keys: list[str]) -> dict:
+    coll = _locator_coll()
+    if coll is None or not keys:
+        return {}
+    out = {}
+    try:
+        async for doc in coll.find({"_id": {"$in": keys}}):
+            out[doc["_id"]] = doc
+    except Exception as e:
+        LOGGER.warning(f"[Librarian] locator read failed: {e}")
+    return out
 
 
 async def _channel_title_index() -> dict:
-    """{normalized chat id: {normalized title: title record}} built from
-    the library itself — which titles each channel already carries."""
-    from Backend import db
+    """{stripped chat_id: [media doc summaries]} from the storage DBs —
+    the context of what each channel already has indexed."""
+    from Backend import db as _db
     from Backend.helper.encrypt import decode_string
-    index: dict[int, dict[str, dict]] = {}
-    dbs = getattr(db, "dbs", None) or {}
-    for name, handle in dbs.items():
-        if name == "tracking" or handle is None:
+    index: dict[int, list] = {}
+    dbs = getattr(_db, "dbs", None) or {}
+    for name, sdb in dbs.items():
+        if not name.startswith("storage"):
             continue
-        for coll_name, mtype in (("movie", "movie"), ("tv", "tv")):
+        for media_type in ("movie", "tv"):
             try:
-                cursor = handle[coll_name].find(
-                    {}, {"title": 1, "tmdb_id": 1, "imdb_id": 1, "tvdb_id": 1,
-                         "kitsu_id": 1, "release_year": 1, "year": 1,
-                         "telegram": 1, "seasons": 1})
-                async for doc in cursor:
-                    title = doc.get("title") or ""
-                    if not title:
-                        continue
+                async for doc in sdb[media_type].find(
+                        {}, {"title": 1, "release_year": 1, "tmdb_id": 1,
+                             "imdb_id": 1, "telegram": 1, "seasons": 1}):
                     entries = list(doc.get("telegram") or [])
                     for season in doc.get("seasons") or []:
                         for ep in season.get("episodes") or []:
                             entries.extend(ep.get("telegram") or [])
-                    record = {
-                        "title": title, "media_type": mtype,
-                        "tmdb_id": doc.get("tmdb_id"), "imdb_id": doc.get("imdb_id"),
-                        "tvdb_id": doc.get("tvdb_id"), "kitsu_id": doc.get("kitsu_id"),
-                        "year": _year_of(doc.get("release_year") or doc.get("year")),
-                    }
+                    chats = set()
                     for entry in entries:
-                        enc = entry.get("id")
-                        if not enc:
-                            continue
                         try:
-                            decoded = await decode_string(enc)
+                            decoded = await decode_string(entry.get("id"))
+                            chats.add(int(decoded["chat_id"]))
                         except Exception:
                             continue
-                        chat = _norm_chat((decoded or {}).get("chat_id"))
-                        if chat is None:
-                            continue
-                        index.setdefault(chat, {})[_clean_stem_text(title)] = record
-            except Exception as e:
-                LOGGER.warning(f"[Librarian] title index scan failed ({name}.{coll_name}): {e}")
+                    for chat in chats:
+                        index.setdefault(chat, []).append({
+                            "title": doc.get("title"),
+                            "year": doc.get("release_year"),
+                            "tmdb_id": doc.get("tmdb_id"),
+                            "imdb_id": doc.get("imdb_id"),
+                            "media_type": media_type,
+                        })
+            except Exception:
+                continue
     return index
 
 
-async def _l2_coherence(run: dict, title_index: dict) -> Optional[dict]:
-    """L2b: channel coherence — the library already carries a title
-    whose initials spell the abbreviation stem (the BTTH problem).
-    Scoped to the run's own channel when its origin is known; backlog
-    items with unknown origin search every channel but still require
-    the matching TITLE to be unique. Ambiguity escalates."""
-    chat = _norm_chat(run.get("chat_id"))
-    if chat is not None:
-        pools = [title_index.get(chat) or {}]
-    else:
-        pools = list(title_index.values())
-    by_title: dict[str, dict] = {}
-    for titles in pools:
-        for rec in titles.values():
-            if stem_title_match(run.get("stem") or "", rec["title"]):
-                by_title[rec["title"]] = rec
-    if len(by_title) != 1:
-        return None
-    proposal = dict(next(iter(by_title.values())))
-    proposal["layer"] = "L2"
-    proposal["provider"] = "library"
-    return proposal
+# ---------------------------------------------------------------------------
+# v4 — Work packets for the Media Manager
+# ---------------------------------------------------------------------------
 
-
-async def verify_proposal(proposal: dict, run: dict) -> dict:
-    """The server-side verification gate. Checks that cannot be run are
-    recorded as skipped (ok=None) — never silently passed."""
-    from Backend.helper.metadata.providers import tmdb as _tmdb
-    checks = []
-
-    def add(name, ok, detail):
-        checks.append({"name": name, "ok": ok, "detail": detail})
-
-    tmdb_id = proposal.get("tmdb_id")
+async def get_packet(channel_id, limit: int = 30) -> dict:
+    """The next batch of unprocessed failed files for ONE channel, with the
+    context the Media Manager needs to decide well: each item's original
+    post (via the locator), the titles already indexed from this channel,
+    and the aliases already taught for it."""
+    channel_id = _full_chat(channel_id)
+    if channel_id is None:
+        return {"ok": False, "message": "Bad channel id."}
+    ledger = _ledger_coll()
+    if ledger is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    limit = max(1, min(100, int(limit or 30)))
+    stripped = _norm_chat(channel_id)
+    candidates: list[dict] = []
     try:
-        tmdb_id = int(tmdb_id) if tmdb_id is not None else None
-        if tmdb_id is not None and tmdb_id < 0:
-            tmdb_id = None  # personal title — never proposed, belt & braces
-    except (TypeError, ValueError):
-        tmdb_id = None
-    media_type = proposal.get("media_type") or "movie"
-
-    # 1. The claimed ID exists.
-    if tmdb_id:
+        cursor = ledger.find(
+            {"status": {"$in": ["open", "unresolved"]}}).sort("first_seen", 1)
+        async for doc in cursor:
+            candidates.append(dict(doc))
+    except Exception as e:
+        return {"ok": False, "message": f"Ledger read failed: {e}"}
+    keys = [d["_id"] for d in candidates]
+    located = await _located_map(keys)
+    items = []
+    for doc in candidates:
+        if len(items) >= limit:
+            break
+        loc = located.get(doc["_id"])
+        item_chat = doc.get("chat_id") or (loc or {}).get("chat_id")
+        if _norm_chat(item_chat) != stripped:
+            continue
+        if doc.get("proposal_id"):
+            continue
+        items.append({
+            "key": doc["_id"],
+            "caption": (loc or {}).get("caption") or doc.get("caption") or "",
+            "file_name": (loc or {}).get("file_name") or doc.get("file_name") or "",
+            "size": (loc or {}).get("size") or doc.get("size"),
+            "height": (loc or {}).get("height") or doc.get("height"),
+            "reason": doc.get("reason") or "",
+            "reason_code": doc.get("reason_code") or "",
+            "parse": doc.get("parse"),
+            "located": bool(loc) or bool(doc.get("chat_id")),
+            "chat_id": item_chat,
+            "msg_id": (loc or {}).get("msg_id") or doc.get("msg_id"),
+            "skip_msg_ids": doc.get("skip_msg_ids") or [],
+        })
+    title_index = await _channel_title_index()
+    aliases = []
+    acoll = _alias_coll()
+    if acoll is not None:
         try:
-            detail = await _tmdb.details(media_type, tmdb_id)
-            add("id_exists", bool(detail), f"TMDB {media_type} {tmdb_id}")
-        except Exception as e:
-            add("id_exists", None, f"TMDB lookup failed: {e}")
-    elif proposal.get("imdb_id") or proposal.get("tvdb_id") or proposal.get("kitsu_id"):
-        add("id_exists", True, "provider-backed candidate (non-TMDB id)")
-    else:
-        add("id_exists", False, "proposal carries no provider id")
-
-    # 2. Numbering sanity + episode existence (sampled: first/mid/last).
-    episodes = [e for e in (run.get("episodes") or []) if e is not None]
-    season = run.get("season")
-    if media_type == "tv" and episodes:
-        bad = [e for e in episodes if e < 1 or e > 2000]
-        add("numbering_sanity", not bad,
-            "episode numbers in range" if not bad else f"implausible episodes: {bad[:3]}")
-        if run.get("special") is not None:
-            add("episode_exists", None, "special (SP) numbering — mapping is an L3 decision")
-        elif season is None:
-            add("episode_exists", None, "absolute numbering — mapping not checked in Phase 1")
-        elif tmdb_id:
-            sample = sorted({episodes[0], episodes[len(episodes) // 2], episodes[-1]})
-            failed = []
-            for ep in sample:
-                try:
-                    got = await _tmdb.episode_details(tmdb_id, season, ep)
-                    if not got:
-                        failed.append(ep)
-                except Exception:
-                    failed.append(ep)
-            add("episode_exists", not failed,
-                f"S{season} sampled episodes {sample} exist" if not failed
-                else f"S{season} episodes missing on TMDB: {failed}")
-        else:
-            add("episode_exists", None, "no TMDB id — episode existence unchecked")
-    elif media_type == "tv":
-        add("numbering_sanity", None, "no episode numbers in run")
-
-    # 3. Cross-ID consistency where both ids exist.
-    imdb_id = proposal.get("imdb_id")
-    if tmdb_id and imdb_id:
-        try:
-            ext = await _tmdb.external_imdb_id(media_type, tmdb_id)
-            if ext:
-                add("cross_id", ext == imdb_id,
-                    f"TMDB maps to {ext}" if ext != imdb_id else "TMDB/IMDb agree")
-            else:
-                add("cross_id", None, "TMDB has no IMDb mapping for this title")
-        except Exception as e:
-            add("cross_id", None, f"cross-id lookup failed: {e}")
-
-    passed = all(c["ok"] is not False for c in checks) and any(
-        c["ok"] for c in checks)
-    return {"passed": bool(passed), "checks": checks}
-
-
-async def resolve_run(run: dict, title_index: dict) -> dict:
-    """Run one run through L0 -> L1 -> L2 and the gate. Returns the run
-    outcome (also persisted by run_funnel)."""
-    proposal = await _l0(run)
-    if proposal is None:
-        alias = await lookup_alias(run.get("chat_id"), run.get("stem") or "")
-        if alias and (alias.get("tmdb_id") or alias.get("imdb_id")):
-            proposal = {
-                "layer": "L1", "provider": "alias",
-                "media_type": alias.get("media_type"),
-                "title": alias.get("title") or "",
-                "year": alias.get("year"),
-                "tmdb_id": alias.get("tmdb_id"), "imdb_id": alias.get("imdb_id"),
-                "tvdb_id": alias.get("tvdb_id"), "kitsu_id": alias.get("kitsu_id"),
-            }
-    if proposal is None:
-        proposal = await _l2_search(run)
-    if proposal is None:
-        proposal = await _l2_coherence(run, title_index)
-    if proposal is None:
-        return {"proposal": None, "gate": None, "tier": "C"}
-    gate = await verify_proposal(proposal, run)
-    return {"proposal": proposal, "gate": gate,
-            "tier": assign_tier(proposal.get("layer"), gate)}
+            async for a in acoll.find({"channel": channel_id}):
+                aliases.append(_jsonable(a))
+        except Exception:
+            pass
+    return {
+        "ok": True, "channel": channel_id, "items": items,
+        "indexed_titles": title_index.get(stripped, []),
+        "aliases": aliases,
+        "waiting_total": len(candidates),
+    }
 
 
 # ---------------------------------------------------------------------------
-# Actions: backlog sweep, suspect audit, funnel — background-task state
+# v4 — Proposals, the verification gate, apply, rollback
+# ---------------------------------------------------------------------------
+
+def _plan_stamp_ok(new_caption: str) -> Optional[str]:
+    """The ID a fix caption carries (the app requires one to re-index)."""
+    try:
+        from Backend.helper.metadata.common import extract_default_id
+        return extract_default_id(new_caption or "")
+    except Exception:
+        return None
+
+
+async def submit_proposal(payload: dict) -> dict:
+    """Store a Media Manager fix plan and run the verification gate on it.
+    Only gate-passing proposals become 'pending' (presentable to Yan)."""
+    from Backend.helper.settings_manager import SettingsManager
+    if not SettingsManager.current().librarian_enabled:
+        return {"ok": False, "message": "Librarian is disabled in Settings."}
+    coll = _proposals_coll()
+    if coll is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    items = payload.get("items") or []
+    if not items or len(items) > 100:
+        return {"ok": False, "message": "A proposal needs 1-100 items."}
+    channel = _full_chat(payload.get("channel"))
+    if channel is None:
+        return {"ok": False, "message": "Bad channel id."}
+    ledger = _ledger_coll()
+    clean_items = []
+    for it in items:
+        key = it.get("key")
+        caption = (it.get("new_caption") or "").strip()
+        if not key or not caption:
+            return {"ok": False, "message": "Every item needs a key and a new_caption."}
+        if not _plan_stamp_ok(caption):
+            return {"ok": False,
+                    "message": f"Item {key}: the fix caption carries no ID link — "
+                               "the app will not re-index without one."}
+        doc = await ledger.find_one({"_id": key}) if ledger is not None else None
+        if doc is None:
+            return {"ok": False, "message": f"Unknown ledger item: {key}"}
+        clean_items.append({
+            "key": key,
+            "new_caption": caption,
+            "media_type": it.get("media_type") or "tv",
+            "tmdb_id": it.get("tmdb_id"),
+            "imdb_id": it.get("imdb_id"),
+            "season": it.get("season"),
+            "episode": it.get("episode"),
+            "absolute": bool(it.get("absolute")),
+        })
+    pid = f"p{int(time.time())}_{abs(hash((channel, len(clean_items)))) % 99999}"
+    doc = {
+        "_id": pid, "channel": channel,
+        "label": payload.get("label") or "Untitled run",
+        "note": payload.get("note") or "",
+        "items": clean_items, "status": "gating",
+        "created_at": time.time(), "gate": None,
+    }
+    await coll.insert_one(doc)
+    if ledger is not None:
+        for it in clean_items:
+            await ledger.update_one({"_id": it["key"]},
+                                    {"$set": {"proposal_id": pid}})
+    gate = await _gate_plan(doc)
+    status = "pending" if gate.get("ok") else "gate_failed"
+    await coll.update_one({"_id": pid},
+                          {"$set": {"gate": gate, "status": status}})
+    doc.update({"gate": gate, "status": status})
+    return {"ok": True, "proposal_id": pid, "status": status, "gate": gate}
+
+
+async def _gate_plan(doc: dict) -> dict:
+    """Dry-check a plan with the app's OWN matcher: for each item, run
+    metadata() on the proposed caption (it writes nothing) and require the
+    result to be the intended title at the intended numbering."""
+    from Backend.helper.metadata.entry import metadata as app_metadata
+    from Backend.helper.metadata.common import extract_default_id
+    from Backend.helper.pyro import clean_filename
+    channel = _norm_chat(doc.get("channel"))
+    cache: dict[tuple, object] = {}
+    per_item = {}
+    all_ok = True
+    for it in doc.get("items") or []:
+        key = it["key"]
+        first_line = (it["new_caption"].split("\n")[0] or "").strip()
+        cache_key = (first_line, it.get("season"), it.get("episode"))
+        try:
+            if cache_key not in cache:
+                cache[cache_key] = await app_metadata(
+                    clean_filename(first_line), channel, 0,
+                    override_id=extract_default_id(it["new_caption"]))
+            res = cache[cache_key]
+        except Exception as e:
+            res = None
+            per_item[key] = {"ok": False, "reason": f"trial failed: {e}"}
+            all_ok = False
+            continue
+        if res is None:
+            per_item[key] = {"ok": False,
+                             "reason": "the app still cannot match this caption"}
+            all_ok = False
+            continue
+        problems = []
+        want_tmdb = it.get("tmdb_id")
+        want_imdb = it.get("imdb_id")
+        if want_tmdb and int(want_tmdb) > 0 and res.get("tmdb_id") != int(want_tmdb):
+            problems.append(f"resolves to tmdb {res.get('tmdb_id')}, not {want_tmdb}")
+        if want_imdb and res.get("imdb_id") != want_imdb:
+            problems.append(f"resolves to {res.get('imdb_id')}, not {want_imdb}")
+        if it.get("media_type") == "tv" and it.get("episode") is not None:
+            got_ep = res.get("absolute_episode") or res.get("episode_number")
+            if got_ep is not None and int(got_ep) != int(it["episode"]):
+                problems.append(f"episode resolves to {got_ep}, not {it['episode']}")
+            if not it.get("absolute") and it.get("season") is not None:
+                got_s = res.get("season_number")
+                if got_s is not None and int(got_s) != int(it["season"]):
+                    problems.append(f"season resolves to {got_s}, not {it['season']}")
+        per_item[key] = {"ok": not problems,
+                         "got_title": res.get("title"),
+                         "reason": "; ".join(problems)}
+        if problems:
+            all_ok = False
+    return {"ok": all_ok, "items": per_item, "checked_at": time.time()}
+
+
+async def _bot_api(method: str, params: dict) -> dict:
+    """Call the Telegram Bot API as the Media Manager (Hermes) bot."""
+    from Backend.helper.settings_manager import SettingsManager
+    token = SettingsManager.current().hermes_bot_token
+    if not token:
+        return {"ok": False, "description": "No Hermes bot token in Settings."}
+    import aiohttp
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=params,
+                                    timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                return await resp.json()
+    except Exception as e:
+        return {"ok": False, "description": str(e)}
+
+
+async def _verify_indexed(chat_id, msg_id, want_tmdb, want_imdb,
+                          tries: int = 10, delay: float = 3.0) -> bool:
+    from Backend import db as _db
+    stripped = _norm_chat(chat_id)
+    for _ in range(tries):
+        try:
+            existing = await _db.get_media_ids_by_part(stripped, int(msg_id))
+        except Exception:
+            existing = None
+        if existing:
+            imdb_id, tmdb_id = existing[0], existing[1]
+            if want_tmdb and int(want_tmdb) > 0:
+                return int(tmdb_id or 0) == int(want_tmdb)
+            if want_imdb:
+                return imdb_id == want_imdb
+            return True
+        await asyncio.sleep(delay)
+    return False
+
+
+async def _delete_skip_copies(item: dict) -> None:
+    ids = item.get("skip_msg_ids") or []
+    if not ids:
+        return
+    try:
+        from Backend.helper.settings_manager import SettingsManager
+        from Backend.helper.task_manager import delete_messages_batch
+        skip = SettingsManager.current().skip_channel
+        if skip:
+            await delete_messages_batch(int(skip), [int(i) for i in ids])
+    except Exception as e:
+        LOGGER.warning(f"[Librarian] skip-copy cleanup failed: {e}")
+
+
+async def _teach_alias(channel, item: dict, plan_item: dict) -> None:
+    coll = _alias_coll()
+    if coll is None:
+        return
+    bits = name_bits(item.get("caption") or "", item.get("file_name") or "")
+    stem = bits.get("stem")
+    if not stem:
+        return
+    try:
+        await coll.update_one(
+            {"_id": f"{channel}:{stem}"},
+            {"$set": {"channel": channel, "stem": stem,
+                      "tmdb_id": plan_item.get("tmdb_id"),
+                      "imdb_id": plan_item.get("imdb_id"),
+                      "media_type": plan_item.get("media_type"),
+                      "title": plan_item.get("title") or "",
+                      "taught_at": time.time(), "source": "yan-approved"}},
+            upsert=True)
+    except Exception as e:
+        LOGGER.warning(f"[Librarian] alias teach failed: {e}")
+
+
+async def _edits_today() -> int:
+    coll = _audit_coll()
+    if coll is None:
+        return 0
+    day_start = time.time() - (time.time() % 86400)
+    try:
+        return await coll.count_documents(
+            {"ts": {"$gte": day_start}, "action": {"$in": ["edit", "repost"]}})
+    except Exception:
+        return 0
+
+
+async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
+    """Execute an approved, gate-passed proposal: edit originals in place
+    (or re-post from the skip pile), verify indexing, clean skip copies,
+    audit everything. Honours dry-run and the daily edit budget."""
+    from Backend.helper.settings_manager import SettingsManager
+    settings = SettingsManager.current()
+    if not settings.librarian_enabled:
+        return {"ok": False, "message": "Librarian is disabled in Settings."}
+    coll = _proposals_coll()
+    ledger = _ledger_coll()
+    audit = _audit_coll()
+    if coll is None or ledger is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    doc = await coll.find_one({"_id": proposal_id})
+    if doc is None:
+        return {"ok": False, "message": "Unknown proposal."}
+    if doc.get("status") not in ("pending", "approved"):
+        return {"ok": False, "message": f"Proposal is {doc.get('status')}, not pending."}
+    if settings.librarian_dry_run:
+        return {"ok": True, "dry_run": True,
+                "message": "Dry-run is ON: nothing was edited.",
+                "would_apply": len(doc.get("items") or [])}
+    budget = int(settings.librarian_edit_budget_per_day or 0)
+    used = await _edits_today()
+    if budget <= 0 or used + len(doc.get("items") or []) > budget:
+        return {"ok": False,
+                "message": f"Daily edit budget reached ({used}/{budget} used)."}
+    located = await _located_map([it["key"] for it in doc.get("items") or []])
+    results = []
+    for it in doc.get("items") or []:
+        item = await ledger.find_one({"_id": it["key"]}) or {}
+        loc = located.get(it["key"]) or {}
+        chat_id = item.get("chat_id") or loc.get("chat_id") or doc.get("channel")
+        msg_id = item.get("msg_id") or loc.get("msg_id")
+        before = loc.get("caption") or item.get("caption") or ""
+        entry = {"key": it["key"], "ok": False}
+        try:
+            if msg_id:
+                resp = await _bot_api("editMessageCaption", {
+                    "chat_id": int(chat_id), "message_id": int(msg_id),
+                    "caption": it["new_caption"], "parse_mode": "HTML"})
+                entry["action"] = "edit"
+                if not resp.get("ok"):
+                    raise RuntimeError(resp.get("description") or "edit failed")
+                ok = await _verify_indexed(chat_id, msg_id,
+                                            it.get("tmdb_id"), it.get("imdb_id"))
+                entry["chat_id"], entry["msg_id"] = int(chat_id), int(msg_id)
+            else:
+                skip_ids = item.get("skip_msg_ids") or []
+                if not skip_ids:
+                    raise RuntimeError("no original and no skip copy to re-post")
+                from Backend.helper.settings_manager import SettingsManager as _SM
+                skip_channel = int(_SM.current().skip_channel)
+                resp = await _bot_api("copyMessage", {
+                    "chat_id": int(doc["channel"]), "from_chat_id": skip_channel,
+                    "message_id": int(skip_ids[0]),
+                    "caption": it["new_caption"], "parse_mode": "HTML"})
+                entry["action"] = "repost"
+                if not resp.get("ok"):
+                    raise RuntimeError(resp.get("description") or "copy failed")
+                new_msg = resp["result"]["message_id"]
+                ok = await _verify_indexed(doc["channel"], new_msg,
+                                            it.get("tmdb_id"), it.get("imdb_id"))
+                entry["chat_id"], entry["msg_id"] = int(doc["channel"]), int(new_msg)
+            entry["ok"] = bool(ok)
+            if not ok:
+                entry["reason"] = "edit landed but indexing could not be verified"
+        except Exception as e:
+            entry["reason"] = str(e)
+        if audit is not None and entry.get("action"):
+            await audit.insert_one({
+                "ts": time.time(), "proposal_id": proposal_id,
+                "key": it["key"], "action": entry["action"],
+                "chat_id": entry.get("chat_id"), "msg_id": entry.get("msg_id"),
+                "before": before, "after": it["new_caption"],
+                "ok": entry["ok"], "approver": approver})
+        if entry["ok"]:
+            await _delete_skip_copies(item)
+            await ledger.update_one({"_id": it["key"]}, {"$set": {
+                "status": "fixed", "fixed_at": time.time(),
+                "fixed_via": entry.get("action")}})
+            await _teach_alias(doc.get("channel"), item, it)
+        results.append(entry)
+        await asyncio.sleep(2)
+    done = sum(1 for r in results if r["ok"])
+    status = "applied" if done == len(results) else ("partial" if done else "failed")
+    await coll.update_one({"_id": proposal_id}, {"$set": {
+        "status": status, "applied_at": time.time(), "results": results}})
+    return {"ok": True, "status": status, "applied": done,
+            "total": len(results), "results": results}
+
+
+async def rollback_proposal(proposal_id: str) -> dict:
+    """Undo an applied proposal from its audit trail: restore the original
+    caption and drop the index entry (edit path), or delete the re-posted
+    copy (re-post path). Ledger items return to open."""
+    coll = _proposals_coll()
+    audit = _audit_coll()
+    ledger = _ledger_coll()
+    if coll is None or audit is None or ledger is None:
+        return {"ok": False, "message": "Tracking DB unavailable."}
+    doc = await coll.find_one({"_id": proposal_id})
+    if doc is None or doc.get("status") not in ("applied", "partial"):
+        return {"ok": False, "message": "Nothing applied to roll back."}
+    from Backend import db as _db
+    undone = 0
+    async for entry in audit.find({"proposal_id": proposal_id, "ok": True}):
+        try:
+            if entry.get("action") == "edit":
+                await _bot_api("editMessageCaption", {
+                    "chat_id": entry["chat_id"], "message_id": entry["msg_id"],
+                    "caption": entry.get("before") or "", "parse_mode": "HTML"})
+                await _db.remove_media_part(_norm_chat(entry["chat_id"]),
+                                            entry["msg_id"])
+            elif entry.get("action") == "repost":
+                from Backend.helper.task_manager import delete_message
+                await delete_message(entry["chat_id"], entry["msg_id"])
+                await _db.remove_media_part(_norm_chat(entry["chat_id"]),
+                                            entry["msg_id"])
+            await ledger.update_one({"_id": entry["key"]}, {"$set": {
+                "status": "open", "rolled_back_at": time.time()},
+                "$unset": {"proposal_id": ""}})
+            undone += 1
+        except Exception as e:
+            LOGGER.warning(f"[Librarian] rollback step failed: {e}")
+        await asyncio.sleep(1)
+    await coll.update_one({"_id": proposal_id},
+                          {"$set": {"status": "rolled_back"}})
+    return {"ok": True, "rolled_back": undone}
+
+
+async def list_proposals(limit: int = 20) -> list[dict]:
+    coll = _proposals_coll()
+    if coll is None:
+        return []
+    out = []
+    try:
+        cursor = coll.find({}).sort("created_at", -1).limit(max(1, min(50, limit)))
+        async for doc in cursor:
+            doc = dict(doc)
+            doc["item_count"] = len(doc.get("items") or [])
+            doc.pop("items", None)
+            out.append(_jsonable(doc))
+    except Exception as e:
+        LOGGER.warning(f"[Librarian] proposals list failed: {e}")
+    return out
+
+
+async def list_audit(limit: int = 20) -> list[dict]:
+    coll = _audit_coll()
+    if coll is None:
+        return []
+    out = []
+    try:
+        cursor = coll.find({"action": {"$in": ["edit", "repost"]}}).sort(
+            "ts", -1).limit(max(1, min(50, limit)))
+        async for doc in cursor:
+            out.append(_jsonable(dict(doc)))
+    except Exception as e:
+        LOGGER.warning(f"[Librarian] audit list failed: {e}")
+    return out
+
+
+async def panel_counts() -> dict:
+    """The control panel's numbers: waiting per channel, fixed, proposals,
+    edits used today."""
+    base = await ledger_counts()
+    out = {"available": base.get("available", False),
+           "waiting": 0, "fixed": 0, "by_status": base.get("by_status", {}),
+           "proposals_pending": 0, "edits_today": await _edits_today(),
+           "waiting_by_channel": {}}
+    out["waiting"] = sum(base.get("by_status", {}).get(s, 0)
+                         for s in ("open", "unresolved"))
+    out["fixed"] = base.get("by_status", {}).get("fixed", 0)
+    ledger = _ledger_coll()
+    if ledger is not None:
+        try:
+            keys = []
+            async for d in ledger.find(
+                    {"status": {"$in": ["open", "unresolved"]}}, {"_id": 1, "chat_id": 1}):
+                keys.append(d)
+            located = await _located_map([d["_id"] for d in keys])
+            for d in keys:
+                loc = located.get(d["_id"]) or {}
+                chat = d.get("chat_id") or loc.get("chat_id")
+                if chat:
+                    k = str(_norm_chat(chat))
+                    out["waiting_by_channel"][k] = out["waiting_by_channel"].get(k, 0) + 1
+        except Exception:
+            pass
+    pcoll = _proposals_coll()
+    if pcoll is not None:
+        try:
+            out["proposals_pending"] = await pcoll.count_documents(
+                {"status": "pending"})
+        except Exception:
+            pass
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Background actions (page-triggered)
 # ---------------------------------------------------------------------------
 
 ACTION_STATE = {
     "running": False, "kind": "", "started_at": None,
     "finished_at": None, "result": None, "error": None,
 }
-
-
 async def run_backlog_sweep() -> dict:
     """Harvest the skip pile into the ledger: one entry per UNIQUE file
     (all copy message ids recorded), origin marked backlog-sweep. Read
@@ -845,60 +1218,9 @@ async def run_suspect_audit() -> dict:
             "messages_indexed": len(locations)}
 
 
-async def run_funnel(limit_runs: int = 40) -> dict:
-    """Cluster open ledger items into runs and resolve each through
-    L0-L2 + the gate. Persists run outcomes; items gain run_id/status.
-    Proposals only — Phase 1 applies nothing."""
-    coll = _ledger_coll()
-    runs_coll = _runs_coll()
-    if coll is None or runs_coll is None:
-        return {"ok": False, "message": "Ledger unavailable."}
-    items = []
-    try:
-        cursor = coll.find({"status": {"$in": ["open", "unresolved"]}}).limit(2000)
-        async for doc in cursor:
-            doc = dict(doc)
-            doc["key"] = doc.get("_id")
-            items.append(doc)
-    except Exception as e:
-        return {"ok": False, "message": f"Ledger read failed: {e}"}
-    if not items:
-        return {"ok": True, "runs": 0, "message": "No open ledger items."}
-
-    title_index = await _channel_title_index()
-    runs = cluster_items(items)[:max(1, limit_runs)]
-    summary = {"ok": True, "runs": 0, "tier_a": 0, "tier_b": 0, "tier_c": 0}
-    now = time.time()
-    for run in runs:
-        outcome = await resolve_run(run, title_index)
-        tier = outcome["tier"]
-        doc = {
-            "chat_id": run["chat_id"], "stem": run["stem"],
-            "season": run["season"], "special": run["special"],
-            "year": run["year"], "episodes": run["episodes"],
-            "missing_episodes": run["missing_episodes"],
-            "item_keys": run["item_keys"],
-            "item_count": len(run["item_keys"]),
-            "proposal": outcome["proposal"], "gate": outcome["gate"],
-            "tier": tier, "status": "proposed" if outcome["proposal"] else "unresolved",
-            "updated_at": now,
-        }
-        try:
-            await runs_coll.update_one(
-                {"_id": run["run_id"]},
-                {"$set": doc, "$setOnInsert": {"created_at": now}}, upsert=True)
-            await coll.update_many(
-                {"_id": {"$in": run["item_keys"]}},
-                {"$set": {"run_id": run["run_id"],
-                          "status": "proposed" if outcome["proposal"] else "unresolved"}})
-        except Exception as e:
-            LOGGER.warning(f"[Librarian] run persist failed: {e}")
-        summary["runs"] += 1
-        summary[{"A": "tier_a", "B": "tier_b", "C": "tier_c"}[tier]] += 1
-    return summary
 
 
-async def _run_action(kind: str) -> None:
+async def _run_action(kind: str, channel=None) -> None:
     ACTION_STATE.update({"running": True, "kind": kind,
                          "started_at": time.time(), "finished_at": None,
                          "result": None, "error": None})
@@ -907,8 +1229,8 @@ async def _run_action(kind: str) -> None:
             result = await run_backlog_sweep()
         elif kind == "audit":
             result = await run_suspect_audit()
-        elif kind == "funnel":
-            result = await run_funnel()
+        elif kind == "locator":
+            result = await run_locator(channel)
         else:
             result = {"ok": False, "message": f"Unknown action: {kind}"}
         ACTION_STATE["result"] = result
@@ -920,8 +1242,8 @@ async def _run_action(kind: str) -> None:
         ACTION_STATE["finished_at"] = time.time()
 
 
-def start_action(kind: str) -> dict:
+def start_action(kind: str, channel=None) -> dict:
     if ACTION_STATE["running"]:
         return {"status": "error", "message": f"Already running: {ACTION_STATE['kind']}."}
-    asyncio.get_event_loop().create_task(_run_action(kind))
+    asyncio.get_event_loop().create_task(_run_action(kind, channel))
     return {"status": "success", "message": f"{kind} started."}

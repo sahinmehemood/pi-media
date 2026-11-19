@@ -295,12 +295,23 @@ def test_librarian_seams():
     assert '"librarian_digest" in payload' in routes
     assert "librarian_action_api" in routes
     assert "librarian_bot_status_api" in routes
+    assert "librarian_bot_packet_api" in routes
+    assert "librarian_bot_proposals_api" in routes
+    assert "librarian_bot_apply_api" in routes
     assert "x-librarian-token" in routes
     # Routes + page + nav.
     assert '"/admin/librarian"' in main_py
     assert '"/api/librarian/status"' in main_py
+    assert '"/api/librarian/packet"' in main_py
+    assert '"/api/librarian/proposals"' in main_py
+    assert '"/api/librarian/apply"' in main_py
     assert "def librarian_page" in templates
     assert "'/admin/librarian'" in base_html
+    # The v4 page is a control panel, not the Phase 1 tables.
+    page = read("Backend/fastapi/templates/librarian.html")
+    assert "Locate originals" in page
+    assert "lib_counts.waiting" in page
+    assert "Runs & proposals" not in page
 
 
 if __name__ == "__main__":

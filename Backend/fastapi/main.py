@@ -72,7 +72,11 @@ from Backend.fastapi.routes.api_routes import (
     bot_admin_scan_api,
     dl_index_action_api,
     librarian_action_api,
-    librarian_bot_queue_api,
+    librarian_bot_apply_api,
+    librarian_bot_packet_api,
+    librarian_bot_proposals_api,
+    librarian_bot_rollback_api,
+    librarian_bot_search_api,
     librarian_bot_status_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
@@ -324,9 +328,25 @@ async def librarian_action(payload: dict, _: bool = Depends(require_auth)):
 async def librarian_status(request: Request):
     return await librarian_bot_status_api(request)
 
-@app.get("/api/librarian/queue")
-async def librarian_queue(request: Request):
-    return await librarian_bot_queue_api(request)
+@app.get("/api/librarian/packet")
+async def librarian_packet(request: Request):
+    return await librarian_bot_packet_api(request)
+
+@app.post("/api/librarian/proposals")
+async def librarian_proposals(request: Request):
+    return await librarian_bot_proposals_api(request)
+
+@app.post("/api/librarian/apply")
+async def librarian_apply(request: Request):
+    return await librarian_bot_apply_api(request)
+
+@app.post("/api/librarian/rollback")
+async def librarian_rollback(request: Request):
+    return await librarian_bot_rollback_api(request)
+
+@app.get("/api/librarian/search")
+async def librarian_search(request: Request):
+    return await librarian_bot_search_api(request)
 
 @app.get("/media/manage", response_class=HTMLResponse)
 async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):

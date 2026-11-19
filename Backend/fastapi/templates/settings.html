@@ -852,22 +852,25 @@
 
 <!-- ── Librarian (Hermes curation) ────────────────────────────────── -->
 <div class="settings-card">
-    <h2><i class="fa-solid fa-book-open"></i> Librarian</h2>
-    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
-        <i class="fa-solid fa-circle-info"></i>
-        The Hermes Librarian records every file the metadata pipeline rejects (the skip pile,
-        live and scan failures, suspect matches), clusters them into runs, and proposes verified
-        fixes on the <a href="/admin/librarian">Librarian page</a>. <strong>Phase 1 is report-only</strong> —
-        nothing is renamed or applied. The Media Manager bot never takes part in streaming.
-    </p>
-    <div class="s-grid">
+    <div style="display:flex;align-items:flex-start;gap:.75rem;flex-wrap:wrap">
+        <div style="flex:1 1 260px">
+            <h2 style="margin:0"><i class="fa-solid fa-book-open"></i> Librarian</h2>
+            <p style="font-size:0.78rem;color:var(--text-sec);margin:.35rem 0 0">
+                The Media Manager bot fixes the captions of files the matcher rejected — you approve
+                each series in Telegram, it edits, the app indexes. The bot never streams.
+            </p>
+        </div>
+        <a href="/admin/librarian" class="add-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:.4rem">
+            <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Librarian panel</a>
+    </div>
+    <div class="s-grid" style="margin-top:.9rem">
         <div>
             <label class="s-label" for="librarian_enabled">Librarian</label>
             <label class="toggle-wrap">
                 <input type="checkbox" class="toggle-input" id="librarian_enabled"
                     {% if settings.librarian_enabled %}checked{% endif %}>
                 <span class="toggle-track"></span>
-                <span class="toggle-label">Record rejections &amp; enable the Librarian page actions</span>
+                <span class="toggle-label">Record rejected files &amp; let the bot work on them</span>
             </label>
         </div>
         <div>
@@ -876,64 +879,69 @@
                 <input type="checkbox" class="toggle-input" id="librarian_dry_run"
                     {% if settings.librarian_dry_run %}checked{% endif %}>
                 <span class="toggle-track"></span>
-                <span class="toggle-label">Plans only, zero edits (keep ON until you approve live fixes)</span>
+                <span class="toggle-label">Bot prepares plans but edits nothing (keep ON until you trust it)</span>
             </label>
-        </div>
-        <div>
-            <label class="s-label" for="librarian_auto_apply_tier_a">Auto-apply Tier A</label>
-            <label class="toggle-wrap">
-                <input type="checkbox" class="toggle-input" id="librarian_auto_apply_tier_a"
-                    {% if settings.librarian_auto_apply_tier_a %}checked{% endif %}>
-                <span class="toggle-track"></span>
-                <span class="toggle-label">Phase 2: apply gate-verified Tier A runs without a tap</span>
-            </label>
-        </div>
-        <div>
-            <label class="s-label" for="librarian_digest">Approval digest</label>
-            <select id="librarian_digest" class="s-input">
-                <option value="manual" {% if settings.librarian_digest == 'manual' %}selected{% endif %}>Manual — only when I ask</option>
-                <option value="daily" {% if settings.librarian_digest == 'daily' %}selected{% endif %}>Daily</option>
-                <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly</option>
-            </select>
-            <p class="s-help">Phase 3: how often the Media Manager bot sends proposal digests.</p>
         </div>
         <div>
             <label class="s-label" for="librarian_edit_budget_per_day">Edit budget (per day)</label>
             <input type="number" id="librarian_edit_budget_per_day" class="s-input" min="0" max="10000"
                 value="{{ settings.librarian_edit_budget_per_day if settings.librarian_edit_budget_per_day is not none else 50 }}">
-            <p class="s-help">Phase 2: hard daily cap on caption edits. 0 = no edits allowed.</p>
+            <p class="s-help">Hard daily cap on caption edits. 0 = edits paused.</p>
         </div>
-        <div>
-            <label class="s-label" for="librarian_api_token">Librarian API token</label>
-            <div style="display:flex;gap:.5rem">
-                <input type="text" id="librarian_api_token" class="s-input" style="font-family:ui-monospace,monospace"
-                    value="{{ settings.librarian_api_token or '' }}" placeholder="Not generated yet">
-                <button type="button" class="add-btn" onclick="regenLibrarianToken()">Regenerate</button>
+    </div>
+    <details style="margin-top:1rem">
+        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Advanced — automation, API token, channel scope</summary>
+        <div class="s-grid" style="margin-top:.9rem">
+            <div>
+                <label class="s-label" for="librarian_auto_apply_tier_a">Auto-apply verified plans</label>
+                <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="librarian_auto_apply_tier_a"
+                        {% if settings.librarian_auto_apply_tier_a %}checked{% endif %}>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">Apply gate-verified plans without asking me in Telegram</span>
+                </label>
             </div>
-            <p class="s-help">Lets the Media Manager bot read the queue/status API. It grants no streaming or admin access.</p>
+            <div>
+                <label class="s-label" for="librarian_digest">Proposal digests</label>
+                <select id="librarian_digest" class="s-input">
+                    <option value="manual" {% if settings.librarian_digest == 'manual' %}selected{% endif %}>Manual — only when I ask</option>
+                    <option value="daily" {% if settings.librarian_digest == 'daily' %}selected{% endif %}>Daily</option>
+                    <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly</option>
+                </select>
+                <p class="s-help">How often the bot offers the next batch on its own.</p>
+            </div>
+            <div>
+                <label class="s-label" for="librarian_api_token">Librarian API token</label>
+                <div style="display:flex;gap:.5rem">
+                    <input type="text" id="librarian_api_token" class="s-input" style="font-family:ui-monospace,monospace"
+                        value="{{ settings.librarian_api_token or '' }}" placeholder="Not generated yet">
+                    <button type="button" class="add-btn" onclick="regenLibrarianToken()">Regenerate</button>
+                </div>
+                <p class="s-help">Lets the Media Manager bot use the Librarian API (packets, plans, apply). No streaming or admin access.</p>
+            </div>
         </div>
-    </div>
-    <label class="s-label" style="margin-top:1rem">LIBRARIAN CHANNELS
-        <span style="font-weight:400;text-transform:none;letter-spacing:0">
-            — leave empty to cover every auth channel; add channels to restrict curation to only those.</span>
-    </label>
-    <div class="multi-list-items" id="librarian_channels_items">
-        {% for ch in settings.librarian_channels %}
-        {% set t = (settings.channel_titles or {}).get(ch|string, ch|string) %}
-        <div class="multi-item">
-            <span class="channel-chip" data-list="librarian_channels" data-id="{{ ch }}" title="{{ ch }}">{{ t }}</span>
-            <button class="remove-btn" onclick="removeItem(this)" title="Remove">
-                <i class="fa-solid fa-xmark"></i>
-            </button>
+        <label class="s-label" style="margin-top:1rem">LIBRARIAN CHANNELS
+            <span style="font-weight:400;text-transform:none;letter-spacing:0">
+                — leave empty to cover every auth channel; add channels to restrict the bot to only those.</span>
+        </label>
+        <div class="multi-list-items" id="librarian_channels_items">
+            {% for ch in settings.librarian_channels %}
+            {% set t = (settings.channel_titles or {}).get(ch|string, ch|string) %}
+            <div class="multi-item">
+                <span class="channel-chip" data-list="librarian_channels" data-id="{{ ch }}" title="{{ ch }}">{{ t }}</span>
+                <button class="remove-btn" onclick="removeItem(this)" title="Remove">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            {% endfor %}
         </div>
-        {% endfor %}
-    </div>
-    <div class="add-row">
-        <input type="text" id="librarian_channels_new" class="s-input"
-            placeholder="-100xxxxxxxxxx (channels only)"
-            onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
-        <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
-    </div>
+        <div class="add-row">
+            <input type="text" id="librarian_channels_new" class="s-input"
+                placeholder="-100xxxxxxxxxx (channels only)"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
+            <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
+        </div>
+    </details>
 </div>
 
 <!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->

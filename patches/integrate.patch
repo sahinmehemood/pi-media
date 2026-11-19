@@ -28,16 +28,20 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..ba40f64 100644
+index 9ae7925..384ced5 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
-@@ -70,8 +70,17 @@ from Backend.fastapi.routes.api_routes import (
+@@ -70,8 +70,21 @@ from Backend.fastapi.routes.api_routes import (
      get_system_stats_api,
      get_tools_channels_api,
      bot_admin_scan_api,
 +    dl_index_action_api,
 +    librarian_action_api,
-+    librarian_bot_queue_api,
++    librarian_bot_apply_api,
++    librarian_bot_packet_api,
++    librarian_bot_proposals_api,
++    librarian_bot_rollback_api,
++    librarian_bot_search_api,
 +    librarian_bot_status_api,
      bot_admin_apply_api,
      bot_admin_apply_status_api,
@@ -49,7 +53,7 @@ index 9ae7925..ba40f64 100644
      clear_manual_session_api,
      search_manual_session_api,
      set_manual_session_api,
-@@ -124,6 +133,8 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+@@ -124,6 +137,8 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
  from Backend.fastapi.routes.template_routes import (
      admin_access_page,
      admin_dashboard_page,
@@ -58,7 +62,7 @@ index 9ae7925..ba40f64 100644
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -293,6 +304,30 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +308,46 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -82,14 +86,30 @@ index 9ae7925..ba40f64 100644
 +async def librarian_status(request: Request):
 +    return await librarian_bot_status_api(request)
 +
-+@app.get("/api/librarian/queue")
-+async def librarian_queue(request: Request):
-+    return await librarian_bot_queue_api(request)
++@app.get("/api/librarian/packet")
++async def librarian_packet(request: Request):
++    return await librarian_bot_packet_api(request)
++
++@app.post("/api/librarian/proposals")
++async def librarian_proposals(request: Request):
++    return await librarian_bot_proposals_api(request)
++
++@app.post("/api/librarian/apply")
++async def librarian_apply(request: Request):
++    return await librarian_bot_apply_api(request)
++
++@app.post("/api/librarian/rollback")
++async def librarian_rollback(request: Request):
++    return await librarian_bot_rollback_api(request)
++
++@app.get("/api/librarian/search")
++async def librarian_search(request: Request):
++    return await librarian_bot_search_api(request)
 +
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +848,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +868,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
@@ -117,7 +137,7 @@ index 9ae7925..ba40f64 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..f246d99 100644
+index e6d9542..5a1f793 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -484,7 +504,7 @@ index e6d9542..f246d99 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3107,118 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3107,178 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -550,21 +570,27 @@ index e6d9542..f246d99 100644
 +
 +
 +
-+#----- Librarian (Hermes curation — Phase 1: ledger, funnel, gate).
-+#----- Admin actions run in the background (sweep/audit/funnel state is
-+#----- polled by the Librarian page); the bot-facing status/queue pair
-+#----- is guarded by the dedicated Librarian API token from Settings.
++#----- Librarian v4 (Hermes curation: locator, packets, proposals, gate,
++#----- apply). Admin actions run in the background (state is polled by the
++#----- Librarian page); the bot-facing API is guarded by the dedicated
++#----- Librarian API token from Settings.
 +async def librarian_action_api(payload: dict) -> dict:
 +    from Backend.helper import librarian
 +
 +    action = str(payload.get("action") or "")
 +    if action == "state":
 +        return {"status": "success", "state": librarian.ACTION_STATE}
-+    if action in ("sweep", "audit", "funnel"):
++    if action in ("sweep", "audit", "locator"):
 +        if not SettingsManager.current().librarian_enabled:
 +            return {"status": "error",
 +                    "message": "Librarian is disabled — enable it in Settings first."}
-+        return librarian.start_action(action)
++        channel = payload.get("channel")
++        if action == "locator" and not channel:
++            return {"status": "error",
++                    "message": "The locator needs a channel to walk."}
++        return librarian.start_action(action, channel)
++    if action == "rollback":
++        return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
 +    if action == "regen_token":
 +        import secrets
 +
@@ -586,23 +612,77 @@ index e6d9542..f246d99 100644
 +    from Backend.helper import librarian
 +
 +    settings = SettingsManager.current()
-+    counts = await librarian.ledger_counts()
 +    return {
 +        "enabled": settings.librarian_enabled,
 +        "dry_run": settings.librarian_dry_run,
-+        "digest": settings.librarian_digest,
-+        "counts": counts,
++        "counts": await librarian.panel_counts(),
 +        "action_state": librarian.ACTION_STATE,
 +    }
 +
 +
-+async def librarian_bot_queue_api(request: Request) -> dict:
++async def librarian_bot_packet_api(request: Request) -> dict:
 +    if not _librarian_token_ok(request):
 +        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
 +    from Backend.helper import librarian
 +
-+    runs = await librarian.list_runs(limit=100)
-+    return {"runs": runs}
++    channel = request.query_params.get("channel")
++    if not channel:
++        raise HTTPException(status_code=400, detail="channel is required.")
++    try:
++        limit = int(request.query_params.get("limit") or 30)
++    except ValueError:
++        limit = 30
++    return await librarian.get_packet(channel, limit)
++
++
++async def librarian_bot_proposals_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian
++
++    payload = await request.json()
++    return await librarian.submit_proposal(payload)
++
++
++async def librarian_bot_apply_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian
++
++    payload = await request.json()
++    return await librarian.apply_proposal(
++        str(payload.get("proposal_id") or ""),
++        approver=str(payload.get("approver") or "yan"))
++
++
++async def librarian_bot_rollback_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian
++
++    payload = await request.json()
++    return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
++
++
++async def librarian_bot_search_api(request: Request) -> dict:
++    """The app's own /set candidate search, for the Media Manager."""
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper.metadata.entry import (
++        search_any_candidates,
++        search_movie_candidates,
++        search_tv_candidates,
++    )
++
++    query = request.query_params.get("q") or ""
++    media_type = (request.query_params.get("type") or "any").lower()
++    if media_type == "movie":
++        results = await search_movie_candidates(query)
++    elif media_type == "tv":
++        results = await search_tv_candidates(query)
++    else:
++        results = await search_any_candidates(query)
++    return {"results": results}
 diff --git a/Backend/fastapi/routes/stream_routes.py b/Backend/fastapi/routes/stream_routes.py
 index be9b286..a6f3b85 100644
 --- a/Backend/fastapi/routes/stream_routes.py
@@ -683,7 +763,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..a05ed28 100644
+index c53ee43..fd33ac4 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -747,7 +827,7 @@ index c53ee43..a05ed28 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -262,11 +316,44 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +316,65 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -776,21 +856,42 @@ index c53ee43..a05ed28 100644
 +
 +
 +
-+#----- Librarian: reject ledger + resolution proposals (Phase 1)
++#----- Librarian v4: control panel (the bot DM is the working surface)
 +async def librarian_page(request: Request, _: bool = Depends(require_auth)):
 +    from Backend.helper import librarian
 +
++    settings = SettingsManager.current()
 +    ctx = _base_context(request)
 +    ctx["current_user"] = get_current_user(request)
-+    status = (request.query_params.get("status") or "").strip()
-+    reason = (request.query_params.get("reason") or "").strip()
-+    ctx["lib_status"] = status
-+    ctx["lib_reason"] = reason
-+    ctx["lib_counts"] = await librarian.ledger_counts()
-+    ctx["lib_runs"] = await librarian.list_runs(limit=60)
-+    ctx["lib_items"] = await librarian.list_ledger(status=status, reason=reason, limit=120)
++    counts = await librarian.panel_counts()
++    ctx["lib_counts"] = counts
++    ctx["lib_proposals"] = await librarian.list_proposals(limit=15)
++    ctx["lib_fixes"] = await librarian.list_audit(limit=15)
 +    ctx["lib_state"] = librarian.ACTION_STATE
-+    ctx["librarian_enabled"] = SettingsManager.current().librarian_enabled
++    ctx["librarian_enabled"] = settings.librarian_enabled
++    ctx["librarian_dry_run"] = settings.librarian_dry_run
++    ctx["lib_budget"] = settings.librarian_edit_budget_per_day
++    # Channel rows: id, display name (best effort), files waiting.
++    waiting = counts.get("waiting_by_channel") or {}
++    rows = []
++    client = None
++    try:
++        from Backend.fastapi.routes.api_routes import _scan_client
++        client = _scan_client()
++    except Exception:
++        client = None
++    for ch in settings.auth_channels:
++        stripped = str(ch).replace("-100", "")
++        name = str(ch)
++        if client is not None:
++            try:
++                chat = await client.get_chat(int(ch))
++                name = getattr(chat, "title", None) or name
++            except Exception:
++                pass
++        rows.append({"id": str(ch), "name": name,
++                     "waiting": waiting.get(stripped, 0)})
++    ctx["lib_channels"] = rows
 +    return templates.TemplateResponse("librarian.html", ctx)
 diff --git a/Backend/fastapi/templates/admin_dashboard.html b/Backend/fastapi/templates/admin_dashboard.html
 index 914b18b..3d989fc 100644
@@ -882,7 +983,7 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 62bda08..9567e8e 100644
+index 62bda08..fc9ee1f 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
 @@ -143,26 +143,13 @@
@@ -916,7 +1017,7 @@ index 62bda08..9567e8e 100644
  
          <hr class="divider">
  
-@@ -693,6 +680,295 @@
+@@ -693,6 +680,303 @@
      {% endif %}
  </div>
  
@@ -1092,22 +1193,25 @@ index 62bda08..9567e8e 100644
 +
 +<!-- ── Librarian (Hermes curation) ────────────────────────────────── -->
 +<div class="settings-card">
-+    <h2><i class="fa-solid fa-book-open"></i> Librarian</h2>
-+    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
-+        <i class="fa-solid fa-circle-info"></i>
-+        The Hermes Librarian records every file the metadata pipeline rejects (the skip pile,
-+        live and scan failures, suspect matches), clusters them into runs, and proposes verified
-+        fixes on the <a href="/admin/librarian">Librarian page</a>. <strong>Phase 1 is report-only</strong> —
-+        nothing is renamed or applied. The Media Manager bot never takes part in streaming.
-+    </p>
-+    <div class="s-grid">
++    <div style="display:flex;align-items:flex-start;gap:.75rem;flex-wrap:wrap">
++        <div style="flex:1 1 260px">
++            <h2 style="margin:0"><i class="fa-solid fa-book-open"></i> Librarian</h2>
++            <p style="font-size:0.78rem;color:var(--text-sec);margin:.35rem 0 0">
++                The Media Manager bot fixes the captions of files the matcher rejected — you approve
++                each series in Telegram, it edits, the app indexes. The bot never streams.
++            </p>
++        </div>
++        <a href="/admin/librarian" class="add-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:.4rem">
++            <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Librarian panel</a>
++    </div>
++    <div class="s-grid" style="margin-top:.9rem">
 +        <div>
 +            <label class="s-label" for="librarian_enabled">Librarian</label>
 +            <label class="toggle-wrap">
 +                <input type="checkbox" class="toggle-input" id="librarian_enabled"
 +                    {% if settings.librarian_enabled %}checked{% endif %}>
 +                <span class="toggle-track"></span>
-+                <span class="toggle-label">Record rejections &amp; enable the Librarian page actions</span>
++                <span class="toggle-label">Record rejected files &amp; let the bot work on them</span>
 +            </label>
 +        </div>
 +        <div>
@@ -1116,64 +1220,69 @@ index 62bda08..9567e8e 100644
 +                <input type="checkbox" class="toggle-input" id="librarian_dry_run"
 +                    {% if settings.librarian_dry_run %}checked{% endif %}>
 +                <span class="toggle-track"></span>
-+                <span class="toggle-label">Plans only, zero edits (keep ON until you approve live fixes)</span>
++                <span class="toggle-label">Bot prepares plans but edits nothing (keep ON until you trust it)</span>
 +            </label>
-+        </div>
-+        <div>
-+            <label class="s-label" for="librarian_auto_apply_tier_a">Auto-apply Tier A</label>
-+            <label class="toggle-wrap">
-+                <input type="checkbox" class="toggle-input" id="librarian_auto_apply_tier_a"
-+                    {% if settings.librarian_auto_apply_tier_a %}checked{% endif %}>
-+                <span class="toggle-track"></span>
-+                <span class="toggle-label">Phase 2: apply gate-verified Tier A runs without a tap</span>
-+            </label>
-+        </div>
-+        <div>
-+            <label class="s-label" for="librarian_digest">Approval digest</label>
-+            <select id="librarian_digest" class="s-input">
-+                <option value="manual" {% if settings.librarian_digest == 'manual' %}selected{% endif %}>Manual — only when I ask</option>
-+                <option value="daily" {% if settings.librarian_digest == 'daily' %}selected{% endif %}>Daily</option>
-+                <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly</option>
-+            </select>
-+            <p class="s-help">Phase 3: how often the Media Manager bot sends proposal digests.</p>
 +        </div>
 +        <div>
 +            <label class="s-label" for="librarian_edit_budget_per_day">Edit budget (per day)</label>
 +            <input type="number" id="librarian_edit_budget_per_day" class="s-input" min="0" max="10000"
 +                value="{{ settings.librarian_edit_budget_per_day if settings.librarian_edit_budget_per_day is not none else 50 }}">
-+            <p class="s-help">Phase 2: hard daily cap on caption edits. 0 = no edits allowed.</p>
++            <p class="s-help">Hard daily cap on caption edits. 0 = edits paused.</p>
 +        </div>
-+        <div>
-+            <label class="s-label" for="librarian_api_token">Librarian API token</label>
-+            <div style="display:flex;gap:.5rem">
-+                <input type="text" id="librarian_api_token" class="s-input" style="font-family:ui-monospace,monospace"
-+                    value="{{ settings.librarian_api_token or '' }}" placeholder="Not generated yet">
-+                <button type="button" class="add-btn" onclick="regenLibrarianToken()">Regenerate</button>
++    </div>
++    <details style="margin-top:1rem">
++        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Advanced — automation, API token, channel scope</summary>
++        <div class="s-grid" style="margin-top:.9rem">
++            <div>
++                <label class="s-label" for="librarian_auto_apply_tier_a">Auto-apply verified plans</label>
++                <label class="toggle-wrap">
++                    <input type="checkbox" class="toggle-input" id="librarian_auto_apply_tier_a"
++                        {% if settings.librarian_auto_apply_tier_a %}checked{% endif %}>
++                    <span class="toggle-track"></span>
++                    <span class="toggle-label">Apply gate-verified plans without asking me in Telegram</span>
++                </label>
 +            </div>
-+            <p class="s-help">Lets the Media Manager bot read the queue/status API. It grants no streaming or admin access.</p>
++            <div>
++                <label class="s-label" for="librarian_digest">Proposal digests</label>
++                <select id="librarian_digest" class="s-input">
++                    <option value="manual" {% if settings.librarian_digest == 'manual' %}selected{% endif %}>Manual — only when I ask</option>
++                    <option value="daily" {% if settings.librarian_digest == 'daily' %}selected{% endif %}>Daily</option>
++                    <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly</option>
++                </select>
++                <p class="s-help">How often the bot offers the next batch on its own.</p>
++            </div>
++            <div>
++                <label class="s-label" for="librarian_api_token">Librarian API token</label>
++                <div style="display:flex;gap:.5rem">
++                    <input type="text" id="librarian_api_token" class="s-input" style="font-family:ui-monospace,monospace"
++                        value="{{ settings.librarian_api_token or '' }}" placeholder="Not generated yet">
++                    <button type="button" class="add-btn" onclick="regenLibrarianToken()">Regenerate</button>
++                </div>
++                <p class="s-help">Lets the Media Manager bot use the Librarian API (packets, plans, apply). No streaming or admin access.</p>
++            </div>
 +        </div>
-+    </div>
-+    <label class="s-label" style="margin-top:1rem">LIBRARIAN CHANNELS
-+        <span style="font-weight:400;text-transform:none;letter-spacing:0">
-+            — leave empty to cover every auth channel; add channels to restrict curation to only those.</span>
-+    </label>
-+    <div class="multi-list-items" id="librarian_channels_items">
-+        {% for ch in settings.librarian_channels %}
-+        {% set t = (settings.channel_titles or {}).get(ch|string, ch|string) %}
-+        <div class="multi-item">
-+            <span class="channel-chip" data-list="librarian_channels" data-id="{{ ch }}" title="{{ ch }}">{{ t }}</span>
-+            <button class="remove-btn" onclick="removeItem(this)" title="Remove">
-+                <i class="fa-solid fa-xmark"></i>
-+            </button>
++        <label class="s-label" style="margin-top:1rem">LIBRARIAN CHANNELS
++            <span style="font-weight:400;text-transform:none;letter-spacing:0">
++                — leave empty to cover every auth channel; add channels to restrict the bot to only those.</span>
++        </label>
++        <div class="multi-list-items" id="librarian_channels_items">
++            {% for ch in settings.librarian_channels %}
++            {% set t = (settings.channel_titles or {}).get(ch|string, ch|string) %}
++            <div class="multi-item">
++                <span class="channel-chip" data-list="librarian_channels" data-id="{{ ch }}" title="{{ ch }}">{{ t }}</span>
++                <button class="remove-btn" onclick="removeItem(this)" title="Remove">
++                    <i class="fa-solid fa-xmark"></i>
++                </button>
++            </div>
++            {% endfor %}
 +        </div>
-+        {% endfor %}
-+    </div>
-+    <div class="add-row">
-+        <input type="text" id="librarian_channels_new" class="s-input"
-+            placeholder="-100xxxxxxxxxx (channels only)"
-+            onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
-+        <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
-+    </div>
++        <div class="add-row">
++            <input type="text" id="librarian_channels_new" class="s-input"
++                placeholder="-100xxxxxxxxxx (channels only)"
++                onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
++            <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
++        </div>
++    </details>
 +</div>
 +
 +<!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
@@ -1212,7 +1321,7 @@ index 62bda08..9567e8e 100644
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1239,6 +1515,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
+@@ -1239,6 +1523,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
          </div>
      </div>
  
@@ -1237,7 +1346,7 @@ index 62bda08..9567e8e 100644
      <!-- ── Backup & Restore ───────────────────────────────────────────── -->
      <div class="settings-card">
          <h2><i class="fa-solid fa-box-archive"></i> Backup &amp; Restore</h2>
-@@ -1569,7 +1863,7 @@ function addItem(listKey) {
+@@ -1569,7 +1871,7 @@ function addItem(listKey) {
      const value = newInput.value.trim();
      if (!value) return;
  
@@ -1246,7 +1355,7 @@ index 62bda08..9567e8e 100644
      if (channelLists.includes(listKey) && !isValidChannelId(value)) {
          alert('Only channel IDs in -100xxxxxxxxxx format are accepted (channels only).');
          return;
-@@ -1682,6 +1976,53 @@ function toggleWebdavPwdVisibility() {
+@@ -1682,6 +1984,53 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -1300,7 +1409,7 @@ index 62bda08..9567e8e 100644
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1690,6 +2031,7 @@ async function saveSettings() {
+@@ -1690,6 +2039,7 @@ async function saveSettings() {
          ...collectList('auth_channels'),
          ...collectList('global_search_channels'),
          ...collectList('manual_channels'),
@@ -1308,7 +1417,7 @@ index 62bda08..9567e8e 100644
      ];
      const acEl = document.getElementById('announcement_channel');
      const scEl = document.getElementById('skip_channel');
-@@ -1759,14 +2101,41 @@ async function saveSettings() {
+@@ -1759,14 +2109,41 @@ async function saveSettings() {
          webdav_password:               document.getElementById('webdav_password').value,
          multi_tokens:                  collectList('multi_tokens'),
          helper_tokens:                 collectList('helper_tokens'),
@@ -1350,7 +1459,7 @@ index 62bda08..9567e8e 100644
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1902,6 +2271,31 @@ function renderSettings(s) {
+@@ -1902,6 +2279,31 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -1382,7 +1491,7 @@ index 62bda08..9567e8e 100644
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1913,6 +2307,8 @@ function renderSettings(s) {
+@@ -1913,6 +2315,8 @@ function renderSettings(s) {
      document.getElementById('cf_stream_url').value = s.cf_stream_url || '';
      document.getElementById('cf_stream_secret').value = s.cf_stream_secret || '';
      document.getElementById('cf_stream_mode').value = s.cf_stream_mode || 'off';
@@ -1391,7 +1500,7 @@ index 62bda08..9567e8e 100644
      const wu = document.getElementById('webdav_user');
      if (wu) wu.value = s.webdav_user || '';
      const wp = document.getElementById('webdav_password');
-@@ -1945,6 +2341,16 @@ function renderSettings(s) {
+@@ -1945,6 +2349,16 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -1408,7 +1517,7 @@ index 62bda08..9567e8e 100644
      toggleSkipDeleteField();
  
      rebuildDatabaseList(s.database_list || []);
-@@ -2021,7 +2427,6 @@ const STAT_FIELDS = [
+@@ -2021,7 +2435,6 @@ const STAT_FIELDS = [
      ['streams', 'Streams'], ['db_size', 'DB Size'],
      ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
  ];
@@ -1416,7 +1525,7 @@ index 62bda08..9567e8e 100644
  
  /* Spin the clicked refresh button's icon while an async action runs */
  function spinIcon(btn, on) {
-@@ -2047,32 +2452,6 @@ async function loadDbStats(btn) {
+@@ -2047,32 +2460,6 @@ async function loadDbStats(btn) {
      }
  }
  
@@ -1449,7 +1558,7 @@ index 62bda08..9567e8e 100644
  async function restartApp() {
      if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
  
-@@ -2089,7 +2468,6 @@ async function restartApp() {
+@@ -2089,7 +2476,6 @@ async function restartApp() {
      }
  
      // Web app goes down during restart — poll health until start_time changes, then reload.
@@ -1457,7 +1566,7 @@ index 62bda08..9567e8e 100644
      const overlay = document.getElementById('restart-overlay');
      overlay.hidden = false;
      document.documentElement.classList.add('rs-lock');
-@@ -2137,7 +2515,6 @@ window.addEventListener('DOMContentLoaded', () => {
+@@ -2137,7 +2523,6 @@ window.addEventListener('DOMContentLoaded', () => {
      toggleDuplicateProtection();
      toggleMediaflowFields();
      loadDbStats();

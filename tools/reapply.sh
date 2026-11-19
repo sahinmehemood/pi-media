@@ -44,6 +44,8 @@ PLUGIN_FILES=(
   tests/test_hermes_bot.py
   tests/test_librarian.py
   docs/librarian/DESIGN.md
+  docs/librarian/DESIGN-v4.md
+  tools/librarian_cli.py
   docs/stream-buffer/DESIGN.md
   docs/dl-link.md
   docs/stream-buffer/README.md
