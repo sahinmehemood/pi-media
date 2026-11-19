@@ -157,6 +157,28 @@ def test_wave2_phase_b_seams():
     assert "offer_pooled" in dl
 
 
+def test_wave2_phase_c_seams():
+    dl = read("Backend/pyrofork/plugins/dl_link.py")
+    # Batch pooling + index + lifecycle all live in the plugin
+    for needle in ("build_m3u", "_pool_auto", "_flush_batch", "_index_docs",
+                   "_dl_list", "_dl_pin", "expired_msg_ids", "_run_sweep",
+                   "dl-batch.m3u"):
+        assert needle in dl, needle
+    # Expiry setting end-to-end
+    sm = read("Backend/helper/settings_manager.py")
+    assert '"dl_expire_days"' in sm and "def dl_expire_days" in sm
+    api = read("Backend/fastapi/routes/api_routes.py")
+    assert "dl_expire_days" in api and "dl_index_action_api" in api
+    page = read("Backend/fastapi/templates/settings.html")
+    assert 'id="dl_expire_days"' in page
+    # Web DL Index: page fn, template, route, nav
+    assert "dl_index_page" in read("Backend/fastapi/routes/template_routes.py")
+    assert (ROOT / "Backend/fastapi/templates/dl_index.html").exists()
+    main = read("Backend/fastapi/main.py")
+    assert '"/admin/dl-index"' in main and "dl_index_action_api" in main
+    assert "/admin/dl-index" in read("Backend/fastapi/templates/base.html")
+
+
 def test_settings_logs_is_download_only():
     # Yan's call (2026-11-19): no on-page log viewer on the Settings
     # page — a single one-tap Download logs button, nothing else.

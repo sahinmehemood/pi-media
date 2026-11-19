@@ -1893,6 +1893,11 @@ async def update_settings_api(payload: dict) -> dict:
         payload["prewarm_enabled"] = bool(payload["prewarm_enabled"])
     if "prewarm_only_charging" in payload:
         payload["prewarm_only_charging"] = bool(payload["prewarm_only_charging"])
+    if "dl_expire_days" in payload:
+        _v = payload["dl_expire_days"]
+        if isinstance(_v, bool) or not isinstance(_v, int):
+            raise HTTPException(status_code=400, detail="'dl_expire_days' must be an integer.")
+        payload["dl_expire_days"] = max(0, min(3650, _v))
 
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
@@ -2544,6 +2549,60 @@ async def download_logs_api():
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Log file not found.")
     return FileResponse(path, filename="log.txt", media_type="text/plain")
+
+
+#----- DL Index actions (pin toggle, delete post + entry, re-issue link)
+async def dl_index_action_api(payload: dict) -> dict:
+    from urllib.parse import quote as _quote
+
+    from Backend.config import Telegram as _Telegram
+
+    action = str(payload.get("action") or "")
+    unique_id = payload.get("unique_id")
+    tracking = (getattr(db, "dbs", None) or {}).get("tracking")
+    coll = tracking["dl_link_map"] if tracking is not None else None
+    if coll is None or not unique_id:
+        return {"status": "error", "message": "DL Index is unavailable."}
+    doc = await coll.find_one({"_id": unique_id})
+    if doc is None:
+        return {"status": "error", "message": "That entry no longer exists."}
+    settings = SettingsManager.current()
+    dl_id = settings.dl_channel_id
+
+    if action == "pin":
+        new_state = not bool(doc.get("pinned"))
+        await coll.update_one({"_id": unique_id}, {"$set": {"pinned": new_state}})
+        return {"status": "success", "pinned": new_state}
+
+    if action == "delete":
+        if dl_id is not None:
+            try:
+                import Backend.pyrofork.bot as _botmod
+
+                bot = getattr(_botmod, "StreamBot", None)
+                if bot is not None:
+                    await bot.delete_messages(dl_id, int(doc["msg_id"]))
+            except Exception as e:
+                return {"status": "error",
+                        "message": f"Could not delete the channel post: {e}"}
+        await coll.delete_one({"_id": unique_id})
+        return {"status": "success"}
+
+    if action == "link":
+        token_doc = await db.add_api_token(name="Admin", user_id=_Telegram.OWNER_ID)
+        if not token_doc:
+            return {"status": "error", "message": "Could not resolve the owner token."}
+        raw = str(int(dl_id)) if dl_id is not None else ""
+        if raw.startswith("-100"):
+            raw = raw[4:]
+        if not raw:
+            return {"status": "error", "message": "No DL Channel is configured."}
+        encoded = await encode_string({"chat_id": int(raw), "msg_id": int(doc["msg_id"])})
+        name = doc.get("name") or f"DL post {doc.get('msg_id')}"
+        link = f"{settings.base_url}/dl/{token_doc['token']}/{encoded}/{_quote(str(name))}"
+        return {"status": "success", "link": link}
+
+    return {"status": "error", "message": "Unknown action."}
 
 
 #----- Run the updater then re-exec the app; runs after the HTTP response is flushed

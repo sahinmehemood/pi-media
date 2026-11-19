@@ -53,9 +53,15 @@ class FakeMessage:
         self.forward_from_chat = forward_from_chat
         self.forward_from_message_id = forward_from_message_id
         self.replies = []
+        self.documents = []
+        self.command = None
 
     async def reply_text(self, text, **kwargs):
         self.replies.append(text)
+        return None
+
+    async def reply_document(self, data, **kwargs):
+        self.documents.append((data, kwargs))
         return None
 
 
@@ -256,6 +262,7 @@ dl = load_module("dl_link_under_test", ROOT / "Backend/pyrofork/plugins/dl_link.
 
 
 _PRISTINE_DEDUPE = (dl._dedupe_get, dl._dedupe_put)
+_PRISTINE_COLL = dl._dedupe_coll
 
 
 def reset():
@@ -263,6 +270,13 @@ def reset():
     STUBS.captured.clear()
     STUBS.botmod.Userbot = FakeUserbot()
     dl._dedupe_get, dl._dedupe_put = _PRISTINE_DEDUPE
+    dl._dedupe_coll = _PRISTINE_COLL
+    for win in dl._batch_windows.values():
+        task = win.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+    dl._batch_windows.clear()
+    dl.BATCH_QUIET_S = 3.0
     if hasattr(STUBS.settings, "dl_channel_id"):
         del STUBS.settings.dl_channel_id
     STUBS.settings.subscription = False
@@ -514,7 +528,7 @@ def _pool_on(dedupe_doc=None):
     async def fake_get(unique_id):
         return dedupe_doc if dedupe_doc is not None else store.get(unique_id)
 
-    async def fake_put(unique_id, msg_id):
+    async def fake_put(unique_id, msg_id, name=None, size=None):
         store[unique_id] = {"msg_id": msg_id}
 
     dl._dedupe_get, dl._dedupe_put = fake_get, fake_put
@@ -706,6 +720,180 @@ def test_check_pool_mode_channel_unreachable_is_broken():
         text = msg.replies[0]
         assert "cannot access the DL Channel" in text and "broken" in text, text
     run(main())
+
+
+#----- Wave 2 Phase C: batch pooling, DL Index, lifecycle
+
+import asyncio as _asyncio
+import time as _time
+
+
+class FakeColl:
+    """In-memory dl_link_map collection (motor-shaped)."""
+
+    def __init__(self, docs=None):
+        self.docs = {d["_id"]: dict(d) for d in (docs or [])}
+        self.updates = []
+
+    async def find_one(self, query):
+        doc = self.docs.get(query.get("_id"))
+        return dict(doc) if doc else None
+
+    def find(self, query):
+        async def gen():
+            for doc in list(self.docs.values()):
+                yield dict(doc)
+        return gen()
+
+    async def update_one(self, query, update, upsert=False):
+        self.updates.append((query, update))
+        doc = self.docs.setdefault(query["_id"], {"_id": query["_id"]})
+        for key, value in (update.get("$set") or {}).items():
+            doc[key] = value
+        for key, value in (update.get("$setOnInsert") or {}).items():
+            doc.setdefault(key, value)
+
+    async def delete_one(self, query):
+        self.docs.pop(query.get("_id"), None)
+
+
+def test_build_m3u_format():
+    out = dl.build_m3u([("A B.mkv", "http://x/1"), ("C\nD.mkv", "http://x/2")])
+    assert out.startswith("#EXTM3U\n")
+    assert "#EXTINF:-1,A B.mkv\nhttp://x/1\n" in out
+    assert "#EXTINF:-1,C D.mkv\nhttp://x/2\n" in out  # newline in name flattened
+
+
+def test_batch_two_files_one_combined_reply_and_m3u():
+    async def main():
+        reset()
+        _pool_on()
+        dl.BATCH_QUIET_S = 0.05
+        client = FakeClient()
+        m1 = FakeMessage(mid=1, user=FakeUser(OWNER),
+                         document=FakeMedia("Ep 1.mkv", 100, "U1"))
+        m2 = FakeMessage(mid=2, user=FakeUser(OWNER),
+                         document=FakeMedia("Ep 2.mkv", 200, "U2"))
+        await dl.dl_auto_link(client, m1)
+        # First file: instant single reply, exactly like a single file
+        assert len(m1.replies) == 1 and "Ep 1.mkv" in m1.replies[0]
+        await dl.dl_auto_link(client, m2)
+        assert m2.replies == []  # held for the batch
+        await _asyncio.sleep(0.3)
+        # One combined reply on the first held message, with both links
+        assert len(m2.replies) == 1, m2.replies
+        text = m2.replies[0]
+        assert "Ep 1.mkv" in text and "Ep 2.mkv" in text, text
+        assert len(m2.documents) == 1
+        data, kwargs = m2.documents[0]
+        assert kwargs.get("file_name") == "dl-batch.m3u"
+        body = data.getvalue().decode()
+        assert body.startswith("#EXTM3U") and body.count("#EXTINF") == 2
+        assert len(client.copies) == 2
+    run(main())
+
+
+def test_batch_single_file_no_followup():
+    async def main():
+        reset()
+        _pool_on()
+        dl.BATCH_QUIET_S = 0.05
+        client = FakeClient()
+        m1 = FakeMessage(mid=1, user=FakeUser(OWNER), document=FakeMedia())
+        await dl.dl_auto_link(client, m1)
+        await _asyncio.sleep(0.25)
+        assert len(m1.replies) == 1 and m1.documents == []
+    run(main())
+
+
+def test_dedupe_put_records_index_metadata():
+    async def main():
+        reset()
+        coll = FakeColl()
+        dl._dedupe_coll = lambda: coll
+        await dl._dedupe_put("U1", 5, "Name.mkv", 123)
+        doc = coll.docs["U1"]
+        assert doc["msg_id"] == 5 and doc["name"] == "Name.mkv" and doc["size"] == 123
+        assert doc["pinned"] is False and doc["pooled_at"] > 0
+        # Re-put (backfill) must not reset pooled_at or pinned
+        doc["pinned"] = True
+        stamp = doc["pooled_at"]
+        await dl._dedupe_put("U1", 5, "Name.mkv", 123)
+        assert coll.docs["U1"]["pinned"] is True
+        assert coll.docs["U1"]["pooled_at"] == stamp
+    run(main())
+
+
+def _index_coll():
+    now = _time.time()
+    return FakeColl([
+        {"_id": "UA", "msg_id": 11, "name": "Alpha.mkv", "size": 100,
+         "pooled_at": now - 100, "pinned": True},
+        {"_id": "UB", "msg_id": 12, "ts": now - 50},  # legacy doc, no metadata
+        {"_id": "UC", "msg_id": 13, "name": "Beta Show.mkv", "size": 300,
+         "pooled_at": now - 10, "pinned": False},
+    ])
+
+
+def test_index_docs_shape_sort_and_filter():
+    async def main():
+        reset()
+        _pool_on()
+        coll = _index_coll()
+        dl._dedupe_coll = lambda: coll
+        docs = await dl._index_docs()
+        assert [d["msg_id"] for d in docs] == [13, 12, 11]  # newest first
+        assert docs[1]["name"] == "DL post 12" and docs[1]["pinned"] is False
+        assert docs[0]["pinned"] is False and docs[2]["pinned"] is True
+        hits = await dl._index_docs("beta")
+        assert [d["msg_id"] for d in hits] == [13]
+    run(main())
+
+
+def test_dl_list_command_replies_with_links():
+    async def main():
+        reset()
+        _pool_on()
+        dl._dedupe_coll = lambda: _index_coll()
+        msg = FakeMessage(user=FakeUser(OWNER))
+        msg.command = ["dl", "list"]
+        await dl.dl_command(FakeClient(), msg)
+        assert len(msg.replies) == 1
+        text = msg.replies[0]
+        assert "DL Index" in text and "Alpha.mkv" in text and "📌" in text, text
+        assert "/dl/TOK-111/ENC123/" in text
+    run(main())
+
+
+def test_dl_pin_and_unpin_by_reply():
+    async def main():
+        reset()
+        store = _pool_on(dedupe_doc={"msg_id": 9001, "name": "TDH - S3 E27.mkv"})
+        coll = FakeColl([{"_id": "UNIQ1", "msg_id": 9001}])
+        dl._dedupe_coll = lambda: coll
+        target = FakeMessage(mid=7, user=FakeUser(OWNER), document=FakeMedia())
+        msg = FakeMessage(user=FakeUser(OWNER), reply_to=target)
+        msg.command = ["dl", "pin"]
+        await dl.dl_command(FakeClient(), msg)
+        assert coll.docs["UNIQ1"]["pinned"] is True
+        assert "Pinned" in msg.replies[0]
+        msg2 = FakeMessage(user=FakeUser(OWNER), reply_to=target)
+        msg2.command = ["dl", "unpin"]
+        await dl.dl_command(FakeClient(), msg2)
+        assert coll.docs["UNIQ1"]["pinned"] is False
+    run(main())
+
+
+def test_expired_msg_ids_rules():
+    now = 1_000_000_000.0
+    docs = [
+        {"msg_id": 1, "pooled_at": now - 40 * 86400},                    # old -> expired
+        {"msg_id": 2, "pooled_at": now - 40 * 86400, "pinned": True},    # pinned -> kept
+        {"msg_id": 3, "pooled_at": now - 5 * 86400},                     # fresh -> kept
+        {"msg_id": 4, "ts": now - 90 * 86400},                           # legacy ts -> expired
+    ]
+    assert dl.expired_msg_ids(docs, 30, now) == [1, 4]
+    assert dl.expired_msg_ids(docs, 0, now) == []  # 0 = never
 
 
 if __name__ == "__main__":

@@ -52,6 +52,7 @@ _DEFAULTS: Dict[str, Any] = {
     "skip_channel": "",
     #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
     "dl_channel_id": "",
+    "dl_expire_days": 0,
     "delete_on_metadata_fail": False,
     "better_poster_enabled": False,
     "better_poster": "",
@@ -202,6 +203,20 @@ class Settings:
             return int(raw)
         except ValueError:
             return None
+
+    @property
+    def dl_expire_days(self) -> int:
+        """Days a pooled file may live in the DL Channel (0 = forever).
+
+        Pinned index entries are exempt; enforced by the DL sweep.
+        """
+        value = self._d.get("dl_expire_days", 0)
+        if isinstance(value, bool):
+            return 0
+        try:
+            return max(0, min(3650, int(value)))
+        except (TypeError, ValueError):
+            return 0
 
     #----- Strings
     @property

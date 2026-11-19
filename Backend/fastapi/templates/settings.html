@@ -877,6 +877,10 @@
             <i class="fa-solid fa-xmark"></i>
         </button>
     </div>
+    <label class="s-label" for="dl_expire_days" style="margin-top:1rem">POOLED FILE EXPIRY (DAYS)</label>
+    <input type="number" id="dl_expire_days" class="s-input" min="0" max="3650"
+        value="{{ settings.dl_expire_days if settings.dl_expire_days is not none else 0 }}">
+    <p class="s-help">Pooled files older than this are deleted from the channel by a daily sweep. 0 = keep forever. Pinned files (📌 via /dl pin or the DL Index page) never expire.</p>
 </div>
 
 <style>
@@ -1957,6 +1961,7 @@ async function saveSettings() {
         announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         dl_channel_id:                 (function(){const el=document.getElementById('dl_channel_id');return el.dataset.id||extractChannelId(el.value.trim());})(),
+        dl_expire_days:                parseInt(document.getElementById('dl_expire_days').value, 10) || 0,
         delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
         buffer_enabled:                document.getElementById('buffer_enabled').checked,
         buffer_profile:                document.getElementById('buffer_profile').value,
@@ -2180,6 +2185,7 @@ function renderSettings(s) {
         const dcBtn = document.getElementById('dl_channel_id_clear');
         if (dcBtn) dcBtn.style.display = dcid ? '' : 'none';
     }
+    document.getElementById('dl_expire_days').value = (s.dl_expire_days ?? 0);
     toggleSkipDeleteField();
 
     rebuildDatabaseList(s.database_list || []);

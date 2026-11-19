@@ -17,8 +17,43 @@ index 4b43288..4128675 100644
          app.add_middleware(SessionMiddleware, secret_key=SettingsManager.current().session_secret or secrets.token_hex(32))
          await asyncio.sleep(0.5)
  
+diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
+index 4ee25b8..f71ba53 100644
+--- a/Backend/fastapi/main.py
++++ b/Backend/fastapi/main.py
+@@ -70,6 +70,7 @@ from Backend.fastapi.routes.api_routes import (
+     get_system_stats_api,
+     get_tools_channels_api,
+     bot_admin_scan_api,
++    dl_index_action_api,
+     bot_admin_apply_api,
+     bot_admin_apply_status_api,
+     clear_manual_session_api,
+@@ -123,6 +124,7 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+ from Backend.fastapi.routes.template_routes import (
+     admin_access_page,
+     admin_dashboard_page,
++    dl_index_page,
+     admin_requests_page,
+     admin_subscriptions_page,
+     public_request_page,
+@@ -292,6 +294,14 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+ async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
+     return await admin_dashboard_page(request, _)
+ 
++@app.get("/admin/dl-index", response_class=HTMLResponse)
++async def admin_dl_index(request: Request, _: bool = Depends(require_auth)):
++    return await dl_index_page(request, _)
++
++@app.post("/api/admin/dl-index/action")
++async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
++    return await dl_index_action_api(payload)
++
+ @app.get("/media/manage", response_class=HTMLResponse)
+ async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
+     return await media_management_page(request, media_type, custom, _)
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index 7d42083..3049187 100644
+index 7d42083..e57eaf1 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -604,6 +604,16 @@ async def get_dead_links_api() -> dict:
@@ -47,7 +82,7 @@ index 7d42083..3049187 100644
      for key in bool_keys:
          if key in payload:
              payload[key] = bool(payload[key])
-@@ -1845,6 +1855,45 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1845,6 +1855,50 @@ async def update_settings_api(payload: dict) -> dict:
          except (ValueError, TypeError):
              payload["fanart_shuffle_interval"] = 5
  
@@ -89,11 +124,16 @@ index 7d42083..3049187 100644
 +        payload["prewarm_enabled"] = bool(payload["prewarm_enabled"])
 +    if "prewarm_only_charging" in payload:
 +        payload["prewarm_only_charging"] = bool(payload["prewarm_only_charging"])
++    if "dl_expire_days" in payload:
++        _v = payload["dl_expire_days"]
++        if isinstance(_v, bool) or not isinstance(_v, int):
++            raise HTTPException(status_code=400, detail="'dl_expire_days' must be an integer.")
++        payload["dl_expire_days"] = max(0, min(3650, _v))
 +
      if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
          raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
  
-@@ -1925,11 +1974,17 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1925,11 +1979,17 @@ async def update_settings_api(payload: dict) -> dict:
              payload["skip_channel"], "skip channel"
          )
  
@@ -112,7 +152,7 @@ index 7d42083..3049187 100644
      if any(field in payload for field in _channel_fields):
          current = SettingsManager.current()
  
-@@ -1945,6 +2000,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1945,6 +2005,7 @@ async def update_settings_api(payload: dict) -> dict:
              "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
              "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
              "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
@@ -120,7 +160,7 @@ index 7d42083..3049187 100644
          }
  
          allowed_overlap = frozenset({"AUTH", "ANIME"})
-@@ -1966,7 +2022,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1966,7 +2027,7 @@ async def update_settings_api(payload: dict) -> dict:
                  "admin_username", "admin_password", "session_secret", "http_proxy_url",
                  "cf_stream_url", "cf_stream_secret", "cf_stream_mode",
                  "mediaflow_password", "payment_instructions", "payment_qr_url",
@@ -129,7 +169,68 @@ index 7d42083..3049187 100644
          if key in payload and isinstance(payload[key], str):
              payload[key] = payload[key].strip()
  
-@@ -2584,6 +2640,8 @@ def _bot_served_channels() -> list[dict]:
+@@ -2490,6 +2551,60 @@ async def download_logs_api():
+     return FileResponse(path, filename="log.txt", media_type="text/plain")
+ 
+ 
++#----- DL Index actions (pin toggle, delete post + entry, re-issue link)
++async def dl_index_action_api(payload: dict) -> dict:
++    from urllib.parse import quote as _quote
++
++    from Backend.config import Telegram as _Telegram
++
++    action = str(payload.get("action") or "")
++    unique_id = payload.get("unique_id")
++    tracking = (getattr(db, "dbs", None) or {}).get("tracking")
++    coll = tracking["dl_link_map"] if tracking is not None else None
++    if coll is None or not unique_id:
++        return {"status": "error", "message": "DL Index is unavailable."}
++    doc = await coll.find_one({"_id": unique_id})
++    if doc is None:
++        return {"status": "error", "message": "That entry no longer exists."}
++    settings = SettingsManager.current()
++    dl_id = settings.dl_channel_id
++
++    if action == "pin":
++        new_state = not bool(doc.get("pinned"))
++        await coll.update_one({"_id": unique_id}, {"$set": {"pinned": new_state}})
++        return {"status": "success", "pinned": new_state}
++
++    if action == "delete":
++        if dl_id is not None:
++            try:
++                import Backend.pyrofork.bot as _botmod
++
++                bot = getattr(_botmod, "StreamBot", None)
++                if bot is not None:
++                    await bot.delete_messages(dl_id, int(doc["msg_id"]))
++            except Exception as e:
++                return {"status": "error",
++                        "message": f"Could not delete the channel post: {e}"}
++        await coll.delete_one({"_id": unique_id})
++        return {"status": "success"}
++
++    if action == "link":
++        token_doc = await db.add_api_token(name="Admin", user_id=_Telegram.OWNER_ID)
++        if not token_doc:
++            return {"status": "error", "message": "Could not resolve the owner token."}
++        raw = str(int(dl_id)) if dl_id is not None else ""
++        if raw.startswith("-100"):
++            raw = raw[4:]
++        if not raw:
++            return {"status": "error", "message": "No DL Channel is configured."}
++        encoded = await encode_string({"chat_id": int(raw), "msg_id": int(doc["msg_id"])})
++        name = doc.get("name") or f"DL post {doc.get('msg_id')}"
++        link = f"{settings.base_url}/dl/{token_doc['token']}/{encoded}/{_quote(str(name))}"
++        return {"status": "success", "link": link}
++
++    return {"status": "error", "message": "Unknown action."}
++
++
+ #----- Run the updater then re-exec the app; runs after the HTTP response is flushed
+ async def _perform_restart(delay: float = 1.0) -> None:
+     await asyncio.sleep(delay)
+@@ -2584,6 +2699,8 @@ def _bot_served_channels() -> list[dict]:
          add(s.announcement_channel, "announce")
      if s.skip_channel:
          add(s.skip_channel, "skip")
@@ -218,10 +319,71 @@ index 1dc8c44..aca7a37 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..a099da9 100644
+index c53ee43..06a4582 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
-@@ -262,11 +262,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
+     return templates.TemplateResponse("admin_dashboard.html", ctx)
+ 
+ 
++#----- DL Index: files pooled in the DL Channel (DM Link)
++async def dl_index_page(request: Request, _: bool = Depends(require_auth)):
++    from datetime import datetime as _dt
++
++    def _human(num) -> str:
++        size = float(num or 0)
++        for unit in ("B", "KB", "MB", "GB", "TB"):
++            if size < 1024 or unit == "TB":
++                return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
++            size /= 1024
++        return f"{size:.1f} TB"
++
++    ctx = _base_context(request)
++    ctx["current_user"] = get_current_user(request)
++    entries = []
++    dl_id = None
++    try:
++        dl_id = SettingsManager.current().dl_channel_id
++        tracking = (getattr(db, "dbs", None) or {}).get("tracking")
++        if tracking is not None:
++            docs = []
++            async for doc in tracking["dl_link_map"].find({}):
++                docs.append(doc)
++
++            def stamp(d):
++                return d.get("pooled_at") or d.get("ts") or 0
++
++            docs.sort(key=stamp, reverse=True)
++            q = (request.query_params.get("q") or "").strip().lower()
++            for d in docs:
++                name = d.get("name") or f"DL post {d.get('msg_id')}"
++                if q and q not in str(name).lower():
++                    continue
++                ts = stamp(d)
++                entries.append({
++                    "unique_id": str(d.get("_id")),
++                    "msg_id": d.get("msg_id"),
++                    "name": name,
++                    "size_h": _human(d.get("size") or 0),
++                    "pinned": bool(d.get("pinned")),
++                    "date": _dt.fromtimestamp(ts).strftime("%d %b %Y") if ts else "?",
++                })
++            entries = entries[:200]
++    except Exception:
++        entries = []
++    ctx.update({
++        "dl_entries": entries,
++        "dl_channel_id": dl_id,
++        "dl_query": request.query_params.get("q") or "",
++        "dl_expire_days": SettingsManager.current().dl_expire_days,
++    })
++    return templates.TemplateResponse("dl_index.html", ctx)
++
++
+ #----- Login form (redirects to home when already authenticated)
+ async def login_page(request: Request):
+     if is_authenticated(request):
+@@ -262,11 +316,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -294,10 +456,18 @@ index 914b18b..3d989fc 100644
                              <span class="font-semibold text-text">${bytesStr}</span>
                              <span>${avg.toFixed(1)}/${peak.toFixed(1)} MB/s</span>
 diff --git a/Backend/fastapi/templates/base.html b/Backend/fastapi/templates/base.html
-index 55027ba..6de2450 100644
+index 55027ba..31b752a 100644
 --- a/Backend/fastapi/templates/base.html
 +++ b/Backend/fastapi/templates/base.html
-@@ -532,7 +532,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
+@@ -9,6 +9,7 @@
+     ('/admin/access', 'Tokens', 'fa-key', '/admin/access'),
+     ('/admin/requests', 'Requests', 'fa-inbox', '/admin/requests'),
+     ('/admin/tools', 'Tools', 'fa-screwdriver-wrench', '/admin/tools'),
++    ('/admin/dl-index', 'DL Index', 'fa-link', '/admin/dl-index'),
+     ('/admin/settings', 'Settings', 'fa-gear', '/admin/settings'),
+ ] -%}
+ {%- set dock_count = 4 -%}
+@@ -532,7 +533,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
      </div>
      <p class="label-caps px-1 mb-2">Theme</p>
      <div class="theme-opts mb-3" data-theme-picker></div>
@@ -305,7 +475,7 @@ index 55027ba..6de2450 100644
      <a href="/logout" class="menu-row danger"><i class="fa-solid fa-arrow-right-from-bracket"></i>Log out</a>
  </div>
  
-@@ -562,7 +561,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
+@@ -562,7 +562,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
          {% for href, label, icon, prefix in nav[dock_count:] %}
          <a href="{{ href }}" class="sheet-link" {% if is_active(prefix) %}aria-current="page"{% endif %}><i class="fa-solid {{ icon }}"></i>{{ label }}</a>
          {% endfor %}
@@ -328,10 +498,41 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 2a5a120..5cf0518 100644
+index 2a5a120..e1e858a 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
-@@ -693,6 +693,205 @@
+@@ -143,26 +143,13 @@
+ 
+         <hr class="divider">
+ 
+-        <!-- Live logs -->
++        <!-- Logs: one-tap download only (no on-page viewer) -->
+         <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+             <label class="s-label" style="margin-bottom:0">Logs</label>
+-            <div class="flex items-center gap-3 flex-wrap">
+-                <label class="anime-check" title="Auto-refresh the log every 2s">
+-                    <input type="checkbox" id="log-live-toggle" onchange="toggleLiveLogs()">
+-                    <span>Live</span>
+-                </label>
+-                <button class="add-btn" type="button" onclick="loadLogs(this)">
+-                    <i class="fa-solid fa-rotate"></i> Refresh
+-                </button>
+-                <button class="add-btn" type="button" onclick="window.open('/api/admin/logs/download','_blank')">
+-                    <i class="fa-solid fa-download"></i> Download
+-                </button>
+-            </div>
++            <button class="add-btn" type="button" onclick="window.open('/api/admin/logs/download','_blank')">
++                <i class="fa-solid fa-download"></i> Download logs
++            </button>
+         </div>
+-        <pre id="log-view" style="background:color-mix(in srgb,var(--bg) 80%,#000);border:1px solid var(--border);
+-            border-radius:0.75rem;padding:1rem;font-family:'JetBrains Mono',monospace;font-size:0.75rem;
+-            line-height:1.5;color:var(--text);max-height:340px;overflow:auto;white-space:pre-wrap;
+-            word-break:break-word;margin:0">Loading logs…</pre>
+ 
+         <hr class="divider">
+ 
+@@ -693,6 +680,209 @@
      {% endif %}
  </div>
  
@@ -532,12 +733,16 @@ index 2a5a120..5cf0518 100644
 +            <i class="fa-solid fa-xmark"></i>
 +        </button>
 +    </div>
++    <label class="s-label" for="dl_expire_days" style="margin-top:1rem">POOLED FILE EXPIRY (DAYS)</label>
++    <input type="number" id="dl_expire_days" class="s-input" min="0" max="3650"
++        value="{{ settings.dl_expire_days if settings.dl_expire_days is not none else 0 }}">
++    <p class="s-help">Pooled files older than this are deleted from the channel by a daily sweep. 0 = keep forever. Pinned files (📌 via /dl pin or the DL Index page) never expire.</p>
 +</div>
 +
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1656,6 +1855,37 @@ function toggleWebdavPwdVisibility() {
+@@ -1656,6 +1846,37 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -575,11 +780,12 @@ index 2a5a120..5cf0518 100644
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1739,7 +1969,25 @@ async function saveSettings() {
+@@ -1739,7 +1960,26 @@ async function saveSettings() {
          announce_new_content:          document.getElementById('announce_new_content').checked,
          announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
          skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
 +        dl_channel_id:                 (function(){const el=document.getElementById('dl_channel_id');return el.dataset.id||extractChannelId(el.value.trim());})(),
++        dl_expire_days:                parseInt(document.getElementById('dl_expire_days').value, 10) || 0,
          delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
 +        buffer_enabled:                document.getElementById('buffer_enabled').checked,
 +        buffer_profile:                document.getElementById('buffer_profile').value,
@@ -601,7 +807,7 @@ index 2a5a120..5cf0518 100644
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1875,6 +2123,25 @@ function renderSettings(s) {
+@@ -1875,6 +2115,25 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -627,7 +833,7 @@ index 2a5a120..5cf0518 100644
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1917,6 +2184,15 @@ function renderSettings(s) {
+@@ -1917,6 +2176,16 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -640,9 +846,67 @@ index 2a5a120..5cf0518 100644
 +        const dcBtn = document.getElementById('dl_channel_id_clear');
 +        if (dcBtn) dcBtn.style.display = dcid ? '' : 'none';
 +    }
++    document.getElementById('dl_expire_days').value = (s.dl_expire_days ?? 0);
      toggleSkipDeleteField();
  
      rebuildDatabaseList(s.database_list || []);
+@@ -1993,7 +2262,6 @@ const STAT_FIELDS = [
+     ['streams', 'Streams'], ['db_size', 'DB Size'],
+     ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
+ ];
+-let logLiveTimer = null;
+ 
+ /* Spin the clicked refresh button's icon while an async action runs */
+ function spinIcon(btn, on) {
+@@ -2019,32 +2287,6 @@ async function loadDbStats(btn) {
+     }
+ }
+ 
+-async function loadLogs(btn) {
+-    const view = document.getElementById('log-view');
+-    spinIcon(btn, true);
+-    try {
+-        const res = await fetch('/api/admin/logs');
+-        const data = await res.json();
+-        if (data.status === 'success') {
+-            const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 40;
+-            view.textContent = data.log || '(log is empty)';
+-            if (atBottom) view.scrollTop = view.scrollHeight;
+-        } else {
+-            view.textContent = data.message || 'Could not read log.';
+-        }
+-    } catch (e) {
+-        view.textContent = 'Network error while loading logs.';
+-    } finally {
+-        spinIcon(btn, false);
+-    }
+-}
+-
+-function toggleLiveLogs() {
+-    const on = document.getElementById('log-live-toggle').checked;
+-    if (logLiveTimer) { clearInterval(logLiveTimer); logLiveTimer = null; }
+-    if (on) { loadLogs(); logLiveTimer = setInterval(loadLogs, 2000); }
+-}
+-
+ async function restartApp() {
+     if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
+ 
+@@ -2061,7 +2303,6 @@ async function restartApp() {
+     }
+ 
+     // Web app goes down during restart — poll health until start_time changes, then reload.
+-    if (logLiveTimer) { clearInterval(logLiveTimer); logLiveTimer = null; }
+     const overlay = document.getElementById('restart-overlay');
+     overlay.hidden = false;
+     document.documentElement.classList.add('rs-lock');
+@@ -2109,7 +2350,6 @@ window.addEventListener('DOMContentLoaded', () => {
+     toggleDuplicateProtection();
+     toggleMediaflowFields();
+     loadDbStats();
+-    loadLogs();
+ });
+ </script>
+ 
 diff --git a/Backend/helper/database.py b/Backend/helper/database.py
 index 57a9f61..ce322eb 100644
 --- a/Backend/helper/database.py
@@ -673,7 +937,7 @@ index 0a0418f..a8e0b59 100644
  
  
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 5ba6a9f..17c5476 100644
+index 5ba6a9f..f7b87fa 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,9 @@ from typing import Any, Dict, List
@@ -686,16 +950,17 @@ index 5ba6a9f..17c5476 100644
  from Backend.helper.passwords import hash_password
  from Backend.logger import LOGGER
  
-@@ -47,6 +50,8 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -47,6 +50,9 @@ _DEFAULTS: Dict[str, Any] = {
      "announce_new_content": False,
      "announcement_channel": "",
      "skip_channel": "",
 +    #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
 +    "dl_channel_id": "",
++    "dl_expire_days": 0,
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -62,6 +67,24 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -62,6 +68,24 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -720,7 +985,7 @@ index 5ba6a9f..17c5476 100644
  }
  
  
-@@ -169,6 +192,17 @@ class Settings:
+@@ -169,6 +193,31 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -735,10 +1000,24 @@ index 5ba6a9f..17c5476 100644
 +        except ValueError:
 +            return None
 +
++    @property
++    def dl_expire_days(self) -> int:
++        """Days a pooled file may live in the DL Channel (0 = forever).
++
++        Pinned index entries are exempt; enforced by the DL sweep.
++        """
++        value = self._d.get("dl_expire_days", 0)
++        if isinstance(value, bool):
++            return 0
++        try:
++            return max(0, min(3650, int(value)))
++        except (TypeError, ValueError):
++            return 0
++
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -304,6 +338,103 @@ class Settings:
+@@ -304,6 +353,103 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -842,7 +1121,7 @@ index 5ba6a9f..17c5476 100644
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -375,7 +506,7 @@ class SettingsManager:
+@@ -375,7 +521,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -851,7 +1130,7 @@ index 5ba6a9f..17c5476 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -518,4 +649,23 @@ class SettingsManager:
+@@ -518,4 +664,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  

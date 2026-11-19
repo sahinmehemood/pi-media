@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}DL Index - Telegram Stremio{% endblock %}
+
+{% block content %}
+<style>
+  .glass-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .muted { color: var(--text-sec); }
+  .btn-ui { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border-radius: 9999px; padding: .45rem .9rem; font-size: .82rem; font-weight: 500; border: 1px solid transparent; white-space: nowrap; transition: background-color .18s var(--ease), transform .12s var(--ease); cursor: pointer; }
+  .btn-ui:active { transform: scale(.97); }
+  .btn-ui.btn-danger { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+  .btn-ui.btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+  .btn-ui.btn-ghost:hover { background: var(--card-high); }
+  .btn-ui.btn-on { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); border-color: color-mix(in srgb, var(--primary) 35%, transparent); }
+  .dl-row { display: flex; align-items: center; gap: .75rem; padding: .7rem .9rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); flex-wrap: wrap; }
+  .dl-name { font-weight: 600; word-break: break-all; }
+  .dl-meta { font-size: .75rem; color: var(--text-sec); }
+</style>
+
+<div style="max-width:1100px;margin:0 auto;padding:1.25rem">
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:.25rem"><i class="fa-solid fa-link"></i> DL Index</h1>
+  <p class="muted" style="margin-bottom:1rem">
+    Files pooled in your DL Channel by DM Link.
+    {% if dl_channel_id %}Channel <code>{{ dl_channel_id }}</code> ·{% endif %}
+    {% if dl_expire_days %}expiry {{ dl_expire_days }} day(s) — pinned files are exempt.{% else %}no expiry set — pooled files are kept forever.{% endif %}
+    The bot can do this too: <code>/dl list</code> and <code>/dl pin</code> in DM.
+  </p>
+
+  <form method="get" action="/admin/dl-index" style="display:flex;gap:.5rem;margin-bottom:1rem">
+    <input type="text" name="q" value="{{ dl_query }}" placeholder="Search pooled files by name…"
+      style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:9999px;padding:.55rem 1rem;color:var(--text)">
+    <button class="btn-ui btn-ghost" type="submit"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+    {% if dl_query %}<a class="btn-ui btn-ghost" href="/admin/dl-index">Clear</a>{% endif %}
+  </form>
+
+  {% if not dl_channel_id %}
+  <div class="glass-card" style="padding:1rem">
+    No DL Channel is configured — DM Link is in userbot mode, so nothing is pooled.
+    Set one under Settings → DL Channel to start pooling.
+  </div>
+  {% elif not dl_entries %}
+  <div class="glass-card" style="padding:1rem">
+    No pooled files{% if dl_query %} match “{{ dl_query }}”{% endif %} yet. DM a file to the bot and it will appear here.
+  </div>
+  {% else %}
+  <div style="display:flex;flex-direction:column;gap:.5rem">
+    {% for e in dl_entries %}
+    <div class="dl-row" id="row-{{ loop.index }}">
+      <div style="flex:1;min-width:220px">
+        <div class="dl-name">{% if e.pinned %}📌 {% endif %}{{ e.name }}</div>
+        <div class="dl-meta">{{ e.size_h }} · pooled {{ e.date }} · post {{ e.msg_id }}</div>
+      </div>
+      <button class="btn-ui btn-ghost" onclick="dlAction(this, 'link', '{{ e.unique_id }}')"><i class="fa-solid fa-link"></i> Get link</button>
+      <button class="btn-ui {{ 'btn-on' if e.pinned else 'btn-ghost' }}" onclick="dlAction(this, 'pin', '{{ e.unique_id }}')"><i class="fa-solid fa-thumbtack"></i> {{ 'Pinned' if e.pinned else 'Pin' }}</button>
+      <button class="btn-ui btn-danger" onclick="dlDelete(this, '{{ e.unique_id }}', '{{ e.name | replace("'", "\\'") }}')"><i class="fa-solid fa-trash"></i> Delete</button>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<script>
+async function dlAction(btn, action, uniqueId) {
+  const res = await fetch('/api/admin/dl-index/action', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, unique_id: uniqueId })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (data.status !== 'success') { alert(data.message || 'Action failed.'); return; }
+  if (action === 'link') {
+    try { await navigator.clipboard.writeText(data.link); alert('Link copied to clipboard.'); }
+    catch (e) { prompt('Copy your link:', data.link); }
+  } else {
+    location.reload();
+  }
+}
+
+async function dlDelete(btn, uniqueId, name) {
+  if (!confirm('Delete "' + name + '" from the DL Channel? The channel post is deleted too.')) return;
+  await dlAction(btn, 'delete', uniqueId);
+}
+</script>
+{% endblock %}

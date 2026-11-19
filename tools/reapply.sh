@@ -27,6 +27,7 @@ PLUGIN_FILES=(
   Backend/helper/prewarm.py
   Backend/pyrofork/plugins/dl_link.py
   Backend/pyrofork/plugins/prewarm_hooks.py
+  Backend/fastapi/templates/dl_index.html
   tests/_loader.py
   tests/run_all.py
   tests/test_stream_buffer_core.py

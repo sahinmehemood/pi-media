@@ -70,6 +70,7 @@ from Backend.fastapi.routes.api_routes import (
     get_system_stats_api,
     get_tools_channels_api,
     bot_admin_scan_api,
+    dl_index_action_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
     clear_manual_session_api,
@@ -123,6 +124,7 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
 from Backend.fastapi.routes.template_routes import (
     admin_access_page,
     admin_dashboard_page,
+    dl_index_page,
     admin_requests_page,
     admin_subscriptions_page,
     public_request_page,
@@ -291,6 +293,14 @@ async def root(request: Request, _: bool = Depends(require_auth)):
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
     return await admin_dashboard_page(request, _)
+
+@app.get("/admin/dl-index", response_class=HTMLResponse)
+async def admin_dl_index(request: Request, _: bool = Depends(require_auth)):
+    return await dl_index_page(request, _)
+
+@app.post("/api/admin/dl-index/action")
+async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
+    return await dl_index_action_api(payload)
 
 @app.get("/media/manage", response_class=HTMLResponse)
 async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):

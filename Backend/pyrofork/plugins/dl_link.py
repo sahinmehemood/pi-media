@@ -64,7 +64,9 @@ the menu is upstream's to own.
 
 import asyncio
 import time
+from datetime import datetime
 from html import escape
+from io import BytesIO
 from urllib.parse import quote
 
 from pyrogram import Client, enums, filters
@@ -269,14 +271,26 @@ async def _dedupe_get(unique_id):
         return None
 
 
-async def _dedupe_put(unique_id, msg_id) -> None:
+async def _dedupe_put(unique_id, msg_id, name=None, size=None) -> None:
+    """Record a pooled file in the DL Index (dl_link_map).
+
+    Documents carry the index metadata (name, size, pooled_at,
+    pinned); pooled_at/pinned are set on insert only, so re-linking
+    or backfilling a file never resets its age or pin.
+    """
     coll = _dedupe_coll()
     if coll is None or not unique_id:
         return
     try:
+        fields = {"msg_id": int(msg_id), "ts": time.time()}
+        if name is not None:
+            fields["name"] = name
+        if size is not None:
+            fields["size"] = int(size)
         await coll.update_one(
             {"_id": unique_id},
-            {"$set": {"msg_id": int(msg_id), "ts": time.time()}},
+            {"$set": fields,
+             "$setOnInsert": {"pooled_at": time.time(), "pinned": False}},
             upsert=True,
         )
     except Exception:
@@ -292,12 +306,20 @@ async def _pool_copy(client: Client, target: Message, dl_id: int):
     """
     unique = media_unique_id(target)
     doc = await _dedupe_get(unique)
+    media = media_of(target)
     if doc is not None:
+        # Lazy backfill: entries pooled before the index metadata
+        # existed gain their name/size the next time they are touched.
+        if media and (not doc.get("name") or not doc.get("size")):
+            await _dedupe_put(unique, int(doc["msg_id"]), media[0], media[1])
         return int(doc["msg_id"]), True
     copied = await client.copy_message(
         chat_id=dl_id, from_chat_id=target.chat.id, message_id=target.id
     )
-    await _dedupe_put(unique, copied.id)
+    if media:
+        await _dedupe_put(unique, copied.id, media[0], media[1])
+    else:
+        await _dedupe_put(unique, copied.id)
     return int(copied.id), False
 
 
@@ -312,6 +334,34 @@ def _copy_error_hint(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+def _offer_pooled(dl_id: int, msg_id: int, size: int) -> None:
+    """Pre-Warm trigger: a file just landed in the DL Channel."""
+    try:
+        from Backend.pyrofork.plugins.prewarm_hooks import offer_pooled
+
+        offer_pooled(dl_id, msg_id, size)
+    except Exception:
+        pass
+
+
+async def _pool_and_link(client: Client, target: Message, token: str,
+                         dl_id: int):
+    """Pool `target` and build its link -> {name, size, link, pooled}.
+
+    Raises whatever the copy raised (callers format the failure);
+    returns None when the target carries no media.
+    """
+    media = media_of(target)
+    if media is None:
+        return None
+    name, size = media
+    msg_id, pooled = await _pool_copy(client, target, dl_id)
+    _offer_pooled(dl_id, msg_id, size)
+    encoded = await encode_string(pool_payload(dl_id, msg_id))
+    link = build_link(SettingsManager.current().base_url, token, encoded, name)
+    return {"name": name, "size": size, "link": link, "pooled": pooled}
+
+
 async def _send_pool_link(client: Client, message: Message, target: Message,
                           token: str, dl_id: int) -> None:
     """Pool-mode link: copy into the DL channel, link the channel post.
@@ -319,12 +369,10 @@ async def _send_pool_link(client: Client, message: Message, target: Message,
     Strictly pool-only: a failed copy reports why and NEVER falls back
     to the userbot — that is the point of configuring the channel.
     """
-    media = media_of(target)
-    if media is None:
+    if media_of(target) is None:
         return
-    name, size = media
     try:
-        msg_id, pooled = await _pool_copy(client, target, dl_id)
+        info = await _pool_and_link(client, target, token, dl_id)
     except Exception as e:
         await message.reply_text(
             "⚠️ <b>Couldn't pool this file</b>\n\n"
@@ -334,22 +382,12 @@ async def _send_pool_link(client: Client, message: Message, target: Message,
             parse_mode=enums.ParseMode.HTML,
         )
         return
-    # Pre-Warm trigger: a file just landed in the DL Channel.
-    try:
-        from Backend.pyrofork.plugins.prewarm_hooks import offer_pooled
-
-        offer_pooled(dl_id, msg_id, size)
-    except Exception:
-        pass
-    encoded = await encode_string(pool_payload(dl_id, msg_id))
-    base_url = SettingsManager.current().base_url
-    link = build_link(base_url, token, encoded, name)
     bots = 1 + len(getattr(botmod, "multi_clients", None) or {})
     await message.reply_text(
         "🔗 <b>Your stream / download link</b>\n\n"
-        f"📄 <code>{escape(name)}</code> ({human_size(size)})\n\n"
-        f"<code>{link}</code>\n\n"
-        f"{'Already in' if pooled else 'Copied to'} your DL Channel — served by the "
+        f"📄 <code>{escape(info['name'])}</code> ({human_size(info['size'])})\n\n"
+        f"<code>{info['link']}</code>\n\n"
+        f"{'Already in' if info['pooled'] else 'Copied to'} your DL Channel — served by the "
         f"bot pool ({bots} bot{'s' if bots != 1 else ''}), userbot not used. "
         "Works in browsers and players (VLC, MX Player, mpv). "
         "Keep it private — it carries your personal token.",
@@ -357,6 +395,132 @@ async def _send_pool_link(client: Client, message: Message, target: Message,
         parse_mode=enums.ParseMode.HTML,
         disable_web_page_preview=True,
     )
+
+
+#----- Batch pooling (pool mode auto-link)
+# The first file of a burst is linked immediately, exactly as a
+# single file always was. If more files arrive within a short quiet
+# window (an album, a multi-part drop), they are held and answered
+# with ONE combined reply — every link, plus an .m3u playlist of
+# the whole batch. Singles never wait.
+BATCH_QUIET_S = 3.0
+_batch_windows: dict = {}
+
+
+def build_m3u(entries) -> str:
+    """An .m3u playlist document for [(name, link), ...]."""
+    lines = ["#EXTM3U"]
+    for name, link in entries:
+        safe = " ".join(str(name).splitlines()).strip() or "file"
+        lines.append(f"#EXTINF:-1,{safe}")
+        lines.append(link)
+    return "\n".join(lines) + "\n"
+
+
+async def _pool_auto(client: Client, message: Message, dl_id: int) -> None:
+    """Auto-link entry in pool mode: instant for singles, batched
+    for bursts (see the batch note above)."""
+    user = message.from_user
+    user_id = user.id if user else message.chat.id
+    user_name = (user.first_name or user.username or f"User {user_id}") if user else f"User {user_id}"
+    token = await resolve_token(user_id, user_name)
+    if token is None:
+        return  # not authorised: stay silent, exactly like /start does
+
+    window = _batch_windows.get(user_id)
+    if window is not None:
+        window["held"].append(message)
+        task = window.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+        window["task"] = asyncio.create_task(_batch_timer(user_id))
+        return
+
+    if media_of(message) is None:
+        return
+    try:
+        info = await _pool_and_link(client, message, token, dl_id)
+    except Exception as e:
+        await message.reply_text(
+            "⚠️ <b>Couldn't pool this file</b>\n\n"
+            f"{escape(_copy_error_hint(e))}\n\n"
+            "Your Userbot was <b>not</b> used — pool mode never falls back to it.",
+            quote=True,
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+    bots = 1 + len(getattr(botmod, "multi_clients", None) or {})
+    await message.reply_text(
+        "🔗 <b>Your stream / download link</b>\n\n"
+        f"📄 <code>{escape(info['name'])}</code> ({human_size(info['size'])})\n\n"
+        f"<code>{info['link']}</code>\n\n"
+        f"{'Already in' if info['pooled'] else 'Copied to'} your DL Channel — served by the "
+        f"bot pool ({bots} bot{'s' if bots != 1 else ''}), userbot not used. "
+        "Works in browsers and players (VLC, MX Player, mpv). "
+        "Keep it private — it carries your personal token.",
+        quote=True,
+        parse_mode=enums.ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+    _batch_windows[user_id] = {
+        "sent": [(info["name"], info["link"])],
+        "held": [],
+        "client": client, "token": token, "dl_id": dl_id,
+        "task": asyncio.create_task(_batch_timer(user_id)),
+    }
+
+
+async def _batch_timer(user_id: int) -> None:
+    try:
+        await asyncio.sleep(BATCH_QUIET_S)
+    except asyncio.CancelledError:
+        return
+    await _flush_batch(user_id)
+
+
+async def _flush_batch(user_id: int) -> None:
+    window = _batch_windows.pop(user_id, None)
+    if not window or not window["held"]:
+        return
+    client, token, dl_id = window["client"], window["token"], window["dl_id"]
+    lines, links = [], list(window["sent"])
+    for name, link in window["sent"]:
+        lines.append(f"📄 <code>{escape(name)}</code>\n<code>{link}</code>")
+    for target in window["held"]:
+        media = media_of(target)
+        if media is None:
+            continue
+        name, size = media
+        try:
+            info = await _pool_and_link(client, target, token, dl_id)
+        except Exception as e:
+            lines.append(
+                f"⚠️ <code>{escape(name)}</code> — couldn't pool: "
+                f"{escape(_copy_error_hint(e))}")
+            continue
+        links.append((info["name"], info["link"]))
+        lines.append(
+            f"📄 <code>{escape(info['name'])}</code> ({human_size(info['size'])})"
+            f"{' · already pooled' if info['pooled'] else ''}\n<code>{info['link']}</code>")
+    if not lines:
+        return
+    anchor = window["held"][0]
+    await anchor.reply_text(
+        "🔗 <b>Your stream / download links</b>\n\n"
+        + "\n\n".join(lines)
+        + "\n\nServed by the bot pool from your DL Channel, userbot not used. "
+          "Keep the links private — they carry your personal token.",
+        quote=True,
+        parse_mode=enums.ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+    if len(links) >= 2:
+        data = BytesIO(build_m3u(links).encode("utf-8"))
+        await anchor.reply_document(
+            data, file_name="dl-batch.m3u",
+            caption="🎵 One playlist with every link above — open it in VLC, MX Player or mpv.",
+            quote=True,
+        )
 
 
 async def send_link(client: Client, message: Message, target: Message) -> None:
@@ -452,14 +616,9 @@ async def _send_dl_post_link(client: Client, message: Message, dl_id: int,
         return
     name, size = media
     # Remember the mapping so DMing the same file later dedupes to this post.
-    await _dedupe_put(media_unique_id(message), origin_msg_id)
+    await _dedupe_put(media_unique_id(message), origin_msg_id, name, size)
     # Pre-Warm trigger: this pooled post is being linked right now.
-    try:
-        from Backend.pyrofork.plugins.prewarm_hooks import offer_pooled
-
-        offer_pooled(dl_id, origin_msg_id, size)
-    except Exception:
-        pass
+    _offer_pooled(dl_id, origin_msg_id, size)
     encoded = await encode_string(pool_payload(dl_id, origin_msg_id))
     base_url = SettingsManager.current().base_url
     link = build_link(base_url, token, encoded, name)
@@ -485,6 +644,7 @@ async def _send_dl_post_link(client: Client, message: Message, dl_id: int,
 #----- Forwards from any other channel are ordinary link requests.
 @Client.on_message(filters.private & (filters.document | filters.video), group=11)
 async def dl_auto_link(client: Client, message: Message):
+    _ensure_sweep()
     try:
         fwd = _forward_channel(message)
         if fwd is not None:
@@ -499,18 +659,246 @@ async def dl_auto_link(client: Client, message: Message):
                 else:
                     await _reply_channel_id(client, message, fwd)
                 return
+        dl_id = _dl_channel_id()
+        if dl_id is not None:
+            await _pool_auto(client, message, dl_id)
+            return
         await send_link(client, message, message)
     except Exception as e:
         LOGGER.warning(f"[DL] auto-link failed for message {message.id}: {e}")
 
 
+#----- DL Index: what's pooled, searchable and pinnable
+async def _index_docs(query=None, limit: int = 10):
+    """Recent DL Index entries, newest first, optionally name-filtered.
+
+    Returns shaped dicts; entries pooled before the index metadata
+    existed simply show their post id as the name.
+    """
+    coll = _dedupe_coll()
+    if coll is None:
+        return []
+    docs = []
+    try:
+        async for doc in coll.find({}):
+            docs.append(doc)
+    except Exception:
+        return []
+
+    def stamp(d):
+        return d.get("pooled_at") or d.get("ts") or 0
+
+    docs.sort(key=stamp, reverse=True)
+    if query:
+        q = str(query).lower()
+        docs = [d for d in docs if q in str(d.get("name") or "").lower()]
+    out = []
+    for d in docs[:limit]:
+        out.append({
+            "unique_id": d.get("_id"),
+            "msg_id": d.get("msg_id"),
+            "name": d.get("name") or f"DL post {d.get('msg_id')}",
+            "size": int(d.get("size") or 0),
+            "pooled_at": stamp(d),
+            "pinned": bool(d.get("pinned")),
+        })
+    return out
+
+
+async def _dl_list(client: Client, message: Message, query: str) -> None:
+    user = message.from_user
+    user_id = user.id if user else message.chat.id
+    user_name = (user.first_name or user.username or f"User {user_id}") if user else f"User {user_id}"
+    token = await resolve_token(user_id, user_name)
+    if token is None:
+        return  # not authorised: stay silent, exactly like /start does
+    dl_id = _dl_channel_id()
+    if dl_id is None:
+        await message.reply_text(
+            "The DL Index needs pool mode — set a DL Channel in Settings first.",
+            quote=True,
+        )
+        return
+    docs = await _index_docs(query or None, limit=10)
+    if not docs:
+        await message.reply_text(
+            "No pooled files found" + (f" matching “{escape(query)}”." if query else " yet — send me a file and it will be pooled."),
+            quote=True,
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+    base_url = SettingsManager.current().base_url
+    lines = []
+    for d in docs:
+        encoded = await encode_string(pool_payload(dl_id, int(d["msg_id"])))
+        link = build_link(base_url, token, encoded, d["name"])
+        when = (datetime.fromtimestamp(d["pooled_at"]).strftime("%d %b")
+                if d["pooled_at"] else "?")
+        lines.append(
+            f"{'📌 ' if d['pinned'] else ''}📄 <code>{escape(d['name'])}</code> "
+            f"({human_size(d['size'])}) · {when}\n<code>{link}</code>")
+    header = "🗂 <b>DL Index</b>" + (f" — matching “{escape(query)}”" if query else " — most recent")
+    await message.reply_text(
+        header + "\n\n" + "\n\n".join(lines),
+        quote=True,
+        parse_mode=enums.ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+async def _dl_pin(client: Client, message: Message, pin: bool) -> None:
+    user = message.from_user
+    user_id = user.id if user else message.chat.id
+    user_name = (user.first_name or user.username or f"User {user_id}") if user else f"User {user_id}"
+    if await resolve_token(user_id, user_name) is None:
+        return  # not authorised: stay silent, exactly like /start does
+    target = message.reply_to_message
+    unique = media_unique_id(target) if target is not None else None
+    doc = await _dedupe_get(unique) if unique else None
+    if doc is None:
+        await message.reply_text(
+            "Reply to a pooled file with /dl pin and I'll protect it from "
+            "expiry. That file isn't in the DL Index yet — send it to me "
+            "first so it gets pooled.",
+            quote=True,
+        )
+        return
+    coll = _dedupe_coll()
+    if coll is not None:
+        try:
+            await coll.update_one({"_id": unique}, {"$set": {"pinned": bool(pin)}})
+        except Exception:
+            pass
+    name = doc.get("name") or "That file"
+    await message.reply_text(
+        f"{'📌 <b>Pinned</b>' if pin else '<b>Unpinned</b>'}: "
+        f"<code>{escape(str(name))}</code>"
+        + (" — it will never expire." if pin else " — it can expire again."),
+        quote=True,
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+
+#----- Pooled lifecycle: expiry sweep + orphan pruning
+def expired_msg_ids(docs, expire_days, now) -> list:
+    """Channel post ids whose index entries are expired: older than
+    `expire_days` and not pinned. 0 days = never expires."""
+    if not expire_days or expire_days <= 0:
+        return []
+    cutoff = now - expire_days * 86400
+    out = []
+    for d in docs:
+        if d.get("pinned"):
+            continue
+        stamp = d.get("pooled_at") or d.get("ts") or 0
+        if stamp and stamp < cutoff and d.get("msg_id"):
+            out.append(int(d["msg_id"]))
+    return out
+
+
+_sweep_task = None
+
+
+def _ensure_sweep() -> None:
+    """Start the daily index sweep lazily (first DL activity)."""
+    global _sweep_task
+    if _sweep_task is None or _sweep_task.done():
+        try:
+            _sweep_task = asyncio.create_task(_sweep_loop())
+        except RuntimeError:
+            pass
+
+
+async def _sweep_loop() -> None:
+    await asyncio.sleep(300)  # first pass 5 min after first activity
+    while True:
+        try:
+            await _run_sweep()
+        except Exception as e:
+            LOGGER.warning(f"[DL] index sweep failed: {e}")
+        await asyncio.sleep(86400)
+
+
+async def _run_sweep() -> None:
+    coll = _dedupe_coll()
+    dl_id = _dl_channel_id()
+    if coll is None or dl_id is None:
+        return
+    docs = []
+    try:
+        async for doc in coll.find({}):
+            docs.append(doc)
+            if len(docs) >= 1000:
+                break
+    except Exception:
+        return
+    client = getattr(botmod, "StreamBot", None)
+    if client is None:
+        return
+    days = 0
+    try:
+        days = int(getattr(SettingsManager.current(), "dl_expire_days", 0) or 0)
+    except (TypeError, ValueError):
+        days = 0
+
+    deleted = 0
+    ids = expired_msg_ids(docs, days, time.time())
+    if ids:
+        id_set = set(ids)
+        try:
+            await client.delete_messages(dl_id, ids)
+            for d in docs:
+                if d.get("msg_id") and int(d["msg_id"]) in id_set:
+                    await coll.delete_one({"_id": d["_id"]})
+            deleted = len(ids)
+        except Exception as e:
+            LOGGER.warning(f"[DL] sweep could not delete expired posts: {e}")
+
+    # Orphan pruning: an index row whose channel post is gone would
+    # hand out dead links — drop the row (the file re-pools on its
+    # next DM). Only a definitively empty/media-less post counts;
+    # network errors skip the entry.
+    pruned = 0
+    gone_ids = set(ids)
+    for d in docs[:200]:
+        if not d.get("msg_id") or int(d["msg_id"]) in gone_ids:
+            continue
+        try:
+            msg = await client.get_messages(dl_id, int(d["msg_id"]))
+        except Exception:
+            continue
+        gone = (msg is None or getattr(msg, "empty", False)
+                or (getattr(msg, "document", None) is None
+                    and getattr(msg, "video", None) is None))
+        if gone:
+            try:
+                await coll.delete_one({"_id": d["_id"]})
+                pruned += 1
+            except Exception:
+                pass
+    if deleted or pruned:
+        LOGGER.info(
+            f"[DL] index sweep: deleted {deleted} expired post(s), "
+            f"pruned {pruned} orphan entr{'y' if pruned == 1 else 'ies'}")
+
+
 #----- /dl: reply to any file in this chat to get (or re-get) its link
 @Client.on_message(filters.command("dl") & filters.private, group=11)
 async def dl_command(client: Client, message: Message):
+    _ensure_sweep()
+    args = [a for a in (getattr(message, "command", None) or [])[1:] if a]
+    if args and args[0].lower() == "list":
+        await _dl_list(client, message, " ".join(args[1:]).strip())
+        return
+    if args and args[0].lower() in ("pin", "unpin"):
+        await _dl_pin(client, message, args[0].lower() == "pin")
+        return
     target = message.reply_to_message
     if target is None or media_of(target) is None:
         await message.reply_text(
             "Reply to a file in this chat with /dl and I'll give you its stream link.\n"
+            "/dl list [name] — browse the DL Index of pooled files.\n"
+            "/dl pin — reply to a pooled file to protect it from expiry.\n"
             "Tip: you don't need the command for new files — just send the file and "
             "I'll reply with the link automatically.",
             quote=True,
