@@ -281,18 +281,30 @@ def test_librarian_seams():
     for key in ("librarian_enabled", "librarian_dry_run",
                 "librarian_auto_apply_tier_a", "librarian_digest",
                 "librarian_edit_budget_per_day", "librarian_channels",
-                "librarian_api_token"):
+                "librarian_api_token", "librarian_batch_size",
+                "librarian_gate_strict_year", "librarian_specials_policy"):
         assert f'"{key}"' in sm, key
         assert f"def {key}" in sm, key
     for key in ("librarian_enabled", "librarian_dry_run",
                 "librarian_auto_apply_tier_a", "librarian_digest",
-                "librarian_edit_budget_per_day", "librarian_api_token"):
+                "librarian_edit_budget_per_day", "librarian_api_token",
+                "librarian_batch_size", "librarian_gate_strict_year",
+                "librarian_specials_policy"):
         assert f'id="{key}"' in settings_html, key
     assert 'id="librarian_channels_items"' in settings_html
     assert "collectList('librarian_channels')" in settings_html
     assert "'librarian_channels'" in settings_html  # channelLists validation
     # API validation + actions + token-guarded bot endpoints.
     assert '"librarian_digest" in payload' in routes
+    assert '"librarian_batch_size" in payload' in routes
+    assert '"librarian_specials_policy" in payload' in routes
+    assert '"librarian_gate_strict_year" in payload' in routes
+    # v4.1 guards live in the librarian module.
+    lib_src = read("Backend/helper/librarian.py")
+    assert "_live_identity_ok" in lib_src
+    assert "seen_caption" in lib_src
+    assert "curation_packets" in lib_src
+    assert "runs_hint" in lib_src
     assert "librarian_action_api" in routes
     assert "librarian_bot_status_api" in routes
     assert "librarian_bot_packet_api" in routes
@@ -312,6 +324,10 @@ def test_librarian_seams():
     assert "Locate originals" in page
     assert "lib_counts.waiting" in page
     assert "Runs & proposals" not in page
+    # v4.1 visibility: per-file before/after + Telegram deep links.
+    assert "items_detail" in page
+    assert "t.me/c/" in page
+    assert "f.before" in page
 
 
 if __name__ == "__main__":

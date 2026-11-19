@@ -45,6 +45,7 @@ PLUGIN_FILES=(
   tests/test_librarian.py
   docs/librarian/DESIGN.md
   docs/librarian/DESIGN-v4.md
+  docs/librarian/DESIGN-v5.md
   tools/librarian_cli.py
   docs/stream-buffer/DESIGN.md
   docs/dl-link.md

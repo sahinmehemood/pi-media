@@ -888,6 +888,12 @@
                 value="{{ settings.librarian_edit_budget_per_day if settings.librarian_edit_budget_per_day is not none else 50 }}">
             <p class="s-help">Hard daily cap on caption edits. 0 = edits paused.</p>
         </div>
+        <div>
+            <label class="s-label" for="librarian_batch_size">Batch size (files per packet)</label>
+            <input type="number" id="librarian_batch_size" class="s-input" min="1" max="200"
+                value="{{ settings.librarian_batch_size if settings.librarian_batch_size is not none else 60 }}">
+            <p class="s-help">How many files the bot gets per work packet. Bigger batches = fewer, larger proposals.</p>
+        </div>
     </div>
     <details style="margin-top:1rem">
         <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Advanced — automation, API token, channel scope</summary>
@@ -909,6 +915,23 @@
                     <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly</option>
                 </select>
                 <p class="s-help">How often the bot offers the next batch on its own.</p>
+            </div>
+            <div>
+                <label class="s-label" for="librarian_specials_policy">Specials policy</label>
+                <select id="librarian_specials_policy" class="s-input">
+                    <option value="guard" {% if settings.librarian_specials_policy == 'guard' %}selected{% endif %}>Guard — SP/special files must map to the provider's specials, never a regular season</option>
+                    <option value="off" {% if settings.librarian_specials_policy == 'off' %}selected{% endif %}>Off — no specials check</option>
+                </select>
+                <p class="s-help">Blocks the BTTH mistake: a special arc (SP3) being filed as a regular season (S03).</p>
+            </div>
+            <div>
+                <label class="s-label" for="librarian_gate_strict_year">Strict year check</label>
+                <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="librarian_gate_strict_year"
+                        {% if settings.librarian_gate_strict_year %}checked{% endif %}>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">Gate also rejects plans whose claimed year disagrees with the provider's</span>
+                </label>
             </div>
             <div>
                 <label class="s-label" for="librarian_api_token">Librarian API token</label>
@@ -2143,6 +2166,9 @@ async function saveSettings() {
         librarian_auto_apply_tier_a:   document.getElementById('librarian_auto_apply_tier_a').checked,
         librarian_digest:              document.getElementById('librarian_digest').value,
         librarian_edit_budget_per_day: parseInt(document.getElementById('librarian_edit_budget_per_day').value, 10) || 0,
+        librarian_batch_size:          parseInt(document.getElementById('librarian_batch_size').value, 10) || 60,
+        librarian_gate_strict_year:    document.getElementById('librarian_gate_strict_year').checked,
+        librarian_specials_policy:     document.getElementById('librarian_specials_policy').value,
         librarian_api_token:           document.getElementById('librarian_api_token').value.trim(),
     };
     const dsEl = document.getElementById('default_streaming');
@@ -2301,6 +2327,9 @@ function renderSettings(s) {
     document.getElementById('librarian_auto_apply_tier_a').checked = !!s.librarian_auto_apply_tier_a;
     document.getElementById('librarian_digest').value = (s.librarian_digest ?? 'manual');
     document.getElementById('librarian_edit_budget_per_day').value = (s.librarian_edit_budget_per_day ?? 50);
+    document.getElementById('librarian_batch_size').value = (s.librarian_batch_size ?? 60);
+    document.getElementById('librarian_gate_strict_year').checked = !!s.librarian_gate_strict_year;
+    document.getElementById('librarian_specials_policy').value = (s.librarian_specials_policy ?? 'guard');
     document.getElementById('librarian_api_token').value = s.librarian_api_token || '';
     toggleBufferFields();
     applyBufferProfile();

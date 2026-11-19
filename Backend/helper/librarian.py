@@ -580,18 +580,39 @@ async def _channel_title_index() -> dict:
 # v4 — Work packets for the Media Manager
 # ---------------------------------------------------------------------------
 
-async def get_packet(channel_id, limit: int = 30) -> dict:
+def _packets_coll():
+    tracking = _tracking()
+    return tracking["curation_packets"] if tracking is not None else None
+
+
+def _norm_caption(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+async def get_packet(channel_id, limit: int = None) -> dict:
     """The next batch of unprocessed failed files for ONE channel, with the
     context the Media Manager needs to decide well: each item's original
     post (via the locator), the titles already indexed from this channel,
-    and the aliases already taught for it."""
+    and the aliases already taught for it.
+
+    v4.1: items carry short numbers (n) and the packet gets an id — the
+    bot references numbers, never raw file ids (a copied-id slip pointed
+    one plan at the wrong file). Items are also pre-grouped into a runs
+    hint so the bot decides whole series at once instead of clustering
+    raw items itself."""
     channel_id = _full_chat(channel_id)
     if channel_id is None:
         return {"ok": False, "message": "Bad channel id."}
     ledger = _ledger_coll()
     if ledger is None:
         return {"ok": False, "message": "Tracking DB unavailable."}
-    limit = max(1, min(100, int(limit or 30)))
+    if not limit:
+        try:
+            from Backend.helper.settings_manager import SettingsManager
+            limit = SettingsManager.current().librarian_batch_size
+        except Exception:
+            limit = 60
+    limit = max(1, min(200, int(limit)))
     stripped = _norm_chat(channel_id)
     candidates: list[dict] = []
     try:
@@ -613,20 +634,63 @@ async def get_packet(channel_id, limit: int = 30) -> dict:
             continue
         if doc.get("proposal_id"):
             continue
+        caption = (loc or {}).get("caption") or doc.get("caption") or ""
+        file_name = (loc or {}).get("file_name") or doc.get("file_name") or ""
+        bits = name_bits(caption, file_name)
         items.append({
+            "n": len(items) + 1,
             "key": doc["_id"],
-            "caption": (loc or {}).get("caption") or doc.get("caption") or "",
-            "file_name": (loc or {}).get("file_name") or doc.get("file_name") or "",
+            "caption": caption,
+            "file_name": file_name,
             "size": (loc or {}).get("size") or doc.get("size"),
             "height": (loc or {}).get("height") or doc.get("height"),
             "reason": doc.get("reason") or "",
             "reason_code": doc.get("reason_code") or "",
             "parse": doc.get("parse"),
+            "special": bits.get("special") is not None,
             "located": bool(loc) or bool(doc.get("chat_id")),
             "chat_id": item_chat,
             "msg_id": (loc or {}).get("msg_id") or doc.get("msg_id"),
             "skip_msg_ids": doc.get("skip_msg_ids") or [],
         })
+    # Runs hint: group the batch by naming stem (a hint for the bot's
+    # grouping, never a decision — the bot still resolves each run).
+    runs: dict[str, dict] = {}
+    for it in items:
+        bits = name_bits(it["caption"], it["file_name"])
+        stem = bits.get("stem") or "(single)"
+        run = runs.setdefault(stem, {"stem": stem, "numbers": [],
+                                     "episodes": [], "special": False})
+        run["numbers"].append(it["n"])
+        if bits.get("episode") is not None:
+            run["episodes"].append(bits["episode"])
+        if bits.get("special") is not None:
+            run["special"] = True
+    runs_hint = []
+    for run in runs.values():
+        eps = sorted(set(run["episodes"]))
+        run["episodes"] = eps
+        run["count"] = len(run["numbers"])
+        run["missing_episodes"] = (
+            [e for e in range(min(eps), max(eps) + 1) if e not in eps]
+            if len(eps) > 1 else [])
+        runs_hint.append(run)
+    runs_hint.sort(key=lambda r: -r["count"])
+    # Persist the packet so proposals can reference items by number.
+    packet_id = f"pkt{int(time.time())}_{abs(hash((channel_id, len(items)))) % 99999}"
+    pcoll = _packets_coll()
+    if pcoll is not None:
+        try:
+            await pcoll.insert_one({
+                "_id": packet_id, "channel": channel_id,
+                "created_at": time.time(),
+                "items": [{"n": it["n"], "key": it["key"],
+                           "caption": it["caption"],
+                           "file_name": it["file_name"]} for it in items]})
+            await pcoll.delete_many(
+                {"created_at": {"$lt": time.time() - 7 * 86400}})
+        except Exception as e:
+            LOGGER.warning(f"[Librarian] packet persist failed: {e}")
     title_index = await _channel_title_index()
     aliases = []
     acoll = _alias_coll()
@@ -637,7 +701,8 @@ async def get_packet(channel_id, limit: int = 30) -> dict:
         except Exception:
             pass
     return {
-        "ok": True, "channel": channel_id, "items": items,
+        "ok": True, "channel": channel_id, "packet_id": packet_id,
+        "items": items, "runs_hint": runs_hint,
         "indexed_titles": title_index.get(stripped, []),
         "aliases": aliases,
         "waiting_total": len(candidates),
@@ -667,38 +732,79 @@ async def submit_proposal(payload: dict) -> dict:
     if coll is None:
         return {"ok": False, "message": "Tracking DB unavailable."}
     items = payload.get("items") or []
-    if not items or len(items) > 100:
-        return {"ok": False, "message": "A proposal needs 1-100 items."}
+    if not items or len(items) > 200:
+        return {"ok": False, "message": "A proposal needs 1-200 items."}
     channel = _full_chat(payload.get("channel"))
     if channel is None:
         return {"ok": False, "message": "Bad channel id."}
     ledger = _ledger_coll()
+    # Pairing guard: items may reference a packet by NUMBER. The server
+    # resolves the number to the file itself, and the bot must echo the
+    # original caption it saw (seen_caption) — if the echo does not match
+    # the server's record for that file, the bot is looking at a different
+    # item than it thinks, and the whole proposal is rejected.
+    packet_id = payload.get("packet_id")
+    packet_items: dict[int, dict] = {}
+    if packet_id:
+        pcoll = _packets_coll()
+        pdoc = await pcoll.find_one({"_id": packet_id}) if pcoll is not None else None
+        if pdoc is None:
+            return {"ok": False, "message": f"Unknown packet: {packet_id}"}
+        packet_items = {p["n"]: p for p in pdoc.get("items") or []}
     clean_items = []
     for it in items:
-        key = it.get("key")
         caption = (it.get("new_caption") or "").strip()
-        if not key or not caption:
-            return {"ok": False, "message": "Every item needs a key and a new_caption."}
+        if not caption:
+            return {"ok": False, "message": "Every item needs a new_caption."}
+        key = it.get("key")
+        snapshot = None
+        if it.get("n") is not None:
+            entry = packet_items.get(int(it["n"]))
+            if entry is None:
+                return {"ok": False,
+                        "message": f"Item number {it.get('n')} is not in packet "
+                                   f"{packet_id} — pull a fresh packet."}
+            key = entry["key"]
+            snapshot = entry
+        if not key:
+            return {"ok": False,
+                    "message": "Every item needs a packet number (n) or a key."}
         if not _plan_stamp_ok(caption):
             return {"ok": False,
-                    "message": f"Item {key}: the fix caption carries no ID link — "
-                               "the app will not re-index without one."}
+                    "message": f"Item {it.get('n', key)}: the fix caption carries "
+                               "no ID link — the app will not re-index without one."}
         doc = await ledger.find_one({"_id": key}) if ledger is not None else None
         if doc is None:
             return {"ok": False, "message": f"Unknown ledger item: {key}"}
+        seen = it.get("seen_caption")
+        if packet_id and seen is None:
+            return {"ok": False,
+                    "message": f"Item {it.get('n')}: seen_caption is required — "
+                               "echo the original caption you saw for this file."}
+        if seen is not None:
+            expected = (snapshot or {}).get("caption") or doc.get("caption") or ""
+            if _norm_caption(seen) != _norm_caption(expected):
+                return {"ok": False,
+                        "message": f"Item {it.get('n', key)}: the caption you echoed "
+                                   "does not match the server's record for this "
+                                   "file — the plan points at a different file "
+                                   "than you think. Re-pull the packet and rebuild."}
         clean_items.append({
             "key": key,
+            "n": it.get("n"),
+            "seen_caption": seen,
             "new_caption": caption,
             "media_type": it.get("media_type") or "tv",
             "tmdb_id": it.get("tmdb_id"),
             "imdb_id": it.get("imdb_id"),
+            "year": it.get("year"),
             "season": it.get("season"),
             "episode": it.get("episode"),
             "absolute": bool(it.get("absolute")),
         })
     pid = f"p{int(time.time())}_{abs(hash((channel, len(clean_items)))) % 99999}"
     doc = {
-        "_id": pid, "channel": channel,
+        "_id": pid, "channel": channel, "packet_id": packet_id,
         "label": payload.get("label") or "Untitled run",
         "note": payload.get("note") or "",
         "items": clean_items, "status": "gating",
@@ -728,6 +834,24 @@ async def _gate_plan(doc: dict) -> dict:
     cache: dict[tuple, object] = {}
     per_item = {}
     all_ok = True
+    # v4.1 guards need the ORIGINAL names + the live policy settings.
+    try:
+        from Backend.helper.settings_manager import SettingsManager
+        _settings = SettingsManager.current()
+        specials_policy = _settings.librarian_specials_policy
+        strict_year = bool(_settings.librarian_gate_strict_year)
+    except Exception:
+        specials_policy, strict_year = "guard", False
+    originals: dict[str, dict] = {}
+    _ledger = _ledger_coll()
+    if _ledger is not None:
+        for it in doc.get("items") or []:
+            try:
+                od = await _ledger.find_one({"_id": it["key"]})
+            except Exception:
+                od = None
+            if od:
+                originals[it["key"]] = od
     for it in doc.get("items") or []:
         key = it["key"]
         first_line = (it["new_caption"].split("\n")[0] or "").strip()
@@ -749,6 +873,31 @@ async def _gate_plan(doc: dict) -> dict:
             all_ok = False
             continue
         problems = []
+        # Specials guard: an SP-marked original (a special arc, e.g.
+        # "BTTH 3YA - SP3 E01") must never be mapped into a regular
+        # season — specials live in the provider's season 0 / specials
+        # structure. (This exact slip shipped a wrong fix on 2026-11-19.)
+        if specials_policy == "guard":
+            od = originals.get(key) or {}
+            obits = name_bits(od.get("caption") or "", od.get("file_name") or "")
+            if obits.get("special") is not None and not it.get("absolute"):
+                s = it.get("season")
+                if s is not None and int(s) >= 1:
+                    problems.append(
+                        "the original is an SP-marked special but the plan maps "
+                        "it to a regular season — specials must use the "
+                        "provider's specials structure (season 0) or be "
+                        "flagged for Yan")
+        # Strict-year guard (Settings): the resolved year must match the
+        # year the plan claims, when both are known.
+        if strict_year and it.get("year"):
+            res_year = res.get("release_year") or res.get("year")
+            try:
+                if res_year and int(res_year) != int(it["year"]):
+                    problems.append(
+                        f"resolves to year {res_year}, not {it['year']}")
+            except (TypeError, ValueError):
+                pass
         want_tmdb = it.get("tmdb_id")
         want_imdb = it.get("imdb_id")
         if want_tmdb and int(want_tmdb) > 0 and res.get("tmdb_id") != int(want_tmdb):
@@ -856,6 +1005,37 @@ async def _edits_today() -> int:
         return 0
 
 
+async def _live_identity_ok(chat_id, msg_id, key, expected_caption) -> tuple:
+    """Pre-edit identity check (v4.1): re-read the target post through the
+    userbot and confirm it is still the file the plan thinks it is —
+    same file_unique_id as the item key, and the caption unchanged since
+    the packet was issued. Fails CLOSED: if the check cannot run, the
+    item is skipped rather than edited blind."""
+    try:
+        from Backend.pyrofork import bot as botmod
+        userbot = getattr(botmod, "Userbot", None)
+    except Exception:
+        userbot = None
+    if userbot is None:
+        return False, "identity check unavailable (no userbot) — skipped for safety"
+    try:
+        m = await userbot.get_messages(int(chat_id), int(msg_id))
+    except Exception as e:
+        return False, f"identity check failed: {e}"
+    if m is None or getattr(m, "empty", False):
+        return False, "target post not found — skipped for safety"
+    media = getattr(m, "video", None) or getattr(m, "document", None)
+    uid = getattr(media, "file_unique_id", None) if media else None
+    if key and not str(key).startswith("tg:"):
+        if uid != key:
+            return False, ("target post is a DIFFERENT file than the plan "
+                           "expects — skipped for safety")
+    if expected_caption and _norm_caption(m.caption or "") != _norm_caption(expected_caption):
+        return False, ("target post's caption changed since the packet — "
+                       "skipped for safety")
+    return True, ""
+
+
 async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
     """Execute an approved, gate-passed proposal: edit originals in place
     (or re-post from the skip pile), verify indexing, clean skip copies,
@@ -894,10 +1074,14 @@ async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
         entry = {"key": it["key"], "ok": False}
         try:
             if msg_id:
+                entry["action"] = "edit"
+                id_ok, id_reason = await _live_identity_ok(
+                    chat_id, msg_id, it["key"], before)
+                if not id_ok:
+                    raise RuntimeError(id_reason)
                 resp = await _bot_api("editMessageCaption", {
                     "chat_id": int(chat_id), "message_id": int(msg_id),
                     "caption": it["new_caption"], "parse_mode": "HTML"})
-                entry["action"] = "edit"
                 if not resp.get("ok"):
                     raise RuntimeError(resp.get("description") or "edit failed")
                 ok = await _verify_indexed(chat_id, msg_id,
@@ -909,11 +1093,16 @@ async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
                     raise RuntimeError("no original and no skip copy to re-post")
                 from Backend.helper.settings_manager import SettingsManager as _SM
                 skip_channel = int(_SM.current().skip_channel)
+                entry["action"] = "repost"
+                id_ok, id_reason = await _live_identity_ok(
+                    skip_channel, skip_ids[0], it["key"],
+                    item.get("caption") or "")
+                if not id_ok:
+                    raise RuntimeError(id_reason)
                 resp = await _bot_api("copyMessage", {
                     "chat_id": int(doc["channel"]), "from_chat_id": skip_channel,
                     "message_id": int(skip_ids[0]),
                     "caption": it["new_caption"], "parse_mode": "HTML"})
-                entry["action"] = "repost"
                 if not resp.get("ok"):
                     raise RuntimeError(resp.get("description") or "copy failed")
                 new_msg = resp["result"]["message_id"]
@@ -992,11 +1181,28 @@ async def list_proposals(limit: int = 20) -> list[dict]:
     if coll is None:
         return []
     out = []
+    ledger = _ledger_coll()
     try:
         cursor = coll.find({}).sort("created_at", -1).limit(max(1, min(50, limit)))
         async for doc in cursor:
             doc = dict(doc)
-            doc["item_count"] = len(doc.get("items") or [])
+            items = doc.get("items") or []
+            doc["item_count"] = len(items)
+            # Attach each item's current recorded caption so the page can
+            # show before -> after per file.
+            detail = []
+            for it in items:
+                before = it.get("seen_caption") or ""
+                if not before and ledger is not None:
+                    try:
+                        ld = await ledger.find_one({"_id": it.get("key")})
+                        before = (ld or {}).get("caption") or ""
+                    except Exception:
+                        before = ""
+                detail.append({"before": before,
+                               "after": it.get("new_caption") or "",
+                               "n": it.get("n")})
+            doc["items_detail"] = detail
             doc.pop("items", None)
             out.append(_jsonable(doc))
     except Exception as e:

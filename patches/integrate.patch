@@ -137,7 +137,7 @@ index 9ae7925..384ced5 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..5a1f793 100644
+index e6d9542..6701157 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -211,7 +211,7 @@ index e6d9542..5a1f793 100644
      for key in bool_keys:
          if key in payload:
              payload[key] = bool(payload[key])
-@@ -1856,6 +1897,68 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1856,6 +1897,80 @@ async def update_settings_api(payload: dict) -> dict:
          except (ValueError, TypeError):
              payload["fanart_shuffle_interval"] = 5
  
@@ -276,11 +276,23 @@ index e6d9542..5a1f793 100644
 +        payload["librarian_edit_budget_per_day"] = max(0, min(10000, _v))
 +    if "librarian_api_token" in payload:
 +        payload["librarian_api_token"] = str(payload["librarian_api_token"] or "").strip()
++    if "librarian_batch_size" in payload:
++        _v = payload["librarian_batch_size"]
++        if isinstance(_v, bool) or not isinstance(_v, int):
++            raise HTTPException(status_code=400, detail="'librarian_batch_size' must be an integer.")
++        payload["librarian_batch_size"] = max(1, min(200, _v))
++    if "librarian_gate_strict_year" in payload:
++        payload["librarian_gate_strict_year"] = bool(payload["librarian_gate_strict_year"])
++    if "librarian_specials_policy" in payload:
++        _v = str(payload["librarian_specials_policy"] or "guard").strip().lower()
++        if _v not in ("guard", "off"):
++            raise HTTPException(status_code=400, detail="'librarian_specials_policy' must be guard or off.")
++        payload["librarian_specials_policy"] = _v
 +
      if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
          raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
  
-@@ -1926,6 +2029,14 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1926,6 +2041,14 @@ async def update_settings_api(payload: dict) -> dict:
                  cleaned.append(c)
          payload["manual_channels"] = cleaned
  
@@ -295,7 +307,7 @@ index e6d9542..5a1f793 100644
      if "announcement_channel" in payload and payload["announcement_channel"]:
          payload["announcement_channel"] = _validate_channel_id(
              payload["announcement_channel"], "announcement channel"
-@@ -1936,11 +2047,17 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1936,11 +2059,17 @@ async def update_settings_api(payload: dict) -> dict:
              payload["skip_channel"], "skip channel"
          )
  
@@ -314,7 +326,7 @@ index e6d9542..5a1f793 100644
      if any(field in payload for field in _channel_fields):
          current = SettingsManager.current()
  
-@@ -1956,6 +2073,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1956,6 +2085,7 @@ async def update_settings_api(payload: dict) -> dict:
              "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
              "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
              "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
@@ -322,7 +334,7 @@ index e6d9542..5a1f793 100644
          }
  
          allowed_overlap = frozenset({"AUTH", "ANIME"})
-@@ -1972,12 +2090,30 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1972,12 +2102,30 @@ async def update_settings_api(payload: dict) -> dict:
                          detail=f"Channel {', '.join(sorted(clash))} can't be in both {a} and {b} channels — each channel may only belong to one field."
                      )
  
@@ -354,7 +366,7 @@ index e6d9542..5a1f793 100644
          if key in payload and isinstance(payload[key], str):
              payload[key] = payload[key].strip()
  
-@@ -2501,6 +2637,60 @@ async def download_logs_api():
+@@ -2501,6 +2649,60 @@ async def download_logs_api():
      return FileResponse(path, filename="log.txt", media_type="text/plain")
  
  
@@ -415,7 +427,7 @@ index e6d9542..5a1f793 100644
  #----- Run the updater then re-exec the app; runs after the HTTP response is flushed
  async def _perform_restart(delay: float = 1.0) -> None:
      await asyncio.sleep(delay)
-@@ -2569,6 +2759,21 @@ async def _managed_bots() -> list[dict]:
+@@ -2569,6 +2771,21 @@ async def _managed_bots() -> list[dict]:
      return bots
  
  
@@ -437,7 +449,7 @@ index e6d9542..5a1f793 100644
  def _bot_served_channels() -> list[dict]:
      s = SettingsManager.current()
      order: list[str] = []
-@@ -2595,6 +2800,8 @@ def _bot_served_channels() -> list[dict]:
+@@ -2595,6 +2812,8 @@ def _bot_served_channels() -> list[dict]:
          add(s.announcement_channel, "announce")
      if s.skip_channel:
          add(s.skip_channel, "skip")
@@ -446,7 +458,7 @@ index e6d9542..5a1f793 100644
      return [mapping[k] for k in order]
  
  
-@@ -2686,12 +2893,13 @@ async def bot_admin_scan_api() -> dict:
+@@ -2686,12 +2905,13 @@ async def bot_admin_scan_api() -> dict:
          return {"status": "error", "reason": "no_session",
                  "message": "Connect your Telegram session from the Settings page to manage channel admins."}
  
@@ -462,7 +474,7 @@ index e6d9542..5a1f793 100644
      managed_ids = {b["user_id"] for b in bots}
      out: list[dict] = []
  
-@@ -2736,6 +2944,20 @@ async def bot_admin_scan_api() -> dict:
+@@ -2736,6 +2956,20 @@ async def bot_admin_scan_api() -> dict:
      return {"status": "success", "data": {"bots": bots, "channels": out}}
  
  
@@ -483,7 +495,7 @@ index e6d9542..5a1f793 100644
  async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: bool = True) -> dict:
      label = bot.get("name") or (f"@{bot['username']}" if bot.get("username") else str(bot["user_id"]))
      bid = bot["user_id"]
-@@ -2743,6 +2965,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
+@@ -2743,6 +2977,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
      if await _bot_member_status(chat_id, bid) == "admin":
          return {"bot": label, "user_id": bid, "status": "already", "message": "Already an admin."}
  
@@ -492,7 +504,7 @@ index e6d9542..5a1f793 100644
      try:
          await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
          return {"bot": label, "user_id": bid, "status": "added", "message": "Promoted to admin."}
-@@ -2840,9 +3064,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
+@@ -2840,9 +3076,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
      if not isinstance(channel_ids, list) or not channel_ids:
          raise HTTPException(status_code=400, detail="Select at least one channel.")
  
@@ -504,7 +516,7 @@ index e6d9542..5a1f793 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3107,178 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3119,179 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -628,10 +640,11 @@ index e6d9542..5a1f793 100644
 +    channel = request.query_params.get("channel")
 +    if not channel:
 +        raise HTTPException(status_code=400, detail="channel is required.")
++    raw_limit = request.query_params.get("limit")
 +    try:
-+        limit = int(request.query_params.get("limit") or 30)
++        limit = int(raw_limit) if raw_limit else None
 +    except ValueError:
-+        limit = 30
++        limit = None
 +    return await librarian.get_packet(channel, limit)
 +
 +
@@ -983,7 +996,7 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 62bda08..fc9ee1f 100644
+index 62bda08..5a4f320 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
 @@ -143,26 +143,13 @@
@@ -1017,7 +1030,7 @@ index 62bda08..fc9ee1f 100644
  
          <hr class="divider">
  
-@@ -693,6 +680,303 @@
+@@ -693,6 +680,326 @@
      {% endif %}
  </div>
  
@@ -1229,6 +1242,12 @@ index 62bda08..fc9ee1f 100644
 +                value="{{ settings.librarian_edit_budget_per_day if settings.librarian_edit_budget_per_day is not none else 50 }}">
 +            <p class="s-help">Hard daily cap on caption edits. 0 = edits paused.</p>
 +        </div>
++        <div>
++            <label class="s-label" for="librarian_batch_size">Batch size (files per packet)</label>
++            <input type="number" id="librarian_batch_size" class="s-input" min="1" max="200"
++                value="{{ settings.librarian_batch_size if settings.librarian_batch_size is not none else 60 }}">
++            <p class="s-help">How many files the bot gets per work packet. Bigger batches = fewer, larger proposals.</p>
++        </div>
 +    </div>
 +    <details style="margin-top:1rem">
 +        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Advanced — automation, API token, channel scope</summary>
@@ -1250,6 +1269,23 @@ index 62bda08..fc9ee1f 100644
 +                    <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly</option>
 +                </select>
 +                <p class="s-help">How often the bot offers the next batch on its own.</p>
++            </div>
++            <div>
++                <label class="s-label" for="librarian_specials_policy">Specials policy</label>
++                <select id="librarian_specials_policy" class="s-input">
++                    <option value="guard" {% if settings.librarian_specials_policy == 'guard' %}selected{% endif %}>Guard — SP/special files must map to the provider's specials, never a regular season</option>
++                    <option value="off" {% if settings.librarian_specials_policy == 'off' %}selected{% endif %}>Off — no specials check</option>
++                </select>
++                <p class="s-help">Blocks the BTTH mistake: a special arc (SP3) being filed as a regular season (S03).</p>
++            </div>
++            <div>
++                <label class="s-label" for="librarian_gate_strict_year">Strict year check</label>
++                <label class="toggle-wrap">
++                    <input type="checkbox" class="toggle-input" id="librarian_gate_strict_year"
++                        {% if settings.librarian_gate_strict_year %}checked{% endif %}>
++                    <span class="toggle-track"></span>
++                    <span class="toggle-label">Gate also rejects plans whose claimed year disagrees with the provider's</span>
++                </label>
 +            </div>
 +            <div>
 +                <label class="s-label" for="librarian_api_token">Librarian API token</label>
@@ -1321,7 +1357,7 @@ index 62bda08..fc9ee1f 100644
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1239,6 +1523,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
+@@ -1239,6 +1546,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
          </div>
      </div>
  
@@ -1346,7 +1382,7 @@ index 62bda08..fc9ee1f 100644
      <!-- ── Backup & Restore ───────────────────────────────────────────── -->
      <div class="settings-card">
          <h2><i class="fa-solid fa-box-archive"></i> Backup &amp; Restore</h2>
-@@ -1569,7 +1871,7 @@ function addItem(listKey) {
+@@ -1569,7 +1894,7 @@ function addItem(listKey) {
      const value = newInput.value.trim();
      if (!value) return;
  
@@ -1355,7 +1391,7 @@ index 62bda08..fc9ee1f 100644
      if (channelLists.includes(listKey) && !isValidChannelId(value)) {
          alert('Only channel IDs in -100xxxxxxxxxx format are accepted (channels only).');
          return;
-@@ -1682,6 +1984,53 @@ function toggleWebdavPwdVisibility() {
+@@ -1682,6 +2007,53 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -1409,7 +1445,7 @@ index 62bda08..fc9ee1f 100644
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1690,6 +2039,7 @@ async function saveSettings() {
+@@ -1690,6 +2062,7 @@ async function saveSettings() {
          ...collectList('auth_channels'),
          ...collectList('global_search_channels'),
          ...collectList('manual_channels'),
@@ -1417,7 +1453,7 @@ index 62bda08..fc9ee1f 100644
      ];
      const acEl = document.getElementById('announcement_channel');
      const scEl = document.getElementById('skip_channel');
-@@ -1759,14 +2109,41 @@ async function saveSettings() {
+@@ -1759,14 +2132,44 @@ async function saveSettings() {
          webdav_password:               document.getElementById('webdav_password').value,
          multi_tokens:                  collectList('multi_tokens'),
          helper_tokens:                 collectList('helper_tokens'),
@@ -1455,11 +1491,14 @@ index 62bda08..fc9ee1f 100644
 +        librarian_auto_apply_tier_a:   document.getElementById('librarian_auto_apply_tier_a').checked,
 +        librarian_digest:              document.getElementById('librarian_digest').value,
 +        librarian_edit_budget_per_day: parseInt(document.getElementById('librarian_edit_budget_per_day').value, 10) || 0,
++        librarian_batch_size:          parseInt(document.getElementById('librarian_batch_size').value, 10) || 60,
++        librarian_gate_strict_year:    document.getElementById('librarian_gate_strict_year').checked,
++        librarian_specials_policy:     document.getElementById('librarian_specials_policy').value,
 +        librarian_api_token:           document.getElementById('librarian_api_token').value.trim(),
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1902,6 +2279,31 @@ function renderSettings(s) {
+@@ -1902,6 +2305,34 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -1485,13 +1524,16 @@ index 62bda08..fc9ee1f 100644
 +    document.getElementById('librarian_auto_apply_tier_a').checked = !!s.librarian_auto_apply_tier_a;
 +    document.getElementById('librarian_digest').value = (s.librarian_digest ?? 'manual');
 +    document.getElementById('librarian_edit_budget_per_day').value = (s.librarian_edit_budget_per_day ?? 50);
++    document.getElementById('librarian_batch_size').value = (s.librarian_batch_size ?? 60);
++    document.getElementById('librarian_gate_strict_year').checked = !!s.librarian_gate_strict_year;
++    document.getElementById('librarian_specials_policy').value = (s.librarian_specials_policy ?? 'guard');
 +    document.getElementById('librarian_api_token').value = s.librarian_api_token || '';
 +    toggleBufferFields();
 +    applyBufferProfile();
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1913,6 +2315,8 @@ function renderSettings(s) {
+@@ -1913,6 +2344,8 @@ function renderSettings(s) {
      document.getElementById('cf_stream_url').value = s.cf_stream_url || '';
      document.getElementById('cf_stream_secret').value = s.cf_stream_secret || '';
      document.getElementById('cf_stream_mode').value = s.cf_stream_mode || 'off';
@@ -1500,7 +1542,7 @@ index 62bda08..fc9ee1f 100644
      const wu = document.getElementById('webdav_user');
      if (wu) wu.value = s.webdav_user || '';
      const wp = document.getElementById('webdav_password');
-@@ -1945,6 +2349,16 @@ function renderSettings(s) {
+@@ -1945,6 +2378,16 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -1517,7 +1559,7 @@ index 62bda08..fc9ee1f 100644
      toggleSkipDeleteField();
  
      rebuildDatabaseList(s.database_list || []);
-@@ -2021,7 +2435,6 @@ const STAT_FIELDS = [
+@@ -2021,7 +2464,6 @@ const STAT_FIELDS = [
      ['streams', 'Streams'], ['db_size', 'DB Size'],
      ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
  ];
@@ -1525,7 +1567,7 @@ index 62bda08..fc9ee1f 100644
  
  /* Spin the clicked refresh button's icon while an async action runs */
  function spinIcon(btn, on) {
-@@ -2047,32 +2460,6 @@ async function loadDbStats(btn) {
+@@ -2047,32 +2489,6 @@ async function loadDbStats(btn) {
      }
  }
  
@@ -1558,7 +1600,7 @@ index 62bda08..fc9ee1f 100644
  async function restartApp() {
      if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
  
-@@ -2089,7 +2476,6 @@ async function restartApp() {
+@@ -2089,7 +2505,6 @@ async function restartApp() {
      }
  
      // Web app goes down during restart — poll health until start_time changes, then reload.
@@ -1566,7 +1608,7 @@ index 62bda08..fc9ee1f 100644
      const overlay = document.getElementById('restart-overlay');
      overlay.hidden = false;
      document.documentElement.classList.add('rs-lock');
-@@ -2137,7 +2523,6 @@ window.addEventListener('DOMContentLoaded', () => {
+@@ -2137,7 +2552,6 @@ window.addEventListener('DOMContentLoaded', () => {
      toggleDuplicateProtection();
      toggleMediaflowFields();
      loadDbStats();
@@ -1833,7 +1875,7 @@ index 49c2d40..a274d73 100644
                  LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
              return
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..f687c99 100644
+index 2b7712c..c9c0e7e 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,10 @@ from typing import Any, Dict, List
@@ -1862,7 +1904,7 @@ index 2b7712c..f687c99 100644
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -63,6 +75,31 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -63,6 +75,34 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -1891,10 +1933,13 @@ index 2b7712c..f687c99 100644
 +    "librarian_edit_budget_per_day": 50,
 +    "librarian_channels": [],
 +    "librarian_api_token": "",
++    "librarian_batch_size": 60,
++    "librarian_gate_strict_year": False,
++    "librarian_specials_policy": "guard",
  }
  
  
-@@ -158,6 +195,17 @@ class Settings:
+@@ -158,6 +198,17 @@ class Settings:
      def announce_new_content(self) -> bool:
          return bool(self._d.get("announce_new_content", False))
  
@@ -1912,7 +1957,7 @@ index 2b7712c..f687c99 100644
      @property
      def delete_on_metadata_fail(self) -> bool:
          return bool(self._d.get("delete_on_metadata_fail", False))
-@@ -170,6 +218,31 @@ class Settings:
+@@ -170,6 +221,31 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -1944,7 +1989,7 @@ index 2b7712c..f687c99 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +378,140 @@ class Settings:
+@@ -305,6 +381,156 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -2082,10 +2127,26 @@ index 2b7712c..f687c99 100644
 +    def librarian_api_token(self) -> str:
 +        return str(self._d.get("librarian_api_token") or "").strip()
 +
++    @property
++    def librarian_batch_size(self) -> int:
++        value = self._d.get("librarian_batch_size", 60)
++        if isinstance(value, bool) or not isinstance(value, int):
++            return 60
++        return max(1, min(200, value))
++
++    @property
++    def librarian_gate_strict_year(self) -> bool:
++        return bool(self._d.get("librarian_gate_strict_year", False))
++
++    @property
++    def librarian_specials_policy(self) -> str:
++        value = str(self._d.get("librarian_specials_policy") or "guard").strip().lower()
++        return value if value in ("guard", "off") else "guard"
++
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +587,7 @@ class SettingsManager:
+@@ -380,7 +606,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -2094,7 +2155,7 @@ index 2b7712c..f687c99 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +734,23 @@ class SettingsManager:
+@@ -527,4 +753,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  

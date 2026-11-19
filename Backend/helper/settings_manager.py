@@ -100,6 +100,9 @@ _DEFAULTS: Dict[str, Any] = {
     "librarian_edit_budget_per_day": 50,
     "librarian_channels": [],
     "librarian_api_token": "",
+    "librarian_batch_size": 60,
+    "librarian_gate_strict_year": False,
+    "librarian_specials_policy": "guard",
 }
 
 
@@ -511,6 +514,22 @@ class Settings:
     @property
     def librarian_api_token(self) -> str:
         return str(self._d.get("librarian_api_token") or "").strip()
+
+    @property
+    def librarian_batch_size(self) -> int:
+        value = self._d.get("librarian_batch_size", 60)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 60
+        return max(1, min(200, value))
+
+    @property
+    def librarian_gate_strict_year(self) -> bool:
+        return bool(self._d.get("librarian_gate_strict_year", False))
+
+    @property
+    def librarian_specials_policy(self) -> str:
+        value = str(self._d.get("librarian_specials_policy") or "guard").strip().lower()
+        return value if value in ("guard", "off") else "guard"
 
     #----- Lists
     @property

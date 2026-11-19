@@ -65,6 +65,8 @@ def load_lib():
     settings_ns = types.SimpleNamespace(
         librarian_enabled=True, librarian_dry_run=True,
         librarian_edit_budget_per_day=50, hermes_bot_token="tok",
+        librarian_batch_size=60, librarian_gate_strict_year=False,
+        librarian_specials_policy="guard",
         skip_channel=-100999)
     settings_manager = types.ModuleType("Backend.helper.settings_manager")
 
@@ -83,7 +85,19 @@ def load_lib():
     encrypt.decode_string = _decode
 
     bot = types.ModuleType("Backend.pyrofork.bot")
-    bot.Userbot = None
+
+    class _FakeUB:
+        """Stands in for the app userbot: serves canned messages so the
+        pre-edit identity check can be exercised both ways."""
+
+        def __init__(self):
+            self.messages = {}
+
+        async def get_messages(self, chat_id, msg_id):
+            return self.messages.get((int(chat_id), int(msg_id)))
+
+    bot.fake_ub = _FakeUB()
+    bot.Userbot = bot.fake_ub
 
     sys.modules.update({
         "Backend": backend,
@@ -101,7 +115,7 @@ def load_lib():
     })
     _LIB = load_module("librarian_under_test", "Backend/helper/librarian.py")
     _LIB._stubs = {"common": common, "entry": entry, "settings": settings_ns,
-                   "removed": removed}
+                   "removed": removed, "bot": bot}
     return _LIB
 
 
@@ -253,11 +267,12 @@ class _FakeColl:
                     ids.append(v)
 
 
-def _wire(lib, ledger=None, locator=None, proposals=None, audit=None, alias=None):
+def _wire(lib, ledger=None, locator=None, proposals=None, audit=None,
+          alias=None, packets=None):
     saved = {}
     for name, fake in (("_ledger_coll", ledger), ("_locator_coll", locator),
                        ("_proposals_coll", proposals), ("_audit_coll", audit),
-                       ("_alias_coll", alias)):
+                       ("_alias_coll", alias), ("_packets_coll", packets)):
         saved[name] = getattr(lib, name)
         if fake is not None:
             setattr(lib, name, lambda f=fake: f)
@@ -416,6 +431,10 @@ def test_apply_edit_path_dry_run_then_live():
     lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = (
         fake_bot_api, fake_verify, fake_clean)
     settings = lib._stubs["settings"]
+    # The pre-edit identity check must see the right file at the target.
+    lib._stubs["bot"].fake_ub.messages[(-100111, 5)] = types.SimpleNamespace(
+        caption="Some Show S02E05", empty=False, document=None,
+        video=types.SimpleNamespace(file_unique_id="k1"))
     try:
         settings.librarian_dry_run = True
         res = run(lib.apply_proposal("p1"))
@@ -441,5 +460,177 @@ def test_apply_edit_path_dry_run_then_live():
         assert ledger.docs["k1"]["status"] == "open"
     finally:
         lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = orig
+        settings.librarian_dry_run = True
+        _unwire(lib, saved)
+
+
+# ---------------------------------------------------------------------------
+# v4.1 — pairing guard, specials gate, strict year, identity check
+# ---------------------------------------------------------------------------
+
+def test_packet_numbers_runs_hint_and_special_flag():
+    lib = load_lib()
+    ledger, locator, packets = _FakeColl(), _FakeColl(), _FakeColl()
+    for i, cap in enumerate([
+            "Alpha Show - EP01 1080p", "Alpha Show - EP02 1080p",
+            "Beta Movie (2020) 1080p", "BTTH 3YA - SP3 E01 [E-SUB] 4K"]):
+        key = f"pk{i}"
+        ledger.docs[key] = {"_id": key, "status": "open", "caption": cap,
+                            "chat_id": -100111, "msg_id": 10 + i,
+                            "first_seen": float(i)}
+        locator.docs[key] = {"_id": key, "chat_id": -100111,
+                             "msg_id": 10 + i, "caption": cap, "file_name": ""}
+    saved = _wire(lib, ledger=ledger, locator=locator, packets=packets)
+    try:
+        res = run(lib.get_packet(-100111, 10))
+    finally:
+        _unwire(lib, saved)
+    assert res["ok"] is True
+    assert [it["n"] for it in res["items"]] == [1, 2, 3, 4]
+    assert res["packet_id"].startswith("pkt")
+    assert len(packets.docs) == 1
+    runs = {r["stem"]: r for r in res["runs_hint"]}
+    assert runs["alpha show"]["count"] == 2
+    assert runs["alpha show"]["numbers"] == [1, 2]
+    sp = [it for it in res["items"] if it["key"] == "pk3"][0]
+    assert sp["special"] is True
+    assert [it for it in res["items"] if it["key"] == "pk0"][0]["special"] is False
+
+
+def test_submit_numbered_echo_guard():
+    lib = load_lib()
+    ledger, proposals, packets = _FakeColl(), _FakeColl(), _FakeColl()
+    ledger.docs["k1"] = {"_id": "k1", "status": "open",
+                         "caption": "Some Show S02E05",
+                         "chat_id": -100111, "msg_id": 5, "first_seen": 1.0}
+    saved = _wire(lib, ledger=ledger, proposals=proposals, packets=packets)
+    entry = lib._stubs["entry"]
+
+    async def fake_metadata(name, channel, msg_id, override_id=None,
+                            season_hint=None):
+        return {"tmdb_id": 42, "imdb_id": "tt1234567", "title": "Some Show",
+                "season_number": 2, "episode_number": 5}
+
+    entry.metadata = fake_metadata
+    try:
+        packet = run(lib.get_packet(-100111, 10))
+        pid = packet["packet_id"]
+        base = {"channel": -100111, "label": "Some Show S2",
+                "packet_id": pid,
+                "items": [{"n": 1, "new_caption": _plan()["items"][0]["new_caption"],
+                           "media_type": "tv", "tmdb_id": 42,
+                           "imdb_id": "tt1234567", "season": 2, "episode": 5,
+                           "seen_caption": "A COMPLETELY DIFFERENT CAPTION"}]}
+        res = run(lib.submit_proposal(base))
+        assert res["ok"] is False and "does not match" in res["message"], res
+
+        base["items"][0]["seen_caption"] = "Some Show S02E05"
+        res = run(lib.submit_proposal(base))
+        assert res["ok"] is True and res["status"] == "pending", res
+
+        # Packet references REQUIRE the echo.
+        base["items"][0].pop("seen_caption")
+        res = run(lib.submit_proposal(base))
+        assert res["ok"] is False and "seen_caption is required" in res["message"]
+    finally:
+        entry.metadata = None
+        _unwire(lib, saved)
+
+
+def test_specials_gate_and_strict_year():
+    import re as _re
+    lib = load_lib()
+    ledger, proposals = _FakeColl(), _FakeColl()
+    ledger.docs["ksp"] = {"_id": "ksp", "status": "open",
+                          "caption": "BTTH 3YA - SP3 E01 [E-SUB] 4K",
+                          "file_name": "BTTH 3YA - SP3 E01.mkv",
+                          "first_seen": 1.0}
+    saved = _wire(lib, ledger=ledger, proposals=proposals)
+    entry = lib._stubs["entry"]
+    settings = lib._stubs["settings"]
+
+    async def fake_metadata(name, channel, msg_id, override_id=None,
+                            season_hint=None):
+        m = _re.search(r"S(\d+)E(\d+)", name)
+        return {"tmdb_id": 777, "imdb_id": "tt7777777",
+                "title": "Battle Through the Heavens",
+                "season_number": int(m.group(1)),
+                "episode_number": int(m.group(2)), "release_year": 2017}
+
+    entry.metadata = fake_metadata
+
+    def btth_plan(season, **kw):
+        cap = (f"Battle Through the Heavens S{season:02d}E01 4K\n"
+               "<a href=\"https://www.imdb.com/title/tt7777777/\">IMDB</a>")
+        item = {"key": "ksp", "new_caption": cap, "media_type": "tv",
+                "tmdb_id": 777, "imdb_id": "tt7777777",
+                "season": season, "episode": 1}
+        item.update(kw)
+        return {"channel": -100444, "label": "BTTH SP3", "items": [item]}
+
+    try:
+        # SP-marked original mapped to a regular season: gate must refuse.
+        res = run(lib.submit_proposal(btth_plan(3)))
+        assert res["ok"] is True and res["status"] == "gate_failed", res
+        reason = res["gate"]["items"]["ksp"]["reason"]
+        assert "special" in reason, reason
+
+        # The same file mapped to the specials season passes.
+        res = run(lib.submit_proposal(btth_plan(0)))
+        assert res["ok"] is True and res["status"] == "pending", res
+
+        # Strict year: claiming 2021 for a 2017 resolution fails the gate.
+        settings.librarian_gate_strict_year = True
+        res = run(lib.submit_proposal(btth_plan(0, year=2021)))
+        assert res["ok"] is True and res["status"] == "gate_failed", res
+        assert "year" in res["gate"]["items"]["ksp"]["reason"]
+    finally:
+        settings.librarian_gate_strict_year = False
+        entry.metadata = None
+        _unwire(lib, saved)
+
+
+def test_identity_check_blocks_wrong_file():
+    lib = load_lib()
+    ledger, proposals, audit, alias = (_FakeColl(), _FakeColl(),
+                                       _FakeColl(), _FakeColl())
+    locator = _FakeColl()
+    ledger.docs["k1"] = {"_id": "k1", "status": "open",
+                         "caption": "Some Show S02E05", "skip_msg_ids": [50],
+                         "first_seen": 1.0}
+    locator.docs["k1"] = {"_id": "k1", "chat_id": -100111, "msg_id": 5,
+                          "caption": "Some Show S02E05", "file_name": ""}
+    proposals.docs["p1"] = {
+        "_id": "p1", "channel": -100111, "label": "Some Show S2",
+        "status": "pending",
+        "items": [{"key": "k1", "new_caption": "Some Show S02E05 1080p tt1234567",
+                   "media_type": "tv", "tmdb_id": 42,
+                   "imdb_id": "tt1234567", "season": 2, "episode": 5}]}
+    saved = _wire(lib, ledger=ledger, locator=locator, proposals=proposals,
+                  audit=audit, alias=alias)
+    calls = []
+
+    async def fake_bot_api(method, params):
+        calls.append((method, params))
+        return {"ok": True, "result": {"message_id": 5}}
+
+    orig = lib._bot_api
+    lib._bot_api = fake_bot_api
+    settings = lib._stubs["settings"]
+    # The post at the target is a DIFFERENT file than the plan expects.
+    lib._stubs["bot"].fake_ub.messages[(-100111, 5)] = types.SimpleNamespace(
+        caption="Some Show S02E05", empty=False, document=None,
+        video=types.SimpleNamespace(file_unique_id="ANOTHER_FILE"))
+    try:
+        settings.librarian_dry_run = False
+        res = run(lib.apply_proposal("p1"))
+        assert res["ok"] is True and res["status"] == "failed", res
+        assert res["applied"] == 0
+        assert calls == []  # nothing was edited
+        assert ledger.docs["k1"]["status"] == "open"
+        assert len(audit.docs) == 1 and audit.docs[
+            list(audit.docs)[0]]["ok"] is False
+    finally:
+        lib._bot_api = orig
         settings.librarian_dry_run = True
         _unwire(lib, saved)

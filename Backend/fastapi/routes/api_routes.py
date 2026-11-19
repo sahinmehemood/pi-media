@@ -1958,6 +1958,18 @@ async def update_settings_api(payload: dict) -> dict:
         payload["librarian_edit_budget_per_day"] = max(0, min(10000, _v))
     if "librarian_api_token" in payload:
         payload["librarian_api_token"] = str(payload["librarian_api_token"] or "").strip()
+    if "librarian_batch_size" in payload:
+        _v = payload["librarian_batch_size"]
+        if isinstance(_v, bool) or not isinstance(_v, int):
+            raise HTTPException(status_code=400, detail="'librarian_batch_size' must be an integer.")
+        payload["librarian_batch_size"] = max(1, min(200, _v))
+    if "librarian_gate_strict_year" in payload:
+        payload["librarian_gate_strict_year"] = bool(payload["librarian_gate_strict_year"])
+    if "librarian_specials_policy" in payload:
+        _v = str(payload["librarian_specials_policy"] or "guard").strip().lower()
+        if _v not in ("guard", "off"):
+            raise HTTPException(status_code=400, detail="'librarian_specials_policy' must be guard or off.")
+        payload["librarian_specials_policy"] = _v
 
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
@@ -3227,10 +3239,11 @@ async def librarian_bot_packet_api(request: Request) -> dict:
     channel = request.query_params.get("channel")
     if not channel:
         raise HTTPException(status_code=400, detail="channel is required.")
+    raw_limit = request.query_params.get("limit")
     try:
-        limit = int(request.query_params.get("limit") or 30)
+        limit = int(raw_limit) if raw_limit else None
     except ValueError:
-        limit = 30
+        limit = None
     return await librarian.get_packet(channel, limit)
 
 

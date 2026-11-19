@@ -16,10 +16,14 @@ Usage:
   librarian_cli.py apply --id p1700000000_12345
   librarian_cli.py rollback --id p1700000000_12345
 
-plan.json shape:
+plan.json shape (v4.1 — reference packet items by NUMBER, never raw keys;
+"seen_caption" must echo the item's original caption from the packet
+exactly, or the server rejects the whole proposal):
   {"channel": -1004395609351, "label": "Demon Slayer — Yuukaku-hen (S2)",
    "note": "optional reasoning for Yan",
-   "items": [{"key": "<ledger key>", "media_type": "tv",
+   "packet_id": "<packet_id from the packet command>",
+   "items": [{"n": 1, "seen_caption": "<original caption from the packet>",
+              "media_type": "tv",
               "tmdb_id": 85937, "imdb_id": "tt9335498",
               "season": 2, "episode": 1, "absolute": false,
               "new_caption": "Demon Slayer: Kimetsu no Yaiba (2019) S02E01 1080p\n<a href=\"https://www.imdb.com/title/tt9335498/\">IMDB</a>"}]}
