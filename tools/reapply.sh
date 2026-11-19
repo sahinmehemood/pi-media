@@ -75,6 +75,14 @@ PLUGIN_FILES=(
   tools/chief-profile/memories/USER.md
   tools/chief-profile/skills/routing-and-delegation/SKILL.md
   tools/chief-profile/skills/status-and-digest/SKILL.md
+  tools/generalist-profile/atlas/SOUL.md
+  tools/generalist-profile/atlas/AGENTS.md
+  tools/generalist-profile/atlas/memories/MEMORY.md
+  tools/generalist-profile/atlas/memories/USER.md
+  tools/generalist-profile/servy/SOUL.md
+  tools/generalist-profile/servy/AGENTS.md
+  tools/generalist-profile/servy/memories/MEMORY.md
+  tools/generalist-profile/servy/memories/USER.md
   docs/stream-buffer/DESIGN.md
   docs/dl-link.md
   docs/stream-buffer/README.md
