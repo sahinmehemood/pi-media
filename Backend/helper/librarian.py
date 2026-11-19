@@ -733,6 +733,58 @@ def _plan_stamp_ok(new_caption: str) -> Optional[str]:
         return None
 
 
+def _auto_apply_eligible(level: str, items: list[dict],
+                         originals: dict) -> bool:
+    """The automation ladder, decided server-side (the Settings page is
+    the bot's permission slip — the bot cannot grant itself more):
+    - "all": any gate-passed plan may apply unattended.
+    - "safe": gate-passed plans whose originals carry NO special
+      marker (no SP / OVA / special arcs) may apply unattended.
+    - anything else ("off"): never.
+    The gate has already verified every item's identity and numbering;
+    while the specials policy is on guard it also refuses SP->season
+    mappings, so a special can only ever auto-apply as a verified
+    season-0 special under "all", never as a disguised season."""
+    if not items:
+        return False
+    if level == "all":
+        return True
+    if level != "safe":
+        return False
+    for it in items:
+        od = originals.get(it.get("key")) or {}
+        bits = name_bits(od.get("caption") or "", od.get("file_name") or "")
+        if bits.get("special") is not None:
+            return False
+    return True
+
+
+async def _run_auto_apply(proposal_id: str, level: str) -> None:
+    """Background task: apply one gate-passed proposal under the
+    automation permission and record the outcome on the proposal, so
+    the control room (and the bot's next status check) shows it."""
+    coll = _proposals_coll()
+    try:
+        res = await apply_proposal(proposal_id, approver=f"auto:{level}")
+        if res.get("dry_run"):
+            state = "dry_run"
+        elif res.get("ok"):
+            state = "applied"
+        else:
+            state = "failed"
+        result = {"applied": res.get("applied"), "status": res.get("status"),
+                  "message": res.get("message") or ""}
+    except Exception as e:
+        state, result = "failed", {"message": str(e)}
+        LOGGER.warning(f"[Librarian] auto-apply {proposal_id} failed: {e}")
+    if coll is not None:
+        try:
+            await coll.update_one({"_id": proposal_id}, {"$set": {
+                "auto_apply_state": state, "auto_apply_result": result}})
+        except Exception:
+            pass
+
+
 async def submit_proposal(payload: dict) -> dict:
     """Store a Media Manager fix plan and run the verification gate on it.
     Only gate-passing proposals become 'pending' (presentable to Yan)."""
@@ -836,8 +888,31 @@ async def submit_proposal(payload: dict) -> dict:
         for it in clean_items:
             await ledger.update_one({"_id": it["key"]},
                                     {"$set": {"proposal_id": None}})
+    auto_level = None
+    if status == "pending":
+        try:
+            from Backend.helper.settings_manager import SettingsManager
+            level = getattr(SettingsManager.current(),
+                            "librarian_auto_apply", "off")
+        except Exception:
+            level = "off"
+        originals: dict[str, dict] = {}
+        if ledger is not None:
+            for it in clean_items:
+                try:
+                    od = await ledger.find_one({"_id": it["key"]})
+                except Exception:
+                    od = None
+                if od:
+                    originals[it["key"]] = od
+        if _auto_apply_eligible(level, clean_items, originals):
+            auto_level = level
+            await coll.update_one({"_id": pid}, {"$set": {
+                "auto_apply": level, "auto_apply_state": "scheduled"}})
+            asyncio.create_task(_run_auto_apply(pid, level))
     doc.update({"gate": gate, "status": status})
-    return {"ok": True, "proposal_id": pid, "status": status, "gate": gate}
+    return {"ok": True, "proposal_id": pid, "status": status, "gate": gate,
+            "auto_apply": auto_level}
 
 
 async def _gate_plan(doc: dict) -> dict:

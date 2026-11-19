@@ -279,14 +279,15 @@ def test_librarian_seams():
     assert 'origin="scan-fail"' in scan
     # Settings: defaults + live properties for every Librarian key.
     for key in ("librarian_enabled", "librarian_dry_run",
-                "librarian_auto_apply_tier_a", "librarian_digest",
+                "librarian_auto_apply_tier_a", "librarian_auto_apply",
+                "librarian_digest",
                 "librarian_edit_budget_per_day", "librarian_channels",
                 "librarian_api_token", "librarian_batch_size",
                 "librarian_gate_strict_year", "librarian_specials_policy"):
         assert f'"{key}"' in sm, key
         assert f"def {key}" in sm, key
     for key in ("librarian_enabled", "librarian_dry_run",
-                "librarian_auto_apply_tier_a", "librarian_digest",
+                "librarian_auto_apply", "librarian_digest",
                 "librarian_edit_budget_per_day", "librarian_api_token",
                 "librarian_batch_size", "librarian_gate_strict_year",
                 "librarian_specials_policy"):

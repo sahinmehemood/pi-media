@@ -93,7 +93,8 @@
     <div class="row-main">
       <div class="row-title">{{ p.label }}</div>
       <div class="row-meta">{{ p.item_count }} file(s) · channel <code>{{ p.channel }}</code>
-        {% if p.status == 'gate_failed' %} · the app could not verify this plan — the bot has the reasons{% endif %}</div>
+        {% if p.status == 'gate_failed' %} · the app could not verify this plan — the bot has the reasons{% endif %}
+        {% if p.auto_apply_state == 'applied' %} · auto-fixed under your Automation setting{% elif p.auto_apply_state == 'scheduled' %} · auto-fix scheduled{% elif p.auto_apply_state == 'dry_run' %} · auto-fix held by Test mode{% elif p.auto_apply_state == 'failed' %} · auto-fix failed — ask the bot why{% endif %}</div>
       {% if p.items_detail %}
       <details style="margin-top:.4rem">
         <summary style="cursor:pointer;font-size:.78rem;color:var(--text-sec)">Show files (before → after)</summary>

@@ -137,7 +137,7 @@ index 9ae7925..384ced5 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..9e459ad 100644
+index e6d9542..7aaf50c 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -211,7 +211,7 @@ index e6d9542..9e459ad 100644
      for key in bool_keys:
          if key in payload:
              payload[key] = bool(payload[key])
-@@ -1856,6 +1897,80 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1856,6 +1897,85 @@ async def update_settings_api(payload: dict) -> dict:
          except (ValueError, TypeError):
              payload["fanart_shuffle_interval"] = 5
  
@@ -264,6 +264,11 @@ index e6d9542..9e459ad 100644
 +        payload["librarian_dry_run"] = bool(payload["librarian_dry_run"])
 +    if "librarian_auto_apply_tier_a" in payload:
 +        payload["librarian_auto_apply_tier_a"] = bool(payload["librarian_auto_apply_tier_a"])
++    if "librarian_auto_apply" in payload:
++        _v = str(payload["librarian_auto_apply"] or "off").strip().lower()
++        if _v not in ("off", "safe", "all"):
++            raise HTTPException(status_code=400, detail="'librarian_auto_apply' must be off, safe or all.")
++        payload["librarian_auto_apply"] = _v
 +    if "librarian_digest" in payload:
 +        _v = str(payload["librarian_digest"] or "manual").strip().lower()
 +        if _v not in ("manual", "daily", "weekly"):
@@ -292,7 +297,7 @@ index e6d9542..9e459ad 100644
      if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
          raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
  
-@@ -1926,6 +2041,14 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1926,6 +2046,14 @@ async def update_settings_api(payload: dict) -> dict:
                  cleaned.append(c)
          payload["manual_channels"] = cleaned
  
@@ -307,7 +312,7 @@ index e6d9542..9e459ad 100644
      if "announcement_channel" in payload and payload["announcement_channel"]:
          payload["announcement_channel"] = _validate_channel_id(
              payload["announcement_channel"], "announcement channel"
-@@ -1936,11 +2059,17 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1936,11 +2064,17 @@ async def update_settings_api(payload: dict) -> dict:
              payload["skip_channel"], "skip channel"
          )
  
@@ -326,7 +331,7 @@ index e6d9542..9e459ad 100644
      if any(field in payload for field in _channel_fields):
          current = SettingsManager.current()
  
-@@ -1956,6 +2085,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1956,6 +2090,7 @@ async def update_settings_api(payload: dict) -> dict:
              "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
              "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
              "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
@@ -334,7 +339,7 @@ index e6d9542..9e459ad 100644
          }
  
          allowed_overlap = frozenset({"AUTH", "ANIME"})
-@@ -1972,12 +2102,30 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1972,12 +2107,30 @@ async def update_settings_api(payload: dict) -> dict:
                          detail=f"Channel {', '.join(sorted(clash))} can't be in both {a} and {b} channels — each channel may only belong to one field."
                      )
  
@@ -366,7 +371,7 @@ index e6d9542..9e459ad 100644
          if key in payload and isinstance(payload[key], str):
              payload[key] = payload[key].strip()
  
-@@ -2501,6 +2649,60 @@ async def download_logs_api():
+@@ -2501,6 +2654,60 @@ async def download_logs_api():
      return FileResponse(path, filename="log.txt", media_type="text/plain")
  
  
@@ -427,7 +432,7 @@ index e6d9542..9e459ad 100644
  #----- Run the updater then re-exec the app; runs after the HTTP response is flushed
  async def _perform_restart(delay: float = 1.0) -> None:
      await asyncio.sleep(delay)
-@@ -2569,6 +2771,21 @@ async def _managed_bots() -> list[dict]:
+@@ -2569,6 +2776,21 @@ async def _managed_bots() -> list[dict]:
      return bots
  
  
@@ -449,7 +454,7 @@ index e6d9542..9e459ad 100644
  def _bot_served_channels() -> list[dict]:
      s = SettingsManager.current()
      order: list[str] = []
-@@ -2595,6 +2812,8 @@ def _bot_served_channels() -> list[dict]:
+@@ -2595,6 +2817,8 @@ def _bot_served_channels() -> list[dict]:
          add(s.announcement_channel, "announce")
      if s.skip_channel:
          add(s.skip_channel, "skip")
@@ -458,7 +463,7 @@ index e6d9542..9e459ad 100644
      return [mapping[k] for k in order]
  
  
-@@ -2686,12 +2905,13 @@ async def bot_admin_scan_api() -> dict:
+@@ -2686,12 +2910,13 @@ async def bot_admin_scan_api() -> dict:
          return {"status": "error", "reason": "no_session",
                  "message": "Connect your Telegram session from the Settings page to manage channel admins."}
  
@@ -474,7 +479,7 @@ index e6d9542..9e459ad 100644
      managed_ids = {b["user_id"] for b in bots}
      out: list[dict] = []
  
-@@ -2736,6 +2956,20 @@ async def bot_admin_scan_api() -> dict:
+@@ -2736,6 +2961,20 @@ async def bot_admin_scan_api() -> dict:
      return {"status": "success", "data": {"bots": bots, "channels": out}}
  
  
@@ -495,7 +500,7 @@ index e6d9542..9e459ad 100644
  async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: bool = True) -> dict:
      label = bot.get("name") or (f"@{bot['username']}" if bot.get("username") else str(bot["user_id"]))
      bid = bot["user_id"]
-@@ -2743,6 +2977,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
+@@ -2743,6 +2982,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
      if await _bot_member_status(chat_id, bid) == "admin":
          return {"bot": label, "user_id": bid, "status": "already", "message": "Already an admin."}
  
@@ -504,7 +509,7 @@ index e6d9542..9e459ad 100644
      try:
          await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
          return {"bot": label, "user_id": bid, "status": "added", "message": "Promoted to admin."}
-@@ -2840,9 +3076,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
+@@ -2840,9 +3081,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
      if not isinstance(channel_ids, list) or not channel_ids:
          raise HTTPException(status_code=400, detail="Select at least one channel.")
  
@@ -516,7 +521,7 @@ index e6d9542..9e459ad 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3119,183 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3124,184 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -631,6 +636,7 @@ index e6d9542..9e459ad 100644
 +    return {
 +        "enabled": settings.librarian_enabled,
 +        "dry_run": settings.librarian_dry_run,
++        "auto_apply": settings.librarian_auto_apply,
 +        "counts": await librarian.panel_counts(),
 +        "action_state": librarian.ACTION_STATE,
 +    }
@@ -1007,7 +1013,7 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 62bda08..5a4f320 100644
+index 62bda08..0da8e10 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
 @@ -143,26 +143,13 @@
@@ -1041,7 +1047,7 @@ index 62bda08..5a4f320 100644
  
          <hr class="divider">
  
-@@ -693,6 +680,326 @@
+@@ -693,6 +680,343 @@
      {% endif %}
  </div>
  
@@ -1221,8 +1227,9 @@ index 62bda08..5a4f320 100644
 +        <div style="flex:1 1 260px">
 +            <h2 style="margin:0"><i class="fa-solid fa-book-open"></i> Librarian</h2>
 +            <p style="font-size:0.78rem;color:var(--text-sec);margin:.35rem 0 0">
-+                The Media Manager bot fixes the captions of files the matcher rejected — you approve
-+                each series in Telegram, it edits, the app indexes. The bot never streams.
++                The Media Manager bot fixes the captions of files the matcher rejected. You approve
++                each batch in Telegram — or let verified fixes apply on their own (Automation below).
++                These settings are the bot's permissions. The bot never streams.
 +            </p>
 +        </div>
 +        <a href="/admin/librarian" class="add-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:.4rem">
@@ -1230,7 +1237,7 @@ index 62bda08..5a4f320 100644
 +    </div>
 +    <div class="s-grid" style="margin-top:.9rem">
 +        <div>
-+            <label class="s-label" for="librarian_enabled">Librarian</label>
++            <label class="s-label" for="librarian_enabled">Turn on</label>
 +            <label class="toggle-wrap">
 +                <input type="checkbox" class="toggle-input" id="librarian_enabled"
 +                    {% if settings.librarian_enabled %}checked{% endif %}>
@@ -1239,78 +1246,43 @@ index 62bda08..5a4f320 100644
 +            </label>
 +        </div>
 +        <div>
-+            <label class="s-label" for="librarian_dry_run">Dry run</label>
++            <label class="s-label" for="librarian_dry_run">Test mode</label>
 +            <label class="toggle-wrap">
 +                <input type="checkbox" class="toggle-input" id="librarian_dry_run"
 +                    {% if settings.librarian_dry_run %}checked{% endif %}>
 +                <span class="toggle-track"></span>
-+                <span class="toggle-label">Bot prepares plans but edits nothing (keep ON until you trust it)</span>
++                <span class="toggle-label">Bot prepares fixes but changes nothing (keep ON until you trust it)</span>
 +            </label>
 +        </div>
 +        <div>
-+            <label class="s-label" for="librarian_edit_budget_per_day">Edit budget (per day)</label>
++            <label class="s-label" for="librarian_edit_budget_per_day">Max caption fixes per day</label>
 +            <input type="number" id="librarian_edit_budget_per_day" class="s-input" min="0" max="10000"
 +                value="{{ settings.librarian_edit_budget_per_day if settings.librarian_edit_budget_per_day is not none else 50 }}">
-+            <p class="s-help">Hard daily cap on caption edits. 0 = edits paused.</p>
++            <p class="s-help">Hard daily cap on caption fixes. 0 = fixes paused.</p>
 +        </div>
 +        <div>
-+            <label class="s-label" for="librarian_batch_size">Batch size (files per packet)</label>
++            <label class="s-label" for="librarian_batch_size">Files per batch</label>
 +            <input type="number" id="librarian_batch_size" class="s-input" min="1" max="200"
 +                value="{{ settings.librarian_batch_size if settings.librarian_batch_size is not none else 60 }}">
-+            <p class="s-help">How many files the bot gets per work packet. Bigger batches = fewer, larger proposals.</p>
++            <p class="s-help">How many files the bot gets at once. Bigger batches = fewer, larger proposals.</p>
 +        </div>
 +    </div>
-+    <details style="margin-top:1rem">
-+        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Advanced — automation, API token, channel scope</summary>
++        <details style="margin-top:1rem">
++        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Bot behaviour — check-ins &amp; channels</summary>
 +        <div class="s-grid" style="margin-top:.9rem">
 +            <div>
-+                <label class="s-label" for="librarian_auto_apply_tier_a">Auto-apply verified plans</label>
-+                <label class="toggle-wrap">
-+                    <input type="checkbox" class="toggle-input" id="librarian_auto_apply_tier_a"
-+                        {% if settings.librarian_auto_apply_tier_a %}checked{% endif %}>
-+                    <span class="toggle-track"></span>
-+                    <span class="toggle-label">Apply gate-verified plans without asking me in Telegram</span>
-+                </label>
-+            </div>
-+            <div>
-+                <label class="s-label" for="librarian_digest">Proposal digests</label>
++                <label class="s-label" for="librarian_digest">Bot check-ins</label>
 +                <select id="librarian_digest" class="s-input">
-+                    <option value="manual" {% if settings.librarian_digest == 'manual' %}selected{% endif %}>Manual — only when I ask</option>
-+                    <option value="daily" {% if settings.librarian_digest == 'daily' %}selected{% endif %}>Daily</option>
-+                    <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly</option>
++                    <option value="manual" {% if settings.librarian_digest == 'manual' %}selected{% endif %}>Only when I ask</option>
++                    <option value="daily" {% if settings.librarian_digest == 'daily' %}selected{% endif %}>Daily summary</option>
++                    <option value="weekly" {% if settings.librarian_digest == 'weekly' %}selected{% endif %}>Weekly summary</option>
 +                </select>
-+                <p class="s-help">How often the bot offers the next batch on its own.</p>
-+            </div>
-+            <div>
-+                <label class="s-label" for="librarian_specials_policy">Specials policy</label>
-+                <select id="librarian_specials_policy" class="s-input">
-+                    <option value="guard" {% if settings.librarian_specials_policy == 'guard' %}selected{% endif %}>Guard — SP/special files must map to the provider's specials, never a regular season</option>
-+                    <option value="off" {% if settings.librarian_specials_policy == 'off' %}selected{% endif %}>Off — no specials check</option>
-+                </select>
-+                <p class="s-help">Blocks the BTTH mistake: a special arc (SP3) being filed as a regular season (S03).</p>
-+            </div>
-+            <div>
-+                <label class="s-label" for="librarian_gate_strict_year">Strict year check</label>
-+                <label class="toggle-wrap">
-+                    <input type="checkbox" class="toggle-input" id="librarian_gate_strict_year"
-+                        {% if settings.librarian_gate_strict_year %}checked{% endif %}>
-+                    <span class="toggle-track"></span>
-+                    <span class="toggle-label">Gate also rejects plans whose claimed year disagrees with the provider's</span>
-+                </label>
-+            </div>
-+            <div>
-+                <label class="s-label" for="librarian_api_token">Librarian API token</label>
-+                <div style="display:flex;gap:.5rem">
-+                    <input type="text" id="librarian_api_token" class="s-input" style="font-family:ui-monospace,monospace"
-+                        value="{{ settings.librarian_api_token or '' }}" placeholder="Not generated yet">
-+                    <button type="button" class="add-btn" onclick="regenLibrarianToken()">Regenerate</button>
-+                </div>
-+                <p class="s-help">Lets the Media Manager bot use the Librarian API (packets, plans, apply). No streaming or admin access.</p>
++                <p class="s-help">How often the bot offers new work or reports on its own.</p>
 +            </div>
 +        </div>
-+        <label class="s-label" style="margin-top:1rem">LIBRARIAN CHANNELS
++        <label class="s-label" style="margin-top:1rem">Channels the bot may work on
 +            <span style="font-weight:400;text-transform:none;letter-spacing:0">
-+                — leave empty to cover every auth channel; add channels to restrict the bot to only those.</span>
++                — leave empty to cover every source channel; add channels to restrict the bot to only those.</span>
 +        </label>
 +        <div class="multi-list-items" id="librarian_channels_items">
 +            {% for ch in settings.librarian_channels %}
@@ -1328,6 +1300,57 @@ index 62bda08..5a4f320 100644
 +                placeholder="-100xxxxxxxxxx (channels only)"
 +                onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
 +            <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
++        </div>
++    </details>
++    <details style="margin-top:.75rem">
++        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Safety checks — what the verifier blocks</summary>
++        <div class="s-grid" style="margin-top:.9rem">
++            <div>
++                <label class="s-label" for="librarian_specials_policy">Special episodes &amp; arcs</label>
++                <select id="librarian_specials_policy" class="s-input">
++                    <option value="guard" {% if settings.librarian_specials_policy == 'guard' %}selected{% endif %}>Protected — specials must use the provider's Specials list, never a normal season</option>
++                    <option value="off" {% if settings.librarian_specials_policy == 'off' %}selected{% endif %}>Unprotected — no specials check</option>
++                </select>
++                <p class="s-help">A special arc (SP3) is its own structure with its own episode count — filing it as a regular season (S03) is the classic mistake this blocks.</p>
++            </div>
++            <div>
++                <label class="s-label" for="librarian_gate_strict_year">Year must match exactly</label>
++                <label class="toggle-wrap">
++                    <input type="checkbox" class="toggle-input" id="librarian_gate_strict_year"
++                        {% if settings.librarian_gate_strict_year %}checked{% endif %}>
++                    <span class="toggle-track"></span>
++                    <span class="toggle-label">Also reject plans whose claimed year disagrees with the provider's</span>
++                </label>
++            </div>
++        </div>
++    </details>
++    <details style="margin-top:.75rem">
++        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">Automation — when the bot may fix without asking</summary>
++        <div class="s-grid" style="margin-top:.9rem">
++            <div>
++                <label class="s-label" for="librarian_auto_apply">Automatic fixing</label>
++                <select id="librarian_auto_apply" class="s-input">
++                    <option value="off" {% if settings.librarian_auto_apply == 'off' %}selected{% endif %}>Off — always ask me first</option>
++                    <option value="safe" {% if settings.librarian_auto_apply == 'safe' %}selected{% endif %}>Safe fixes only — verified plans, no specials</option>
++                    <option value="all" {% if settings.librarian_auto_apply == 'all' %}selected{% endif %}>All verified fixes</option>
++                </select>
++                <p class="s-help">Only plans the app itself has verified can auto-fix, and the bot still reports everything it did. Test mode and the daily cap still apply.</p>
++            </div>
++        </div>
++    </details>
++    <details style="margin-top:.75rem">
++        <summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-sec)">API access — the bot's key</summary>
++        <div class="s-grid" style="margin-top:.9rem">
++            <div>
++                <label class="s-label" for="librarian_api_token">Bot access key</label>
++                <div style="display:flex;gap:.5rem">
++                    <input type="password" id="librarian_api_token" class="s-input" style="font-family:ui-monospace,monospace"
++                        value="{{ settings.librarian_api_token or '' }}" placeholder="Not generated yet" autocomplete="off">
++                    <button type="button" class="add-btn" onclick="toggleLibrarianToken(this)">Show</button>
++                    <button type="button" class="add-btn" onclick="regenLibrarianToken()">Regenerate</button>
++                </div>
++                <p class="s-help">Lets the Media Manager bot use the Librarian API (batches, plans, fixes). No streaming or admin access. If you regenerate it, the bot's saved copy stops working until it is updated too.</p>
++            </div>
 +        </div>
 +    </details>
 +</div>
@@ -1368,7 +1391,7 @@ index 62bda08..5a4f320 100644
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1239,6 +1546,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
+@@ -1239,6 +1563,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
          </div>
      </div>
  
@@ -1393,7 +1416,7 @@ index 62bda08..5a4f320 100644
      <!-- ── Backup & Restore ───────────────────────────────────────────── -->
      <div class="settings-card">
          <h2><i class="fa-solid fa-box-archive"></i> Backup &amp; Restore</h2>
-@@ -1569,7 +1894,7 @@ function addItem(listKey) {
+@@ -1569,7 +1911,7 @@ function addItem(listKey) {
      const value = newInput.value.trim();
      if (!value) return;
  
@@ -1402,7 +1425,7 @@ index 62bda08..5a4f320 100644
      if (channelLists.includes(listKey) && !isValidChannelId(value)) {
          alert('Only channel IDs in -100xxxxxxxxxx format are accepted (channels only).');
          return;
-@@ -1682,6 +2007,53 @@ function toggleWebdavPwdVisibility() {
+@@ -1682,6 +2024,60 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -1437,6 +1460,13 @@ index 62bda08..5a4f320 100644
 +}
 +document.addEventListener('DOMContentLoaded', () => { applyBufferProfile(); toggleBufferFields(); });
 +
++function toggleLibrarianToken(btn) {
++    const el = document.getElementById('librarian_api_token');
++    const show = el.type === 'password';
++    el.type = show ? 'text' : 'password';
++    btn.textContent = show ? 'Hide' : 'Show';
++}
++
 +async function regenLibrarianToken() {
 +    try {
 +        const res = await fetch('/api/admin/librarian/action', {
@@ -1456,7 +1486,7 @@ index 62bda08..5a4f320 100644
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1690,6 +2062,7 @@ async function saveSettings() {
+@@ -1690,6 +2086,7 @@ async function saveSettings() {
          ...collectList('auth_channels'),
          ...collectList('global_search_channels'),
          ...collectList('manual_channels'),
@@ -1464,7 +1494,7 @@ index 62bda08..5a4f320 100644
      ];
      const acEl = document.getElementById('announcement_channel');
      const scEl = document.getElementById('skip_channel');
-@@ -1759,14 +2132,44 @@ async function saveSettings() {
+@@ -1759,14 +2156,44 @@ async function saveSettings() {
          webdav_password:               document.getElementById('webdav_password').value,
          multi_tokens:                  collectList('multi_tokens'),
          helper_tokens:                 collectList('helper_tokens'),
@@ -1499,7 +1529,7 @@ index 62bda08..5a4f320 100644
 +        flood_alert_enabled:           document.getElementById('flood_alert_enabled').checked,
 +        librarian_enabled:             document.getElementById('librarian_enabled').checked,
 +        librarian_dry_run:             document.getElementById('librarian_dry_run').checked,
-+        librarian_auto_apply_tier_a:   document.getElementById('librarian_auto_apply_tier_a').checked,
++        librarian_auto_apply:          document.getElementById('librarian_auto_apply').value,
 +        librarian_digest:              document.getElementById('librarian_digest').value,
 +        librarian_edit_budget_per_day: parseInt(document.getElementById('librarian_edit_budget_per_day').value, 10) || 0,
 +        librarian_batch_size:          parseInt(document.getElementById('librarian_batch_size').value, 10) || 60,
@@ -1509,7 +1539,7 @@ index 62bda08..5a4f320 100644
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1902,6 +2305,34 @@ function renderSettings(s) {
+@@ -1902,6 +2329,34 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -1532,7 +1562,7 @@ index 62bda08..5a4f320 100644
 +    document.getElementById('flood_alert_enabled').checked = !!s.flood_alert_enabled;
 +    document.getElementById('librarian_enabled').checked = !!s.librarian_enabled;
 +    document.getElementById('librarian_dry_run').checked = (s.librarian_dry_run ?? true);
-+    document.getElementById('librarian_auto_apply_tier_a').checked = !!s.librarian_auto_apply_tier_a;
++    document.getElementById('librarian_auto_apply').value = (s.librarian_auto_apply ?? (s.librarian_auto_apply_tier_a ? 'safe' : 'off'));
 +    document.getElementById('librarian_digest').value = (s.librarian_digest ?? 'manual');
 +    document.getElementById('librarian_edit_budget_per_day').value = (s.librarian_edit_budget_per_day ?? 50);
 +    document.getElementById('librarian_batch_size').value = (s.librarian_batch_size ?? 60);
@@ -1544,7 +1574,7 @@ index 62bda08..5a4f320 100644
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1913,6 +2344,8 @@ function renderSettings(s) {
+@@ -1913,6 +2368,8 @@ function renderSettings(s) {
      document.getElementById('cf_stream_url').value = s.cf_stream_url || '';
      document.getElementById('cf_stream_secret').value = s.cf_stream_secret || '';
      document.getElementById('cf_stream_mode').value = s.cf_stream_mode || 'off';
@@ -1553,7 +1583,7 @@ index 62bda08..5a4f320 100644
      const wu = document.getElementById('webdav_user');
      if (wu) wu.value = s.webdav_user || '';
      const wp = document.getElementById('webdav_password');
-@@ -1945,6 +2378,16 @@ function renderSettings(s) {
+@@ -1945,6 +2402,16 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -1570,7 +1600,7 @@ index 62bda08..5a4f320 100644
      toggleSkipDeleteField();
  
      rebuildDatabaseList(s.database_list || []);
-@@ -2021,7 +2464,6 @@ const STAT_FIELDS = [
+@@ -2021,7 +2488,6 @@ const STAT_FIELDS = [
      ['streams', 'Streams'], ['db_size', 'DB Size'],
      ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
  ];
@@ -1578,7 +1608,7 @@ index 62bda08..5a4f320 100644
  
  /* Spin the clicked refresh button's icon while an async action runs */
  function spinIcon(btn, on) {
-@@ -2047,32 +2489,6 @@ async function loadDbStats(btn) {
+@@ -2047,32 +2513,6 @@ async function loadDbStats(btn) {
      }
  }
  
@@ -1611,7 +1641,7 @@ index 62bda08..5a4f320 100644
  async function restartApp() {
      if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
  
-@@ -2089,7 +2505,6 @@ async function restartApp() {
+@@ -2089,7 +2529,6 @@ async function restartApp() {
      }
  
      // Web app goes down during restart — poll health until start_time changes, then reload.
@@ -1619,7 +1649,7 @@ index 62bda08..5a4f320 100644
      const overlay = document.getElementById('restart-overlay');
      overlay.hidden = false;
      document.documentElement.classList.add('rs-lock');
-@@ -2137,7 +2552,6 @@ window.addEventListener('DOMContentLoaded', () => {
+@@ -2137,7 +2576,6 @@ window.addEventListener('DOMContentLoaded', () => {
      toggleDuplicateProtection();
      toggleMediaflowFields();
      loadDbStats();
@@ -1886,7 +1916,7 @@ index 49c2d40..a274d73 100644
                  LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
              return
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..c9c0e7e 100644
+index 2b7712c..a8be3f3 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,10 @@ from typing import Any, Dict, List
@@ -1915,7 +1945,7 @@ index 2b7712c..c9c0e7e 100644
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -63,6 +75,34 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -63,6 +75,35 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -1940,6 +1970,7 @@ index 2b7712c..c9c0e7e 100644
 +    "librarian_enabled": False,
 +    "librarian_dry_run": True,
 +    "librarian_auto_apply_tier_a": False,
++    "librarian_auto_apply": "off",
 +    "librarian_digest": "manual",
 +    "librarian_edit_budget_per_day": 50,
 +    "librarian_channels": [],
@@ -1950,7 +1981,7 @@ index 2b7712c..c9c0e7e 100644
  }
  
  
-@@ -158,6 +198,17 @@ class Settings:
+@@ -158,6 +199,17 @@ class Settings:
      def announce_new_content(self) -> bool:
          return bool(self._d.get("announce_new_content", False))
  
@@ -1968,7 +1999,7 @@ index 2b7712c..c9c0e7e 100644
      @property
      def delete_on_metadata_fail(self) -> bool:
          return bool(self._d.get("delete_on_metadata_fail", False))
-@@ -170,6 +221,31 @@ class Settings:
+@@ -170,6 +222,31 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -2000,7 +2031,7 @@ index 2b7712c..c9c0e7e 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +381,156 @@ class Settings:
+@@ -305,6 +382,167 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -2118,6 +2149,17 @@ index 2b7712c..c9c0e7e 100644
 +        return bool(self._d.get("librarian_auto_apply_tier_a", False))
 +
 +    @property
++    def librarian_auto_apply(self) -> str:
++        """The automation ladder (v5): off | safe | all. This setting IS
++        the bot's permission to apply fixes without asking in Telegram.
++        Legacy migration: the old tier-a toggle was cosmetic; an owner
++        who had it ON gets 'safe', the behaviour it always promised."""
++        value = str(self._d.get("librarian_auto_apply") or "").strip().lower()
++        if value in ("off", "safe", "all"):
++            return value
++        return "safe" if self._d.get("librarian_auto_apply_tier_a") else "off"
++
++    @property
 +    def librarian_digest(self) -> str:
 +        value = str(self._d.get("librarian_digest") or "manual").strip().lower()
 +        return value if value in ("manual", "daily", "weekly") else "manual"
@@ -2157,7 +2199,7 @@ index 2b7712c..c9c0e7e 100644
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +606,7 @@ class SettingsManager:
+@@ -380,7 +618,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -2166,7 +2208,7 @@ index 2b7712c..c9c0e7e 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +753,23 @@ class SettingsManager:
+@@ -527,4 +765,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  

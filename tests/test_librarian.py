@@ -727,3 +727,74 @@ def test_list_flagged_groups_by_reason():
         assert groups[0]["items"][0]["caption"] == "A E01"
     finally:
         _unwire(lib, saved)
+
+
+# ---------------------------------------------------------------------------
+# v5 Phase 3 — automation ladder (server-side enforcement)
+# ---------------------------------------------------------------------------
+
+def test_auto_apply_eligible_ladder():
+    lib = load_lib()
+    items = [{"key": "k1"}]
+    plain = {"k1": {"caption": "Some Show S02E05", "file_name": ""}}
+    special = {"k1": {"caption": "Some Show SP1 E01", "file_name": ""}}
+    assert lib._auto_apply_eligible("off", items, plain) is False
+    assert lib._auto_apply_eligible("safe", items, plain) is True
+    assert lib._auto_apply_eligible("safe", items, special) is False
+    assert lib._auto_apply_eligible("all", items, special) is True
+    assert lib._auto_apply_eligible("all", [], plain) is False
+    assert lib._auto_apply_eligible("bogus", items, plain) is False
+
+
+def test_submit_schedules_auto_apply_only_when_permitted():
+    lib = load_lib()
+    ledger, proposals, saved = _seed_proposal_env(lib)
+    entry = lib._stubs["entry"]
+    settings = lib._stubs["settings"]
+
+    async def fake_metadata(name, channel, msg_id, override_id=None, season_hint=None):
+        return {"tmdb_id": 42, "imdb_id": "tt1234567", "title": "Some Show",
+                "season_number": 2, "episode_number": 5}
+
+    entry.metadata = fake_metadata
+    calls = []
+    orig_runner = lib._run_auto_apply
+
+    async def recorder(pid, level):
+        calls.append((pid, level))
+
+    lib._run_auto_apply = recorder
+    try:
+        # off (stub has no librarian_auto_apply -> default off): no schedule.
+        res = run(lib.submit_proposal(_plan()))
+        assert res["ok"] is True and res["status"] == "pending", res
+        assert res["auto_apply"] is None and calls == []
+
+        # safe + ordinary episode: scheduled.
+        settings.librarian_auto_apply = "safe"
+        ledger.docs["k1"].pop("proposal_id", None)
+
+        async def submit_and_drain():
+            out = await lib.submit_proposal(_plan())
+            await asyncio.sleep(0.1)
+            return out
+
+        res = run(submit_and_drain())
+        assert res["auto_apply"] == "safe", res
+        assert len(calls) == 1 and calls[0][1] == "safe"
+        doc = proposals.docs[res["proposal_id"]]
+        assert doc.get("auto_apply_state") == "scheduled"
+
+        # safe + SP-marked original: NOT scheduled.
+        calls.clear()
+        ledger.docs["k1"]["caption"] = "Some Show SP1 E05"
+        ledger.docs["k1"].pop("proposal_id", None)
+        res = run(submit_and_drain())
+        assert res["ok"] is True and res["auto_apply"] is None, res
+        assert calls == []
+    finally:
+        lib._run_auto_apply = orig_runner
+        if hasattr(settings, "librarian_auto_apply"):
+            del settings.librarian_auto_apply
+        entry.metadata = None
+        _unwire(lib, saved)

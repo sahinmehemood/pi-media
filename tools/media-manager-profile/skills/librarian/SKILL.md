@@ -37,7 +37,8 @@ Series -1003966209940 · Donghua -1004494510060 · Cartoon -1004450903732.
 ## Procedure
 
 1. **Status first.** Run `status`. If `enabled` is false, say so and
-   stop. Note `dry_run` and today's edit count vs the budget — they
+   stop. Note `dry_run`, `auto_apply` (your automation permission:
+   off / safe / all), and today's edit count vs the budget — they
    bound everything below.
 2. **One channel at a time.** Use the channel Yan named, or ask which.
    Pull a `packet`. Remember its `packet_id`; items are numbered (`n`).
@@ -66,9 +67,11 @@ Series -1003966209940 · Donghua -1004494510060 · Cartoon -1004450903732.
    - `gate_failed` → read each item's reason, fix the plan or flag the
      run ❓ with the reason. Never argue with the gate.
 7. **Present and wait.** Send the proposal digest (template). Do NOT
-   apply until Yan replies ✅ — unless the automation setting covers
-   this class (see status / Yan's standing instruction) — and even
-   then, send the apply report afterwards.
+   apply until Yan replies ✅ — UNLESS the `propose` result says
+   `auto_apply` is set: then the server is already applying the plan
+   under Yan's Automation setting. In that case do not ask; wait a
+   few seconds, re-check the proposal via `status`/the panel counts,
+   and send the apply report for what was actually fixed.
 8. **Apply** with `apply --id`. Then send the apply report (template)
    with the Telegram link(s) from the results.
 9. **Close the loop.** Runs you could not decide stay ❓/⛔ in your

@@ -1946,6 +1946,11 @@ async def update_settings_api(payload: dict) -> dict:
         payload["librarian_dry_run"] = bool(payload["librarian_dry_run"])
     if "librarian_auto_apply_tier_a" in payload:
         payload["librarian_auto_apply_tier_a"] = bool(payload["librarian_auto_apply_tier_a"])
+    if "librarian_auto_apply" in payload:
+        _v = str(payload["librarian_auto_apply"] or "off").strip().lower()
+        if _v not in ("off", "safe", "all"):
+            raise HTTPException(status_code=400, detail="'librarian_auto_apply' must be off, safe or all.")
+        payload["librarian_auto_apply"] = _v
     if "librarian_digest" in payload:
         _v = str(payload["librarian_digest"] or "manual").strip().lower()
         if _v not in ("manual", "daily", "weekly"):
@@ -3230,6 +3235,7 @@ async def librarian_bot_status_api(request: Request) -> dict:
     return {
         "enabled": settings.librarian_enabled,
         "dry_run": settings.librarian_dry_run,
+        "auto_apply": settings.librarian_auto_apply,
         "counts": await librarian.panel_counts(),
         "action_state": librarian.ACTION_STATE,
     }
