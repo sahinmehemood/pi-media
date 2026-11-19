@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from Backend import LOGGER
+from Backend.logger import LOGGER
 
 SCHEDULES: dict[str, int] = {
     "off": 0,

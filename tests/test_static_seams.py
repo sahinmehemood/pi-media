@@ -363,3 +363,13 @@ def test_clients_failed_start_is_skipped():
     assert "for client_id, client in results if client" not in clients
     patch = read("patches/integrate.patch")
     assert "diff --git a/Backend/pyrofork/clients.py" in patch
+
+
+def test_automations_imports_logger_from_backend_logger():
+    # Regression guard: `from Backend import LOGGER` ImportErrors in
+    # production (Backend/__init__ does not export LOGGER) and killed
+    # every app start at the FastAPI lifespan hook — the test harness
+    # stub masked it once; never again.
+    text = read("Backend/helper/automations.py")
+    assert "from Backend.logger import LOGGER" in text
+    assert "from Backend import LOGGER" not in text
