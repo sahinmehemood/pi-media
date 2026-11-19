@@ -3213,6 +3213,15 @@ async def librarian_action_api(payload: dict) -> dict:
         return await librarian.delete_alias(str(payload.get("alias_id") or ""))
     if action == "dismiss":
         return await librarian.dismiss_item(str(payload.get("key") or ""))
+    if action == "job_run":
+        from Backend.helper import automations
+        return automations.run_now(str(payload.get("job") or ""))
+    if action == "job_config":
+        from Backend.helper import automations
+        return await automations.set_config(
+            str(payload.get("job") or ""),
+            enabled=payload.get("enabled"),
+            schedule=payload.get("schedule"))
     if action == "modules":
         raw = payload.get("modules") or {}
         clean = {}

@@ -28,7 +28,7 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..95f9ed6 100644
+index 9ae7925..eeaa78e 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
 @@ -70,8 +70,21 @@ from Backend.fastapi.routes.api_routes import (
@@ -63,7 +63,16 @@ index 9ae7925..95f9ed6 100644
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -293,6 +309,50 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -169,6 +185,8 @@ async def _startup():
+     asyncio.create_task(decay_client_failures())
+     from Backend.helper.version_check import version_check_loop
+     asyncio.create_task(version_check_loop())
++    from Backend.helper import automations
++    automations.start()
+ 
+ 
+ #----- Streaming and Stremio routers
+@@ -293,6 +311,50 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -114,7 +123,7 @@ index 9ae7925..95f9ed6 100644
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +873,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +875,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
@@ -142,7 +151,7 @@ index 9ae7925..95f9ed6 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..c6f8333 100644
+index e6d9542..0d25b9a 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -526,7 +535,7 @@ index e6d9542..c6f8333 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3124,197 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3124,206 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -619,6 +628,15 @@ index e6d9542..c6f8333 100644
 +        return await librarian.delete_alias(str(payload.get("alias_id") or ""))
 +    if action == "dismiss":
 +        return await librarian.dismiss_item(str(payload.get("key") or ""))
++    if action == "job_run":
++        from Backend.helper import automations
++        return automations.run_now(str(payload.get("job") or ""))
++    if action == "job_config":
++        from Backend.helper import automations
++        return await automations.set_config(
++            str(payload.get("job") or ""),
++            enabled=payload.get("enabled"),
++            schedule=payload.get("schedule"))
 +    if action == "modules":
 +        raw = payload.get("modules") or {}
 +        clean = {}
@@ -804,7 +822,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..ca5d9f4 100644
+index c53ee43..9519c95 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -868,7 +886,7 @@ index c53ee43..ca5d9f4 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -262,11 +316,95 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +316,99 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -963,6 +981,10 @@ index c53ee43..ca5d9f4 100644
 +        ctx["lib_flagged"] = await librarian.list_flagged()
 +    elif name == "aliases":
 +        ctx["lib_aliases"] = await librarian.list_aliases()
++    elif name == "automations":
++        from Backend.helper import automations
++        ctx["lib_jobs"] = await automations.jobs_view()
++        ctx["lib_schedule_labels"] = automations.SCHEDULE_LABELS
 +    return templates.TemplateResponse(f"librarian/_{name}.html", ctx)
 diff --git a/Backend/fastapi/templates/admin_dashboard.html b/Backend/fastapi/templates/admin_dashboard.html
 index 914b18b..3d989fc 100644

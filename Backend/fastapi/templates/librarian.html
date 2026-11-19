@@ -109,6 +109,10 @@
   <div data-frag="aliases"><p class="muted" style="margin-top:1.2rem">Loading learned aliases…</p></div>
   {% endif %}
 
+  {% if lib_modules.automations %}
+  <div data-frag="automations"><p class="muted" style="margin-top:1.2rem">Loading automations…</p></div>
+  {% endif %}
+
   {% endif %}
 </div>
 
@@ -121,14 +125,34 @@
   }
   fmtTs(document);
   // Below-fold sections load as fragments, only when enabled.
-  document.querySelectorAll('[data-frag]').forEach(async box => {
+  async function loadFrag(box) {
     const name = box.getAttribute('data-frag');
     try {
       const r = await fetch('/admin/librarian/fragment/' + name);
       if (r.ok) { box.innerHTML = await r.text(); fmtTs(box); }
       else { box.innerHTML = ''; }
     } catch (e) { box.innerHTML = ''; }
-  });
+  }
+  document.querySelectorAll('[data-frag]').forEach(loadFrag);
+  function reloadFrag(name) {
+    const box = document.querySelector('[data-frag="' + name + '"]');
+    if (box) loadFrag(box);
+  }
+  async function libJobConfig(job) {
+    const card = document.querySelector('[data-job="' + job + '"]');
+    if (!card) return;
+    const enabled = card.querySelector('[data-job-enabled]').checked;
+    const schedule = card.querySelector('[data-job-schedule]').value;
+    const res = await libPost({action: 'job_config', job, enabled, schedule});
+    if (!res.ok) alert(res.message || 'Could not save the job.');
+    setTimeout(() => reloadFrag('automations'), 400);
+  }
+  async function libJobRun(job, btn) {
+    if (btn) btn.disabled = true;
+    const res = await libPost({action: 'job_run', job});
+    if (!res.ok) alert(res.message || 'Could not start the job.');
+    setTimeout(() => reloadFrag('automations'), 1200);
+  }
   async function libSaveModules(btn) {
     const modules = {};
     document.querySelectorAll('[data-module]').forEach(cb => {

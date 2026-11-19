@@ -1614,13 +1614,15 @@ PAGE_MODULES: list[dict] = [
     {"id": "channels", "title": "Channels & scans", "default": True},
     {"id": "proposals", "title": "Proposals", "default": True},
     {"id": "activity", "title": "Recent fixes", "default": True},
+    {"id": "automations", "title": "Automations", "default": True},
     {"id": "flagged", "title": "Flagged files", "default": False},
     {"id": "aliases", "title": "Learned aliases", "default": False},
 ]
 
 # Sections rendered as lazily-loaded fragments (below the fold); the
 # rest render inline with the page shell.
-FRAGMENT_MODULES = ("proposals", "activity", "flagged", "aliases")
+FRAGMENT_MODULES = ("proposals", "activity", "flagged", "aliases",
+                    "automations")
 
 
 def enabled_modules(stored=None) -> dict:

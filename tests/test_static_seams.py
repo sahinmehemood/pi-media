@@ -339,6 +339,10 @@ def test_librarian_seams():
     assert '"/admin/librarian/fragment/{name}"' in main_py
     assert "data-module" in page
     assert "data-frag" in page
+    # L3 automations: engine actions + ticker started at app startup.
+    assert '"job_config"' in routes
+    assert '"job_run"' in routes
+    assert "automations.start()" in main_py
 
 
 if __name__ == "__main__":

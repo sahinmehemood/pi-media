@@ -407,4 +407,8 @@ async def librarian_fragment(request: Request, name: str,
         ctx["lib_flagged"] = await librarian.list_flagged()
     elif name == "aliases":
         ctx["lib_aliases"] = await librarian.list_aliases()
+    elif name == "automations":
+        from Backend.helper import automations
+        ctx["lib_jobs"] = await automations.jobs_view()
+        ctx["lib_schedule_labels"] = automations.SCHEDULE_LABELS
     return templates.TemplateResponse(f"librarian/_{name}.html", ctx)

@@ -1,0 +1,37 @@
+<h2 class="sec-title">Automations</h2>
+<p class="muted" style="margin:.2rem 0 .8rem;font-size:.85rem">Jobs that run on their own schedule. Changes save immediately; a job due while the app was off runs once when it returns.</p>
+{% if not lib_jobs %}
+<div class="glass-card" style="padding:1rem">No automations registered.</div>
+{% else %}
+{% for j in lib_jobs %}
+<div class="glass-card" style="padding:1rem;margin-bottom:.8rem" data-job="{{ j.id }}">
+  <div style="display:flex;align-items:flex-start;gap:.75rem;flex-wrap:wrap">
+    <div class="row-main">
+      <div class="row-title">{{ j.title }}{% if j.running %} <span class="pill pill-warn">running</span>{% endif %}</div>
+      <div class="row-meta">{{ j.description }}</div>
+      <div class="row-meta" style="margin-top:.3rem">
+        {% if j.last_run %}Last run: <span data-ts="{{ j.last_run }}"></span> · {{ j.last_status }}{% if j.last_summary %} · {{ j.last_summary }}{% endif %}{% else %}Never run yet{% endif %}
+        {% if j.next_run %} · Next: <span data-ts="{{ j.next_run }}"></span>{% endif %}
+      </div>
+    </div>
+    <label style="display:inline-flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer">
+      <input type="checkbox" data-job-enabled {% if j.enabled %}checked{% endif %} onchange="libJobConfig('{{ j.id }}')"> On
+    </label>
+    <select data-job-schedule onchange="libJobConfig('{{ j.id }}')" style="font-size:.85rem;padding:.35rem .5rem;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+      {% for value, label in lib_schedule_labels %}
+      <option value="{{ value }}" {% if j.schedule == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn-ui btn-ghost" onclick="libJobRun('{{ j.id }}', this)"><i class="fa-solid fa-play"></i> Run now</button>
+  </div>
+  {% if j.runs %}
+  <details style="margin-top:.5rem">
+    <summary style="cursor:pointer;font-size:.78rem;color:var(--text-sec)">Run history</summary>
+    {% for r in j.runs %}
+    <div class="row-meta" style="margin-top:.3rem"><span data-ts="{{ r.started_at }}"></span> · {{ r.trigger }} · {{ r.status }}{% if r.summary %} · {{ r.summary }}{% endif %}</div>
+    {% endfor %}
+  </details>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}

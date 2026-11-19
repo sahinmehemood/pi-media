@@ -28,6 +28,7 @@ PLUGIN_FILES=(
   Backend/helper/update_manager.py
   Backend/helper/hermes_bot.py
   Backend/helper/librarian.py
+  Backend/helper/automations.py
   Backend/pyrofork/plugins/dl_link.py
   Backend/pyrofork/plugins/prewarm_hooks.py
   Backend/fastapi/templates/dl_index.html
@@ -47,6 +48,7 @@ PLUGIN_FILES=(
   tests/test_wave2_update_manager.py
   tests/test_hermes_bot.py
   tests/test_librarian.py
+  tests/test_automations.py
   docs/librarian/DESIGN.md
   docs/librarian/DESIGN-v4.md
   docs/librarian/DESIGN-v5.md
