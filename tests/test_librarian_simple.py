@@ -45,6 +45,11 @@ class FakeCursor:
         self._docs = docs
         self._limit = None
 
+    def sort(self, key, direction=1):
+        self._docs = sorted(self._docs, key=lambda d: d.get(key) or 0,
+                            reverse=direction < 0)
+        return self
+
     def limit(self, n):
         self._limit = n
         return self
@@ -225,6 +230,19 @@ def test_counts_are_straight():
     deps.ledger.docs.append({"key": "k2", "status": "fixed"})
     out = _run(ls.counts(deps))
     assert out == {"ok": True, "waiting": 1, "fixed": 1, "fixed_today": 0}
+
+
+def test_recent_fixes_newest_first():
+    deps = _deps()
+    deps.fixes.docs.append({"chat_id": ANI, "msg_id": 1, "before": "a",
+                            "after": "b", "ts": 100.0, "indexed": True,
+                            "reverted": False})
+    deps.fixes.docs.append({"chat_id": ANI, "msg_id": 2, "before": "c",
+                            "after": "d", "ts": 200.0, "indexed": False,
+                            "reverted": True})
+    out = _run(ls.recent_fixes(deps))
+    assert [f["msg_id"] for f in out] == [2, 1]
+    assert out[0]["reverted"] and out[0]["when"]
 
 
 def test_disabled_refuses():

@@ -241,6 +241,24 @@ async def _fixes_today(deps: Deps) -> int:
         {"ts": {"$gte": start}, "reverted": False})
 
 
+async def recent_fixes(deps: Deps, limit=20):
+    """The latest fixes, newest first — what the page shows, with undo."""
+    if deps.fixes is None:
+        return []
+    out = []
+    cursor = deps.fixes.find({}).sort("ts", -1).limit(int(limit))
+    async for doc in cursor:
+        ts = doc.get("ts") or 0
+        out.append({
+            "chat_id": doc.get("chat_id"), "msg_id": doc.get("msg_id"),
+            "before": doc.get("before"), "after": doc.get("after"),
+            "when": datetime.fromtimestamp(ts, IST).strftime("%d %b %H:%M")
+                    if ts else "",
+            "indexed": doc.get("indexed"),
+            "reverted": bool(doc.get("reverted"))})
+    return out
+
+
 async def counts(deps: Deps):
     if deps.ledger is None:
         return {"ok": False, "message": "ledger unavailable"}

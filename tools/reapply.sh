@@ -41,6 +41,7 @@ Backend/helper/librarian_simple.py
   Backend/pyrofork/plugins/prewarm_hooks.py
   Backend/fastapi/templates/dl_index.html
   Backend/fastapi/templates/librarian.html
+  Backend/fastapi/templates/librarian_simple.html
   Backend/fastapi/templates/librarian/_proposals.html
   Backend/fastapi/templates/librarian/_activity.html
   Backend/fastapi/templates/librarian/_flagged.html

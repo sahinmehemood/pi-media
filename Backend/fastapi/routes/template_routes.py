@@ -385,6 +385,40 @@ async def librarian_page(request: Request, _: bool = Depends(require_auth)):
     return templates.TemplateResponse("librarian.html", ctx)
 
 
+#----- Librarian, simple: one plain page — counts, waiting, recent
+# fixes with undo. No modules, no fragments, no jargon.
+
+async def librarian_simple_page(request: Request,
+                                _: bool = Depends(require_auth)):
+    from Backend.helper import librarian_simple
+    from Backend.helper.settings_manager import SettingsManager
+
+    deps = librarian_simple.real_deps()
+    settings = SettingsManager.current()
+    counts = await librarian_simple.counts(deps)
+    waiting = await librarian_simple.waiting(deps, limit=50)
+    ctx = {"request": request,
+           "librarian_enabled": settings.librarian_enabled,
+           "librarian_dry_run": settings.librarian_dry_run,
+           "budget": settings.librarian_edit_budget_per_day,
+           "waiting": counts.get("waiting", 0),
+           "fixed": counts.get("fixed", 0),
+           "fixed_today": counts.get("fixed_today", 0),
+           "waiting_files": waiting.get("files", []),
+           "fixes": await librarian_simple.recent_fixes(deps)}
+    return templates.TemplateResponse("librarian_simple.html", ctx)
+
+
+async def librarian_simple_undo(request: Request,
+                                _: bool = Depends(require_auth),
+                                chat_id: int = Form(...),
+                                msg_id: int = Form(...)):
+    from Backend.helper import librarian_simple
+    await librarian_simple.undo(librarian_simple.real_deps(),
+                                chat_id, msg_id)
+    return RedirectResponse("/librarian-simple", status_code=303)
+
+
 async def librarian_fragment(request: Request, name: str,
                              _: bool = Depends(require_auth)):
     """One below-fold Librarian section, rendered on demand. A module

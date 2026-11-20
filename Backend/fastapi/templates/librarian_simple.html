@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Librarian</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0 auto; max-width: 760px;
+         padding: 16px; line-height: 1.45; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .state { opacity: .75; font-size: 14px; margin-bottom: 16px; }
+  .counts { display: flex; gap: 12px; margin-bottom: 20px; }
+  .count { border: 1px solid; border-radius: 10px; padding: 10px 14px; }
+  .count b { font-size: 22px; display: block; }
+  .count span { font-size: 13px; opacity: .75; }
+  h2 { font-size: 16px; margin: 20px 0 8px; }
+  .item { border-top: 1px solid; padding: 8px 0; font-size: 14px;
+          word-break: break-word; }
+  .meta { opacity: .65; font-size: 12px; }
+  .arrow { opacity: .6; }
+  button { font: inherit; font-size: 13px; padding: 2px 10px; cursor: pointer; }
+  .reverted { opacity: .55; }
+</style>
+</head>
+<body>
+<h1>Librarian</h1>
+<div class="state">
+  {% if librarian_enabled %}On{% else %}Off (Settings){% endif %}
+  {% if librarian_dry_run %} · Test mode — fixes change nothing{% endif %}
+  · Budget: {{ fixed_today }} of {{ budget }} edits used today
+</div>
+
+<div class="counts">
+  <div class="count"><b>{{ waiting }}</b><span>Waiting</span></div>
+  <div class="count"><b>{{ fixed }}</b><span>Fixed</span></div>
+  <div class="count"><b>{{ fixed_today }}</b><span>Fixed today</span></div>
+</div>
+
+<h2>Waiting</h2>
+{% for f in waiting_files %}
+<div class="item">
+  {{ (f.caption or "(no caption)").split("\n")[0] }}
+  <div class="meta">channel {{ f.chat_id }} · msg {{ f.msg_id }}
+    {% if f.episode %}· episode {{ f.episode }}{% endif %}
+    {% if f.special %}· special{% endif %}
+    {% if not f.located %}· location unknown{% endif %}</div>
+</div>
+{% else %}
+<div class="item">Nothing waiting.</div>
+{% endfor %}
+
+<h2>Recent fixes</h2>
+{% for fx in fixes %}
+<div class="item{% if fx.reverted %} reverted{% endif %}">
+  {{ (fx.before or "").split("\n")[0] }}
+  <span class="arrow">→</span>
+  {{ (fx.after or "").split("\n")[0] }}
+  <div class="meta">
+    {% if fx.when %}{{ fx.when }} · {% endif %}
+    {% if fx.indexed %}indexed{% else %}index not confirmed{% endif %}
+    {% if fx.reverted %} · undone{% else %}
+    <form method="post" action="/librarian-simple/undo" style="display:inline">
+      <input type="hidden" name="chat_id" value="{{ fx.chat_id }}">
+      <input type="hidden" name="msg_id" value="{{ fx.msg_id }}">
+      <button type="submit">Undo</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="item">No fixes yet.</div>
+{% endfor %}
+</body>
+</html>

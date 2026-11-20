@@ -28,7 +28,7 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..d5acf0d 100644
+index 9ae7925..952dd36 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
 @@ -70,8 +70,25 @@ from Backend.fastapi.routes.api_routes import (
@@ -57,17 +57,19 @@ index 9ae7925..d5acf0d 100644
      clear_manual_session_api,
      search_manual_session_api,
      set_manual_session_api,
-@@ -124,6 +141,9 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+@@ -124,6 +141,11 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
  from Backend.fastapi.routes.template_routes import (
      admin_access_page,
      admin_dashboard_page,
 +    dl_index_page,
 +    librarian_page,
 +    librarian_fragment,
++    librarian_simple_page,
++    librarian_simple_undo,
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -169,6 +189,8 @@ async def _startup():
+@@ -169,6 +191,8 @@ async def _startup():
      asyncio.create_task(decay_client_failures())
      from Backend.helper.version_check import version_check_loop
      asyncio.create_task(version_check_loop())
@@ -76,7 +78,7 @@ index 9ae7925..d5acf0d 100644
  
  
  #----- Streaming and Stremio routers
-@@ -293,6 +315,130 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +317,138 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -95,6 +97,14 @@ index 9ae7925..d5acf0d 100644
 +@app.get("/admin/librarian/fragment/{name}", response_class=HTMLResponse)
 +async def admin_librarian_fragment(request: Request, name: str, _: bool = Depends(require_auth)):
 +    return await librarian_fragment(request, name, _)
++
++@app.get("/librarian-simple", response_class=HTMLResponse)
++async def simple_librarian_page(request: Request, _: bool = Depends(require_auth)):
++    return await librarian_simple_page(request, _)
++
++@app.post("/librarian-simple/undo")
++async def simple_librarian_undo(request: Request, _: bool = Depends(require_auth), chat_id: int = Form(...), msg_id: int = Form(...)):
++    return await librarian_simple_undo(request, _, chat_id, msg_id)
 +
 +@app.post("/api/admin/librarian/action")
 +async def librarian_action(payload: dict, _: bool = Depends(require_auth)):
@@ -207,7 +217,7 @@ index 9ae7925..d5acf0d 100644
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +959,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +969,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
@@ -995,7 +1005,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..4286948 100644
+index c53ee43..556ec71 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -1059,7 +1069,7 @@ index c53ee43..4286948 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -262,11 +316,135 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +316,169 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -1130,6 +1140,40 @@ index c53ee43..4286948 100644
 +                                         if w else None)})
 +        ctx["lib_channels"] = rows
 +    return templates.TemplateResponse("librarian.html", ctx)
++
++
++#----- Librarian, simple: one plain page — counts, waiting, recent
++# fixes with undo. No modules, no fragments, no jargon.
++
++async def librarian_simple_page(request: Request,
++                                _: bool = Depends(require_auth)):
++    from Backend.helper import librarian_simple
++    from Backend.helper.settings_manager import SettingsManager
++
++    deps = librarian_simple.real_deps()
++    settings = SettingsManager.current()
++    counts = await librarian_simple.counts(deps)
++    waiting = await librarian_simple.waiting(deps, limit=50)
++    ctx = {"request": request,
++           "librarian_enabled": settings.librarian_enabled,
++           "librarian_dry_run": settings.librarian_dry_run,
++           "budget": settings.librarian_edit_budget_per_day,
++           "waiting": counts.get("waiting", 0),
++           "fixed": counts.get("fixed", 0),
++           "fixed_today": counts.get("fixed_today", 0),
++           "waiting_files": waiting.get("files", []),
++           "fixes": await librarian_simple.recent_fixes(deps)}
++    return templates.TemplateResponse("librarian_simple.html", ctx)
++
++
++async def librarian_simple_undo(request: Request,
++                                _: bool = Depends(require_auth),
++                                chat_id: int = Form(...),
++                                msg_id: int = Form(...)):
++    from Backend.helper import librarian_simple
++    await librarian_simple.undo(librarian_simple.real_deps(),
++                                chat_id, msg_id)
++    return RedirectResponse("/librarian-simple", status_code=303)
 +
 +
 +async def librarian_fragment(request: Request, name: str,
