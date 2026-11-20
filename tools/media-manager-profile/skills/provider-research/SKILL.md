@@ -1,100 +1,73 @@
 ---
 name: provider-research
 description: Identify titles with evidence — IDs first, two sources agree
-version: 2.0.0
+version: 3.0.0
 platforms: [linux]
 metadata:
   hermes:
-    tags: [research, tmdb, tvdb, kitsu, bangumi, identification]
+    tags: [research, tmdb, tvdb, anilist, kitsu, identification]
     category: media
-    requires_toolsets: [terminal, web]
+    requires_toolsets: [terminal]
 ---
 
 # Provider research — how to identify with evidence
 
 ## When to Use
 
-For every run you must identify, before building a proposal. This is
-the method; the naming skills hold the per-type knowledge, and
-`specials-and-arcs` governs anything special-shaped.
+For every title you must identify or number, before writing any
+caption. The app serves all provider data through ONE gateway —
+you never call providers raw:
 
-## The evidence ladder (strongest first)
+- `librarian_cli.py lookup <name> [--type <type>]` — merged
+  identity: every known ID + every title variant per candidate.
+- `librarian_cli.py series <provider:id>` — episode lists:
+  aired / absolute / Season 0 specials, titles + air dates.
+- `librarian_cli.py crossid <provider:id>` — every other ID.
 
-1. **An explicit ID** (IMDb tt…, TMDB id, TVDB id, Kitsu id) attached
-   to the title by a reliable source. An ID settles identity; only
-   numbering remains to verify.
-2. **Two providers agreeing** on title + structure (episode list,
-   season layout, year).
-3. **One provider + the file's own internal evidence** (episode
-   count in the batch, episode titles, air dates) agreeing.
-4. **Yan's own evidence** — a screenshot of a provider page, or his
-   direct statement of a structure. Owner evidence outranks provider
-   pages when they conflict; say in the note that it decided the call.
-5. Anything less → ❓ flag for Yan. Never propose from a single fuzzy
-   title match alone.
+Results are cached; a provider that is down is named in
+`providers_down`. Down is weather, never "no match".
 
-## Procedure
+## Who owns what (research-settled)
 
-1. **Start with the app's own search**: `librarian-cli.py search`
-   returns the app's candidates (the same matcher family the gate
-   uses). Note candidate IDs.
-2. **Cross-check the EPISODE LIST, not just the title.** For series,
-   fetch the candidate's episode list from a second provider and
-   confirm: total episodes per season, the episode your file claims
-   to be, and any specials. A title match with the wrong episode
-   count is a wrong match.
-3. **Providers by type** (detail in the naming skills):
-   - Anime: Kitsu and AniList for identity/season splits; TVDB/TMDB
-     for the numbering the app will use.
-   - Donghua: **Bangumi (bgm.tv) is the ground truth for structure**
-     (arcs, specials, counts). Identify there, then project to the
-     TMDB/TVDB/Kitsu ID the app can stamp.
-   - Western TV: TVDB structure first; TMDB second.
-   - Movies: TMDB first; IMDb id preferred for the stamp.
-   - Cartoons: TVDB and TMDB OFTEN DISAGREE on splits — check both,
-     record which one your plan follows in the note.
-4. **Specials rule.** A specials plan must name its provider and the
-   special's title (note format: "specials per TVDB: '<listed
-   title>'"). TVDB and TMDB season-0 lists differ in count and
-   order; a bare S00Exx without a named provider is not evidence.
-   Full method: `specials-and-arcs`.
-5. **Record the evidence in the plan note**, one line per run:
-   `sources: <A> + <B> · id: <provider id> · checked: episode list
-   (<seasons/counts>)`. When the app teaches an alias from an
-   approved fix, later runs of the same stem inherit it — the packet
-   shows taught aliases; trust them over a fresh fuzzy match.
-6. **Escalate before flagging.** If the fast pass is ambiguous,
-   retry once with deeper research (episode titles, air dates,
-   Bangumi/AniList pages). Still ambiguous → ❓ with the two
-   candidate answers stated, so Yan decides in one glance.
+| Media | Identity & titles | Numbering |
+|---|---|---|
+| Western series | TMDB | TVDB aired |
+| Movies | TMDB (IMDb = join key) | — |
+| Cartoons | TVDB | TVDB aired/absolute |
+| Anime series | AniList | TVDB aired + absolute |
+| Long-running anime | AniList | TVDB absolute only |
+| Anime movie/OVA | AniList/MAL | the entry is the unit |
+| Donghua | AniList + TMDB jointly | per show — see below |
 
-## Worked pattern (generic)
+- **AniList** is the anime/donghua title bridge: romaji (≈pinyin),
+  English, native, synonyms, one entry per cour, `idMal` hop. It
+  has NO episode lists.
+- **TVDB** is the numbering backbone: aired + absolute + Season 0
+  on one record set, `remoteIds` for cross-ID. Its search rows
+  and records can still be the WRONG namesake — verify by year
+  and episode titles.
+- **TMDB** carries donghua jointly with AniList; its season
+  splits differ from TVDB's, and its Season 0 often holds the
+  special arcs TVDB lacks. When both answer, `series` returns
+  both lists — compare them; that comparison is the proof.
+- **Jikan/MAL** episode lists are unreachable from this server
+  (listed in `providers_down`); do not wait for them.
+- **Kitsu** is a mappings oracle/fallback only. **IMDb** has no
+  API — it is a join key (via Cinemeta).
 
-A run's stem is an abbreviation. Search returns two candidates with
-the same expansion: an original and a remake, three years apart. The
-title alone cannot decide. The run's files carry a year fragment in
-one file name and the batch count matches the remake's season count,
-not the original's. Two independent signals (year fragment + count)
-agree on the remake → propose with the remake's ID, note both
-signals. Had only the year fragment existed, this would be ❓.
+## The verification standard
 
-## Pitfalls
-
-- **Same title, different work**: remakes and same-name series are
-  separated by YEAR — always carry the year in your search and plan.
-- **A season that "exists" proves nothing**: S03E01 existing does
-  not make an SP3 file S03E01. Structure (what the file IS) outranks
-  slot availability (where it could fit).
-- **Provider episode counts conflict** on long runners and donghua —
-  state both counts in the note when they differ; follow the type
-  skill's tie-break rule.
-- **Cinemeta (IMDb) series data** can lag specials by months; for
-  specials prefer TVDB/TMDB structure + an IMDb stamp only when the
-  IMDb episode list also carries the special.
-- Never invent an ID. An ID you cannot cite from a provider page or
-  the app's search does not go in a plan.
-
-## Verification
-
-- Every ✅ run in your digest can answer: which two sources, which
-  IDs, which episode list was checked. If you cannot, it is ❓.
+1. Identity is proven by IDs, never by name similarity. Two
+   names for one show (pinyin vs western) join only through a
+   shared ID.
+2. Numbering is proven by EPISODE TITLE or AIR DATE against the
+   actual file — never by episode counts.
+3. Absolute ↔ season/episode conversions are LOOKED UP in the
+   provider's own absolute list, never computed by summing
+   season lengths.
+4. Donghua (and any split-cour show): decide ONCE which
+   provider's numbering the files follow, prove it by titles,
+   and store it in the series record (`record-set`). Follow the
+   record forever after.
+5. No proof → the series is conflicted. Escalate with the
+   evidence; never pick the least-bad numbering silently.
