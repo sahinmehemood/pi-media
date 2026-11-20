@@ -24,6 +24,8 @@ ANILIST_URL = "https://graphql.anilist.co"
 JIKAN_URL = "https://api.jikan.moe/v4"
 CACHE_TTL = {"lookup": 24 * 3600, "series": 7 * 24 * 3600,
              "crossid": 7 * 24 * 3600}
+# Bump when a payload shape changes — old-shape entries are ignored.
+CACHE_V = "v2"
 
 _ANILIST_QUERY = """
 query ($search: String) {
@@ -211,7 +213,7 @@ def _merge(cands: list, cand: dict):
 async def lookup(deps: GwDeps, name: str, media_type: str = ""):
     import asyncio
 
-    key = f"lookup:{media_type}:{name.strip().lower()}"
+    key = f"{CACHE_V}:lookup:{media_type}:{name.strip().lower()}"
     hit = await _cache_get(deps, key)
     if hit is not None:
         return {**hit, "cached": True}
@@ -333,7 +335,7 @@ def parse_ref(ref: str):
 
 async def crossid(deps: GwDeps, ref: str):
     provider, value = parse_ref(ref)
-    key = f"crossid:{provider}:{value}"
+    key = f"{CACHE_V}:crossid:{provider}:{value}"
     hit = await _cache_get(deps, key)
     if hit is not None:
         return {**hit, "cached": True}
@@ -398,7 +400,7 @@ def _tvdb_ep_row(ep: dict, absolute_n=None):
 
 async def series(deps: GwDeps, ref: str):
     provider, value = parse_ref(ref)
-    key = f"series:{provider}:{value}"
+    key = f"{CACHE_V}:series:{provider}:{value}"
     hit = await _cache_get(deps, key)
     if hit is not None:
         return {**hit, "cached": True}
