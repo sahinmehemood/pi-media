@@ -82,6 +82,22 @@ from Backend.fastapi.routes.api_routes import (
     librarian_simple_status_api,
     librarian_simple_undo_api,
     librarian_simple_waiting_api,
+    librarian_gw_crossid_api,
+    librarian_gw_lookup_api,
+    librarian_gw_series_api,
+    librarian_v6_alias_forget_api,
+    librarian_v6_alias_list_api,
+    librarian_v6_file_api,
+    librarian_v6_find_api,
+    librarian_v6_fix_batch_api,
+    librarian_v6_grouped_api,
+    librarian_v6_history_api,
+    librarian_v6_mode_api,
+    librarian_v6_park_api,
+    librarian_v6_record_get_api,
+    librarian_v6_record_set_api,
+    librarian_v6_scan_api,
+    librarian_v6_scan_status_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
     update_manager_check_api,
@@ -384,6 +400,70 @@ async def librarian_simple_fix(request: Request):
 @app.post("/api/librarian/simple/undo")
 async def librarian_simple_undo(request: Request):
     return await librarian_simple_undo_api(request)
+
+@app.get("/api/librarian/v6/waiting-grouped")
+async def librarian_v6_grouped(request: Request):
+    return await librarian_v6_grouped_api(request)
+
+@app.get("/api/librarian/v6/find")
+async def librarian_v6_find(request: Request):
+    return await librarian_v6_find_api(request)
+
+@app.get("/api/librarian/v6/file")
+async def librarian_v6_file(request: Request):
+    return await librarian_v6_file_api(request)
+
+@app.get("/api/librarian/v6/history")
+async def librarian_v6_history(request: Request):
+    return await librarian_v6_history_api(request)
+
+@app.post("/api/librarian/v6/fix-batch")
+async def librarian_v6_fix_batch(request: Request):
+    return await librarian_v6_fix_batch_api(request)
+
+@app.get("/api/librarian/v6/record")
+async def librarian_v6_record_get(request: Request):
+    return await librarian_v6_record_get_api(request)
+
+@app.post("/api/librarian/v6/record")
+async def librarian_v6_record_set(request: Request):
+    return await librarian_v6_record_set_api(request)
+
+@app.get("/api/librarian/v6/aliases")
+async def librarian_v6_aliases(request: Request):
+    return await librarian_v6_alias_list_api(request)
+
+@app.post("/api/librarian/v6/alias-forget")
+async def librarian_v6_alias_forget(request: Request):
+    return await librarian_v6_alias_forget_api(request)
+
+@app.post("/api/librarian/v6/park")
+async def librarian_v6_park(request: Request):
+    return await librarian_v6_park_api(request)
+
+@app.get("/api/librarian/v6/mode")
+async def librarian_v6_mode(request: Request):
+    return await librarian_v6_mode_api(request)
+
+@app.post("/api/librarian/v6/scan")
+async def librarian_v6_scan(request: Request):
+    return await librarian_v6_scan_api(request)
+
+@app.get("/api/librarian/v6/scan-status")
+async def librarian_v6_scan_status(request: Request):
+    return await librarian_v6_scan_status_api(request)
+
+@app.get("/api/librarian/gw/lookup")
+async def librarian_gw_lookup(request: Request):
+    return await librarian_gw_lookup_api(request)
+
+@app.get("/api/librarian/gw/series")
+async def librarian_gw_series(request: Request):
+    return await librarian_gw_series_api(request)
+
+@app.get("/api/librarian/gw/crossid")
+async def librarian_gw_crossid(request: Request):
+    return await librarian_gw_crossid_api(request)
 
 # --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
 from Backend.librarian_v2.api import (

@@ -66,6 +66,8 @@ def _simple(args) -> dict:
     if cmd == "status":
         return call("GET", "/api/librarian/simple/status")
     if cmd == "waiting":
+        if args.grouped:
+            return call("GET", "/api/librarian/v6/waiting-grouped")
         q = f"limit={args.limit}"
         if args.channel:
             q += f"&channel={args.channel}"
@@ -80,6 +82,58 @@ def _simple(args) -> dict:
         return call("POST", "/api/librarian/simple/undo",
                     {"chat_id": int(args.chat), "msg_id": int(args.msg)})
     return {"ok": False, "message": f"unknown simple command {cmd}"}
+
+
+def _v6(args) -> dict:
+    """Librarian v6 toolbox — thin pass-throughs (design §3)."""
+    from urllib.parse import quote
+    cmd = args.cmd
+    if cmd == "find":
+        return call("GET", f"/api/librarian/v6/find?q={quote(args.text)}")
+    if cmd == "file":
+        return call("GET", f"/api/librarian/v6/file?chat={args.chat}"
+                           f"&msg={args.msg}")
+    if cmd == "lookup":
+        q = f"q={quote(args.name)}"
+        if args.type:
+            q += f"&type={quote(args.type)}"
+        return call("GET", f"/api/librarian/gw/lookup?{q}")
+    if cmd == "series":
+        return call("GET", f"/api/librarian/gw/series?ref={quote(args.ref)}")
+    if cmd == "crossid":
+        return call("GET", f"/api/librarian/gw/crossid?ref={quote(args.ref)}")
+    if cmd == "history":
+        q = "today=1" if args.today else ""
+        if args.stem:
+            q += ("&" if q else "") + f"stem={quote(args.stem)}"
+        return call("GET", f"/api/librarian/v6/history?{q}")
+    if cmd == "fix-batch":
+        with open(args.file, "r", encoding="utf-8") as fh:
+            return call("POST", "/api/librarian/v6/fix-batch",
+                        {"fixes": json.load(fh)})
+    if cmd == "record-get":
+        return call("GET", f"/api/librarian/v6/record?channel={args.channel}"
+                           f"&stem={quote(args.stem)}")
+    if cmd == "record-set":
+        with open(args.file, "r", encoding="utf-8") as fh:
+            return call("POST", "/api/librarian/v6/record", json.load(fh))
+    if cmd == "aliases":
+        q = f"?channel={args.channel}" if args.channel else ""
+        return call("GET", f"/api/librarian/v6/aliases{q}")
+    if cmd == "alias-forget":
+        return call("POST", "/api/librarian/v6/alias-forget",
+                    {"channel": int(args.channel), "stem": args.stem})
+    if cmd in ("park", "unpark"):
+        return call("POST", "/api/librarian/v6/park",
+                    {"key": args.key, "parked": cmd == "park"})
+    if cmd == "scan":
+        body = {"channel": int(args.channel)} if args.channel else {}
+        return call("POST", "/api/librarian/v6/scan", body)
+    if cmd == "scan-status":
+        return call("GET", "/api/librarian/v6/scan-status")
+    if cmd == "mode":
+        return call("GET", "/api/librarian/v6/mode")
+    return {"ok": False, "message": f"unknown v6 command {cmd}"}
 
 
 def _v2(args) -> dict:
@@ -158,11 +212,48 @@ def main() -> int:
     p.add_argument("--channel", default="")
     p.add_argument("--stem", default="")
     p.add_argument("--limit", type=int, default=30)
+    p.add_argument("--grouped", action="store_true")
     p = smpsub.add_parser("fix")
     p.add_argument("--file", required=True)
     p = smpsub.add_parser("undo")
     p.add_argument("--chat", required=True)
     p.add_argument("--msg", required=True)
+    # --- Librarian v6 toolbox ---
+    p = sub.add_parser("find")
+    p.add_argument("text")
+    p = sub.add_parser("file")
+    p.add_argument("--chat", required=True)
+    p.add_argument("--msg", required=True)
+    p = sub.add_parser("lookup")
+    p.add_argument("name")
+    p.add_argument("--type", default="")
+    p = sub.add_parser("series")
+    p.add_argument("ref")
+    p = sub.add_parser("crossid")
+    p.add_argument("ref")
+    p = sub.add_parser("history")
+    p.add_argument("--stem", default="")
+    p.add_argument("--today", action="store_true")
+    p = sub.add_parser("fix-batch")
+    p.add_argument("--file", required=True)
+    p = sub.add_parser("record-get")
+    p.add_argument("--channel", required=True)
+    p.add_argument("--stem", required=True)
+    p = sub.add_parser("record-set")
+    p.add_argument("--file", required=True)
+    p = sub.add_parser("aliases")
+    p.add_argument("--channel", default="")
+    p = sub.add_parser("alias-forget")
+    p.add_argument("--channel", required=True)
+    p.add_argument("--stem", required=True)
+    p = sub.add_parser("park")
+    p.add_argument("--key", required=True)
+    p = sub.add_parser("unpark")
+    p.add_argument("--key", required=True)
+    p = sub.add_parser("scan")
+    p.add_argument("--channel", default="")
+    sub.add_parser("scan-status")
+    sub.add_parser("mode")
     # --- Librarian v2 (Work Orders) ---
     v2 = sub.add_parser("v2")
     v2sub = v2.add_subparsers(dest="v2cmd", required=True)
@@ -215,6 +306,11 @@ def main() -> int:
         out = call("POST", "/api/librarian/rollback", {"proposal_id": args.id})
     elif args.cmd == "simple":
         out = _simple(args)
+    elif args.cmd in ("find", "file", "lookup", "series", "crossid",
+                      "history", "fix-batch", "record-get", "record-set",
+                      "aliases", "alias-forget", "park", "unpark",
+                      "scan", "scan-status", "mode"):
+        out = _v6(args)
     elif args.cmd == "v2":
         out = _v2(args)
     else:  # pragma: no cover

@@ -106,6 +106,14 @@ class FakeColl:
             doc.update(update.get("$set") or {})
             self.docs.append(doc)
 
+    async def delete_one(self, query):
+        from types import SimpleNamespace as NS
+        for i, d in enumerate(self.docs):
+            if _match(d, query):
+                del self.docs[i]
+                return NS(deleted_count=1)
+        return NS(deleted_count=0)
+
 
 def _deps(**over):
     state = {"captions": {(ANI, 101): "PW - E77 [E-SUB] 4K.mkv"},
@@ -132,9 +140,21 @@ def _deps(**over):
 
     settings = SimpleNamespace(librarian_enabled=True,
                                librarian_dry_run=False,
-                               librarian_edit_budget_per_day=50)
+                               librarian_edit_budget_per_day=50,
+                               librarian_channels=[ANI],
+                               librarian_auto_apply="",
+                               librarian_digest="manual")
     deps = ls.Deps(read_caption, edit_caption, indexed_ids, ledger,
                    FakeColl(), fixes, teach_alias, settings)
+    deps.records = FakeColl()
+    deps.aliases = FakeColl([{
+        "_id": f"{ANI}:pw", "channel": ANI, "stem": "pw",
+        "imdb_id": "tt14986786", "tmdb_id": None, "title": "Perfect World"}])
+
+    async def media_search(text):
+        return [{"title": "Perfect World", "media_type": "tv",
+                 "tmdb_id": 1, "imdb_id": "tt14986786", "year": 2021}]
+    deps.media_search = media_search
     deps._state = state
     for k, v in over.items():
         setattr(deps, k, v)
@@ -230,6 +250,113 @@ def test_counts_are_straight():
     deps.ledger.docs.append({"key": "k2", "status": "fixed"})
     out = _run(ls.counts(deps))
     assert out == {"ok": True, "waiting": 1, "fixed": 1, "fixed_today": 0}
+
+
+def test_waiting_grouped_by_series():
+    deps = _deps()
+    deps.ledger.docs.append({
+        "key": "k2", "status": "open", "scan_chat_id": ANI,
+        "scan_msg_id": 102, "caption": "PW - E78 [E-SUB] 4K.mkv",
+        "bits": {"stem": "pw", "season": None, "episode": 78,
+                 "special": None, "year": None}, "reason_code": "no-match"})
+    out = _run(ls.waiting_grouped(deps))
+    g = out["groups"][0]
+    assert g["stem"] == "pw" and g["count"] == 2
+    assert g["channel_name"] == "Ani" and g["episodes"] == "77–78"
+    assert [f["episode"] for f in g["files"]] == [77, 78]
+
+
+def test_find_searches_index_and_ledger():
+    deps = _deps()
+    out = _run(ls.find(deps, "perfect"))
+    assert out["indexed"] and out["indexed"][0]["imdb_id"] == "tt14986786"
+    out = _run(ls.find(deps, "pw"))
+    assert out["ledger"] and out["ledger"][0]["key"] == "k1"
+
+
+def test_fix_batch_applies_in_order_and_reports_each():
+    deps = _deps()
+    deps._state["index"][(ANI, 101)] = ("tt14986786", None)
+    deps._state["captions"][(ANI, 102)] = "PW - E78 [E-SUB] 4K.mkv"
+    deps._state["index"][(ANI, 102)] = ("tt14986786", None)
+    items = [
+        {"chat_id": ANI, "msg_id": 101, "expected_caption": OLD,
+         "new_caption": NEW, "key": "k1", "stem": "pw"},
+        {"chat_id": ANI, "msg_id": 102,
+         "expected_caption": "PW - E78 [E-SUB] 4K.mkv",
+         "new_caption": NEW, "stem": "pw"}]
+    out = _run(ls.fix_batch(deps, items))
+    assert out["applied"] == 2 and out["stopped"] is None
+    assert all(r["ok"] for r in out["results"])
+
+
+def test_fix_batch_stops_on_flood_wait():
+    deps = _deps()
+
+    async def flood(chat, msg, caption):
+        err = RuntimeError("flood")
+        err.retry_after = 9
+        raise err
+    deps.edit_caption = flood
+    items = [{"chat_id": ANI, "msg_id": 101, "expected_caption": OLD,
+              "new_caption": NEW},
+             {"chat_id": ANI, "msg_id": 102, "expected_caption": OLD,
+              "new_caption": NEW}]
+    out = _run(ls.fix_batch(deps, items))
+    assert out["applied"] == 0 and "flood" in out["stopped"]
+    assert out["results"][1]["skipped"]
+
+
+def test_series_record_roundtrip():
+    deps = _deps()
+    out = _run(ls.series_record_get(deps, ANI, "pw"))
+    assert out["record"] is None
+    rec = {"channel": ANI, "stem": "pw", "media_type": "donghua",
+           "ids": {"imdb": "tt14986786"},
+           "numbering": {"source": "tvdb", "order": "aired", "offset": 0},
+           "status": "verified"}
+    out = _run(ls.series_record_set(deps, rec))
+    assert out["ok"]
+    out = _run(ls.series_record_get(deps, ANI, "pw"))
+    assert out["record"]["numbering"]["source"] == "tvdb"
+
+
+def test_alias_list_and_forget():
+    deps = _deps()
+    out = _run(ls.alias_list(deps))
+    assert out["count"] == 1
+    out = _run(ls.alias_forget(deps, ANI, "pw"))
+    assert out["forgotten"]
+    out = _run(ls.alias_list(deps))
+    assert out["count"] == 0
+
+
+def test_park_hides_from_waiting_and_unpark_restores():
+    deps = _deps()
+    out = _run(ls.park(deps, "k1"))
+    assert out["ok"]
+    out = _run(ls.waiting(deps))
+    assert out["count"] == 0
+    _run(ls.park(deps, "k1", parked=False))
+    out = _run(ls.waiting(deps))
+    assert out["count"] == 1
+
+
+def test_history_filters_by_stem():
+    deps = _deps()
+    deps._state["index"][(ANI, 101)] = ("tt14986786", None)
+    _run(ls.fix(deps, ANI, 101, NEW, OLD, key="k1", stem="pw"))
+    out = _run(ls.history(deps, stem="pw"))
+    assert out["count"] == 1 and out["fixes"][0]["stem"] == "pw"
+    out = _run(ls.history(deps, stem="other"))
+    assert out["count"] == 0
+
+
+def test_mode_info_reports_settings():
+    deps = _deps()
+    out = _run(ls.mode_info(deps))
+    assert out["enabled"] and out["channels"] == [ANI]
+    assert out["channel_names"] == ["Ani"]
 
 
 def test_recent_fixes_newest_first():

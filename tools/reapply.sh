@@ -29,6 +29,7 @@ PLUGIN_FILES=(
   Backend/helper/hermes_bot.py
   Backend/helper/librarian.py
 Backend/helper/librarian_simple.py
+Backend/helper/librarian_gateway.py
   Backend/helper/automations.py
   Backend/librarian_v2/__init__.py
   Backend/librarian_v2/schema.sql
@@ -69,6 +70,7 @@ Backend/helper/librarian_simple.py
   tests/test_librarian_v2_orders.py
   tests/test_librarian_v2_api.py
   tests/test_librarian_simple.py
+  tests/test_librarian_gateway.py
   docs/librarian/DESIGN.md
   docs/librarian/DESIGN-v4.md
   docs/librarian/DESIGN-v5.md

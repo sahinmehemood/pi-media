@@ -3416,3 +3416,143 @@ async def librarian_simple_undo_api(request: Request) -> dict:
     return await librarian_simple.undo(
         librarian_simple.real_deps(),
         int(payload["chat_id"]), int(payload["msg_id"]))
+
+
+# --- Librarian v6 toolbox: sight, records, batch, scans, gateway ---
+
+def _simple_deps():
+    from Backend.helper import librarian_simple
+    return librarian_simple, librarian_simple.real_deps()
+
+
+async def librarian_v6_grouped_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.waiting_grouped(deps)
+
+
+async def librarian_v6_find_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.find(deps, request.query_params.get("q") or "")
+
+
+async def librarian_v6_file_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.file_detail(
+        deps, int(request.query_params.get("chat") or 0),
+        int(request.query_params.get("msg") or 0))
+
+
+async def librarian_v6_history_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.history(
+        deps, stem=request.query_params.get("stem"),
+        today=request.query_params.get("today") == "1")
+
+
+async def librarian_v6_fix_batch_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    payload = await request.json()
+    return await ls.fix_batch(deps, payload.get("fixes") or [])
+
+
+async def librarian_v6_record_get_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.series_record_get(
+        deps, int(request.query_params.get("channel") or 0),
+        request.query_params.get("stem") or "")
+
+
+async def librarian_v6_record_set_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.series_record_set(deps, await request.json())
+
+
+async def librarian_v6_alias_list_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    ch = request.query_params.get("channel")
+    return await ls.alias_list(deps, int(ch) if ch else None)
+
+
+async def librarian_v6_alias_forget_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    payload = await request.json()
+    return await ls.alias_forget(
+        deps, int(payload["channel"]), str(payload.get("stem") or ""))
+
+
+async def librarian_v6_park_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    payload = await request.json()
+    return await ls.park(deps, str(payload.get("key") or ""),
+                         bool(payload.get("parked", True)))
+
+
+async def librarian_v6_mode_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.mode_info(deps)
+
+
+async def librarian_v6_scan_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    payload = await request.json() if request.method == "POST" else {}
+    ch = (payload or {}).get("channel")
+    return await ls.scan(deps, int(ch) if ch else None)
+
+
+async def librarian_v6_scan_status_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.scan_status(deps)
+
+
+async def librarian_gw_lookup_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian_gateway
+    return await librarian_gateway.lookup(
+        librarian_gateway.real_deps(),
+        request.query_params.get("q") or "",
+        request.query_params.get("type") or "")
+
+
+async def librarian_gw_series_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian_gateway
+    return await librarian_gateway.series(
+        librarian_gateway.real_deps(),
+        request.query_params.get("ref") or "")
+
+
+async def librarian_gw_crossid_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian_gateway
+    return await librarian_gateway.crossid(
+        librarian_gateway.real_deps(),
+        request.query_params.get("ref") or "")

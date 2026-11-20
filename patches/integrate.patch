@@ -28,10 +28,10 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..952dd36 100644
+index 9ae7925..bcc1577 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
-@@ -70,8 +70,25 @@ from Backend.fastapi.routes.api_routes import (
+@@ -70,8 +70,41 @@ from Backend.fastapi.routes.api_routes import (
      get_system_stats_api,
      get_tools_channels_api,
      bot_admin_scan_api,
@@ -47,6 +47,22 @@ index 9ae7925..952dd36 100644
 +    librarian_simple_status_api,
 +    librarian_simple_undo_api,
 +    librarian_simple_waiting_api,
++    librarian_gw_crossid_api,
++    librarian_gw_lookup_api,
++    librarian_gw_series_api,
++    librarian_v6_alias_forget_api,
++    librarian_v6_alias_list_api,
++    librarian_v6_file_api,
++    librarian_v6_find_api,
++    librarian_v6_fix_batch_api,
++    librarian_v6_grouped_api,
++    librarian_v6_history_api,
++    librarian_v6_mode_api,
++    librarian_v6_park_api,
++    librarian_v6_record_get_api,
++    librarian_v6_record_set_api,
++    librarian_v6_scan_api,
++    librarian_v6_scan_status_api,
      bot_admin_apply_api,
      bot_admin_apply_status_api,
 +    update_manager_check_api,
@@ -57,7 +73,7 @@ index 9ae7925..952dd36 100644
      clear_manual_session_api,
      search_manual_session_api,
      set_manual_session_api,
-@@ -124,6 +141,11 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+@@ -124,6 +157,11 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
  from Backend.fastapi.routes.template_routes import (
      admin_access_page,
      admin_dashboard_page,
@@ -69,7 +85,7 @@ index 9ae7925..952dd36 100644
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -169,6 +191,8 @@ async def _startup():
+@@ -169,6 +207,8 @@ async def _startup():
      asyncio.create_task(decay_client_failures())
      from Backend.helper.version_check import version_check_loop
      asyncio.create_task(version_check_loop())
@@ -78,7 +94,7 @@ index 9ae7925..952dd36 100644
  
  
  #----- Streaming and Stremio routers
-@@ -293,6 +317,138 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +333,202 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -150,6 +166,70 @@ index 9ae7925..952dd36 100644
 +async def librarian_simple_undo(request: Request):
 +    return await librarian_simple_undo_api(request)
 +
++@app.get("/api/librarian/v6/waiting-grouped")
++async def librarian_v6_grouped(request: Request):
++    return await librarian_v6_grouped_api(request)
++
++@app.get("/api/librarian/v6/find")
++async def librarian_v6_find(request: Request):
++    return await librarian_v6_find_api(request)
++
++@app.get("/api/librarian/v6/file")
++async def librarian_v6_file(request: Request):
++    return await librarian_v6_file_api(request)
++
++@app.get("/api/librarian/v6/history")
++async def librarian_v6_history(request: Request):
++    return await librarian_v6_history_api(request)
++
++@app.post("/api/librarian/v6/fix-batch")
++async def librarian_v6_fix_batch(request: Request):
++    return await librarian_v6_fix_batch_api(request)
++
++@app.get("/api/librarian/v6/record")
++async def librarian_v6_record_get(request: Request):
++    return await librarian_v6_record_get_api(request)
++
++@app.post("/api/librarian/v6/record")
++async def librarian_v6_record_set(request: Request):
++    return await librarian_v6_record_set_api(request)
++
++@app.get("/api/librarian/v6/aliases")
++async def librarian_v6_aliases(request: Request):
++    return await librarian_v6_alias_list_api(request)
++
++@app.post("/api/librarian/v6/alias-forget")
++async def librarian_v6_alias_forget(request: Request):
++    return await librarian_v6_alias_forget_api(request)
++
++@app.post("/api/librarian/v6/park")
++async def librarian_v6_park(request: Request):
++    return await librarian_v6_park_api(request)
++
++@app.get("/api/librarian/v6/mode")
++async def librarian_v6_mode(request: Request):
++    return await librarian_v6_mode_api(request)
++
++@app.post("/api/librarian/v6/scan")
++async def librarian_v6_scan(request: Request):
++    return await librarian_v6_scan_api(request)
++
++@app.get("/api/librarian/v6/scan-status")
++async def librarian_v6_scan_status(request: Request):
++    return await librarian_v6_scan_status_api(request)
++
++@app.get("/api/librarian/gw/lookup")
++async def librarian_gw_lookup(request: Request):
++    return await librarian_gw_lookup_api(request)
++
++@app.get("/api/librarian/gw/series")
++async def librarian_gw_series(request: Request):
++    return await librarian_gw_series_api(request)
++
++@app.get("/api/librarian/gw/crossid")
++async def librarian_gw_crossid(request: Request):
++    return await librarian_gw_crossid_api(request)
++
 +# --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
 +from Backend.librarian_v2.api import (
 +    v2_approve_api,
@@ -217,7 +297,7 @@ index 9ae7925..952dd36 100644
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +969,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +1049,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
@@ -245,7 +325,7 @@ index 9ae7925..952dd36 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..9a1ce9d 100644
+index e6d9542..7a31266 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -629,7 +709,7 @@ index e6d9542..9a1ce9d 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3124,295 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3124,435 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -925,6 +1005,146 @@ index e6d9542..9a1ce9d 100644
 +    return await librarian_simple.undo(
 +        librarian_simple.real_deps(),
 +        int(payload["chat_id"]), int(payload["msg_id"]))
++
++
++# --- Librarian v6 toolbox: sight, records, batch, scans, gateway ---
++
++def _simple_deps():
++    from Backend.helper import librarian_simple
++    return librarian_simple, librarian_simple.real_deps()
++
++
++async def librarian_v6_grouped_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.waiting_grouped(deps)
++
++
++async def librarian_v6_find_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.find(deps, request.query_params.get("q") or "")
++
++
++async def librarian_v6_file_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.file_detail(
++        deps, int(request.query_params.get("chat") or 0),
++        int(request.query_params.get("msg") or 0))
++
++
++async def librarian_v6_history_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.history(
++        deps, stem=request.query_params.get("stem"),
++        today=request.query_params.get("today") == "1")
++
++
++async def librarian_v6_fix_batch_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    payload = await request.json()
++    return await ls.fix_batch(deps, payload.get("fixes") or [])
++
++
++async def librarian_v6_record_get_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.series_record_get(
++        deps, int(request.query_params.get("channel") or 0),
++        request.query_params.get("stem") or "")
++
++
++async def librarian_v6_record_set_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.series_record_set(deps, await request.json())
++
++
++async def librarian_v6_alias_list_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    ch = request.query_params.get("channel")
++    return await ls.alias_list(deps, int(ch) if ch else None)
++
++
++async def librarian_v6_alias_forget_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    payload = await request.json()
++    return await ls.alias_forget(
++        deps, int(payload["channel"]), str(payload.get("stem") or ""))
++
++
++async def librarian_v6_park_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    payload = await request.json()
++    return await ls.park(deps, str(payload.get("key") or ""),
++                         bool(payload.get("parked", True)))
++
++
++async def librarian_v6_mode_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.mode_info(deps)
++
++
++async def librarian_v6_scan_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    payload = await request.json() if request.method == "POST" else {}
++    ch = (payload or {}).get("channel")
++    return await ls.scan(deps, int(ch) if ch else None)
++
++
++async def librarian_v6_scan_status_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.scan_status(deps)
++
++
++async def librarian_gw_lookup_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian_gateway
++    return await librarian_gateway.lookup(
++        librarian_gateway.real_deps(),
++        request.query_params.get("q") or "",
++        request.query_params.get("type") or "")
++
++
++async def librarian_gw_series_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian_gateway
++    return await librarian_gateway.series(
++        librarian_gateway.real_deps(),
++        request.query_params.get("ref") or "")
++
++
++async def librarian_gw_crossid_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian_gateway
++    return await librarian_gateway.crossid(
++        librarian_gateway.real_deps(),
++        request.query_params.get("ref") or "")
 diff --git a/Backend/fastapi/routes/stream_routes.py b/Backend/fastapi/routes/stream_routes.py
 index be9b286..a6f3b85 100644
 --- a/Backend/fastapi/routes/stream_routes.py

@@ -26,6 +26,17 @@ IST = timezone(timedelta(hours=5, minutes=30))
 _ID_LINK_RE = re.compile(r"imdb\.com/title/(tt\d+)|themoviedb\.org/"
                          r"(?:tv|movie)/(\d+)")
 
+# Yan's channels, by chat id — output says "Donghua", not a number.
+CHANNEL_NAMES = {
+    -1003923670111: "Announcement",
+    -1004399192319: "Skip",
+    -1004395609351: "Ani",
+    -1003981572300: "Movie",
+    -1003966209940: "Series",
+    -1004494510060: "Donghua",
+    -1004450903732: "Cartoon",
+}
+
 
 # ---------------------------------------------------------------------------
 # Dependencies — the real ones bind to the app; tests pass fakes.
@@ -33,7 +44,9 @@ _ID_LINK_RE = re.compile(r"imdb\.com/title/(tt\d+)|themoviedb\.org/"
 
 class Deps:
     def __init__(self, read_caption, edit_caption, indexed_ids, ledger,
-                 locator, fixes, teach_alias, settings):
+                 locator, fixes, teach_alias, settings,
+                 records=None, aliases=None, media_search=None,
+                 scan_start=None, scan_status_of=None):
         self.read_caption = read_caption    # async (chat, msg) -> str|None
         self.edit_caption = edit_caption    # async (chat, msg, caption)
         self.indexed_ids = indexed_ids      # async (chat, msg) -> (imdb, tmdb)|None
@@ -42,6 +55,11 @@ class Deps:
         self.fixes = fixes                  # motor collection | None
         self.teach_alias = teach_alias      # async (channel, stem, caption)
         self.settings = settings            # object with the 3 settings
+        self.records = records              # series_records collection
+        self.aliases = aliases              # alias_map collection
+        self.media_search = media_search    # async text -> [indexed doc]
+        self.scan_start = scan_start        # async channels -> dict
+        self.scan_status_of = scan_status_of  # () -> dict
 
 
 def real_deps() -> Deps:
@@ -95,12 +113,33 @@ def real_deps() -> Deps:
                       "taught_at": time.time(), "source": "simple-fix"}},
             upsert=True)
 
+    async def media_search(text):
+        res = await db.search_documents(text, 1, 20)
+        return [{"title": d.get("title"), "media_type": d.get("media_type"),
+                 "tmdb_id": d.get("tmdb_id"), "imdb_id": d.get("imdb_id"),
+                 "year": d.get("release_year")}
+                for d in (res or {}).get("results") or []]
+
+    async def scan_start(channels):
+        from Backend.helper.scan_manager import scan_manager
+        from Backend.pyrofork.bot import StreamBot
+        return await scan_manager.start(
+            StreamBot, [str(c) for c in channels], mode="scan")
+
+    def scan_status_of():
+        from Backend.helper.scan_manager import scan_manager
+        return scan_manager.get_status()
+
     return Deps(
         read_caption, edit_caption, indexed_ids,
         ledger=tracking["reject_ledger"] if tracking is not None else None,
         locator=tracking["locator"] if tracking is not None else None,
         fixes=tracking["simple_fixes"] if tracking is not None else None,
-        teach_alias=teach_alias, settings=SettingsManager.current())
+        teach_alias=teach_alias, settings=SettingsManager.current(),
+        records=tracking["series_records"] if tracking is not None else None,
+        aliases=tracking["alias_map"] if tracking is not None else None,
+        media_search=media_search, scan_start=scan_start,
+        scan_status_of=scan_status_of)
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +171,7 @@ async def waiting(deps: Deps, channel=None, stem=None, limit=30):
                 located = bool(chat_id and msg_id)
         out.append({
             "key": doc.get("key"), "chat_id": chat_id, "msg_id": msg_id,
+            "channel_name": CHANNEL_NAMES.get(chat_id, str(chat_id)),
             "caption": caption, "stem": bits.get("stem"),
             "season": bits.get("season"), "episode": bits.get("episode"),
             "special": bits.get("special"), "year": bits.get("year"),
@@ -194,7 +234,7 @@ async def fix(deps: Deps, chat_id, msg_id, new_caption, expected_caption,
     if deps.fixes is not None:
         await deps.fixes.insert_one({
             "key": key, "chat_id": chat_id, "msg_id": msg_id,
-            "before": expected_caption, "after": new_caption,
+            "stem": stem, "before": expected_caption, "after": new_caption,
             "ts": time.time(), "actor": actor, "indexed": indexed,
             "reverted": False})
     if key and deps.ledger is not None:
@@ -257,6 +297,223 @@ async def recent_fixes(deps: Deps, limit=20):
             "indexed": doc.get("indexed"),
             "reverted": bool(doc.get("reverted"))})
     return out
+
+
+async def waiting_grouped(deps: Deps, limit=600):
+    """Waiting grouped by series (channel + stem), biggest first,
+    files in episode order — how work is actually done."""
+    res = await waiting(deps, limit=limit)
+    if not res.get("ok"):
+        return res
+    groups = {}
+    for f in res["files"]:
+        g = groups.setdefault((f["chat_id"], f["stem"] or "(unknown)"), {
+            "chat_id": f["chat_id"], "channel_name": f["channel_name"],
+            "stem": f["stem"], "files": []})
+        g["files"].append(f)
+    out = []
+    for g in groups.values():
+        g["files"].sort(key=lambda x: (x["episode"] is None,
+                                       x["episode"] or 0, x["msg_id"] or 0))
+        eps = [x["episode"] for x in g["files"] if x["episode"] is not None]
+        g["count"] = len(g["files"])
+        g["episodes"] = f"{min(eps)}–{max(eps)}" if eps else ""
+        out.append(g)
+    out.sort(key=lambda g: (-g["count"], g["stem"] or ""))
+    return {"ok": True, "groups": out, "total_files": res["count"]}
+
+
+async def find(deps: Deps, text: str, limit=30):
+    """Search the WHOLE library by name: indexed media + ledger."""
+    needle = (text or "").strip().lower()
+    if not needle:
+        return {"ok": False, "message": "nothing to search for"}
+    indexed = []
+    if deps.media_search is not None:
+        indexed = await deps.media_search(text)
+    in_ledger = []
+    if deps.ledger is not None:
+        async for doc in deps.ledger.find({}).limit(2000):
+            bits = doc.get("bits") or {}
+            hay = f"{bits.get('stem') or ''} {doc.get('caption') or ''}".lower()
+            if needle in hay:
+                in_ledger.append({
+                    "key": doc.get("key"), "status": doc.get("status"),
+                    "stem": bits.get("stem"), "caption": doc.get("caption"),
+                    "chat_id": doc.get("scan_chat_id"),
+                    "msg_id": doc.get("scan_msg_id")})
+            if len(in_ledger) >= int(limit):
+                break
+    return {"ok": True, "indexed": indexed[: int(limit)],
+            "ledger": in_ledger}
+
+
+async def file_detail(deps: Deps, chat_id, msg_id):
+    out = {"ok": True, "chat_id": chat_id, "msg_id": msg_id,
+           "channel_name": CHANNEL_NAMES.get(chat_id, str(chat_id)),
+           "caption": await deps.read_caption(chat_id, msg_id),
+           "indexed_ids": None, "ledger": None, "fixes": []}
+    got = await deps.indexed_ids(chat_id, msg_id)
+    if got:
+        out["indexed_ids"] = {"imdb": got[0], "tmdb": got[1]}
+    if deps.locator is not None:
+        loc = await deps.locator.find_one(
+            {"chat_id": chat_id, "msg_id": msg_id})
+        if loc and deps.ledger is not None:
+            doc = await deps.ledger.find_one({"key": loc.get("_id")})
+            if doc:
+                out["ledger"] = {"key": doc.get("key"),
+                                  "status": doc.get("status"),
+                                  "reason": doc.get("reason_code")}
+    if deps.fixes is not None:
+        cursor = deps.fixes.find(
+            {"chat_id": chat_id, "msg_id": msg_id}).sort("ts", -1).limit(5)
+        async for doc in cursor:
+            out["fixes"].append({
+                "before": doc.get("before"), "after": doc.get("after"),
+                "ts": doc.get("ts"), "indexed": doc.get("indexed"),
+                "reverted": bool(doc.get("reverted"))})
+    return out
+
+
+async def history(deps: Deps, stem=None, today=False, limit=30):
+    if deps.fixes is None:
+        return {"ok": False, "message": "fix history unavailable"}
+    query = {}
+    if stem:
+        query["stem"] = stem
+    if today:
+        start = datetime.now(IST).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp()
+        query["ts"] = {"$gte": start}
+    out = []
+    cursor = deps.fixes.find(query).sort("ts", -1).limit(int(limit))
+    async for doc in cursor:
+        out.append({
+            "chat_id": doc.get("chat_id"), "msg_id": doc.get("msg_id"),
+            "stem": doc.get("stem"), "before": doc.get("before"),
+            "after": doc.get("after"), "ts": doc.get("ts"),
+            "indexed": doc.get("indexed"),
+            "reverted": bool(doc.get("reverted"))})
+    return {"ok": True, "fixes": out, "count": len(out)}
+
+
+async def fix_batch(deps: Deps, items: list, actor="bot"):
+    """Many fixes, in order, one result each. A flood wait or a
+    spent budget stops the batch; other failures do not."""
+    results, stopped = [], None
+    for item in items or []:
+        if stopped:
+            results.append({"ok": False, "skipped": True,
+                            "message": f"not attempted — batch stopped ({stopped})",
+                            "chat_id": item.get("chat_id"),
+                            "msg_id": item.get("msg_id")})
+            continue
+        res = await fix(deps, int(item["chat_id"]), int(item["msg_id"]),
+                        str(item.get("new_caption") or ""),
+                        str(item.get("expected_caption") or ""),
+                        key=item.get("key"), stem=item.get("stem"),
+                        actor=actor)
+        res = {**res, "chat_id": item.get("chat_id"),
+               "msg_id": item.get("msg_id")}
+        results.append(res)
+        if res.get("flood_wait") is not None:
+            stopped = f"flood wait {res['flood_wait']}s"
+        elif not res.get("ok") and "budget" in (res.get("message") or ""):
+            stopped = "daily budget spent"
+    applied = sum(1 for r in results if r.get("ok") and not r.get("dry_run"))
+    return {"ok": True, "results": results, "applied": applied,
+            "stopped": stopped}
+
+
+async def series_record_get(deps: Deps, channel, stem):
+    if deps.records is None:
+        return {"ok": False, "message": "series records unavailable"}
+    doc = await deps.records.find_one({"_id": f"{channel}:{stem}"})
+    if not doc:
+        return {"ok": True, "record": None}
+    doc = {k: v for k, v in doc.items() if k != "_id"}
+    return {"ok": True, "record": doc}
+
+
+async def series_record_set(deps: Deps, record: dict):
+    if deps.records is None:
+        return {"ok": False, "message": "series records unavailable"}
+    channel, stem = record.get("channel"), record.get("stem")
+    if not channel or not stem:
+        return {"ok": False, "message": "a record needs channel + stem"}
+    doc = {**record, "updated_at": time.time()}
+    await deps.records.update_one({"_id": f"{channel}:{stem}"},
+                                  {"$set": doc}, upsert=True)
+    return {"ok": True, "message": "Series record stored.",
+            "id": f"{channel}:{stem}"}
+
+
+async def alias_list(deps: Deps, channel=None, limit=100):
+    if deps.aliases is None:
+        return {"ok": False, "message": "alias map unavailable"}
+    query = {"channel": int(channel)} if channel else {}
+    out = []
+    async for doc in deps.aliases.find(query).limit(int(limit)):
+        out.append({"channel": doc.get("channel"), "stem": doc.get("stem"),
+                    "imdb_id": doc.get("imdb_id"),
+                    "tmdb_id": doc.get("tmdb_id"),
+                    "title": doc.get("title")})
+    return {"ok": True, "aliases": out, "count": len(out)}
+
+
+async def alias_forget(deps: Deps, channel, stem):
+    if deps.aliases is None:
+        return {"ok": False, "message": "alias map unavailable"}
+    res = await deps.aliases.delete_one({"_id": f"{channel}:{stem}"})
+    gone = getattr(res, "deleted_count", 1)
+    return {"ok": True, "forgotten": bool(gone),
+            "message": "Alias removed." if gone else "No such alias."}
+
+
+async def park(deps: Deps, key, parked=True):
+    if deps.ledger is None:
+        return {"ok": False, "message": "ledger unavailable"}
+    doc = await deps.ledger.find_one({"key": key})
+    if not doc:
+        return {"ok": False, "message": "no such file in the ledger"}
+    if parked and doc.get("status") == "fixed":
+        return {"ok": False, "message": "that file is fixed, not waiting"}
+    await deps.ledger.update_one(
+        {"key": key},
+        {"$set": {"status": "parked" if parked else "open"}})
+    return {"ok": True, "message": "Parked." if parked else "Unparked."}
+
+
+async def mode_info(deps: Deps):
+    s = deps.settings
+    channels = list(getattr(s, "librarian_channels", []) or [])
+    return {"ok": True, "enabled": bool(s.librarian_enabled),
+            "dry_run": bool(s.librarian_dry_run),
+            "auto_apply": getattr(s, "librarian_auto_apply", ""),
+            "digest": getattr(s, "librarian_digest", ""),
+            "budget_per_day": int(
+                getattr(s, "librarian_edit_budget_per_day", 50) or 50),
+            "channels": channels,
+            "channel_names": [CHANNEL_NAMES.get(int(c), str(c))
+                              for c in channels]}
+
+
+async def scan(deps: Deps, channel=None):
+    if deps.scan_start is None:
+        return {"ok": False, "message": "scan unavailable"}
+    channels = [int(channel)] if channel else list(
+        getattr(deps.settings, "librarian_channels", []) or [])
+    if not channels:
+        return {"ok": False,
+                "message": "no channels configured in Settings"}
+    return await deps.scan_start(channels)
+
+
+async def scan_status(deps: Deps):
+    if deps.scan_status_of is None:
+        return {"ok": False, "message": "scan unavailable"}
+    return {"ok": True, "scan": deps.scan_status_of()}
 
 
 async def counts(deps: Deps):
