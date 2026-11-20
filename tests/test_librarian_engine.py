@@ -1094,6 +1094,52 @@ def test_engine_init_guard_reconciles_before_first_fix():
     assert rows["stale-1"]["error"] == engine.RESTART_ERROR
 
 
+def test_E2_concurrent_first_fixes_reconcile_exactly_once():
+    # DISP-10 / §6.2 regression: _ensure_engine_init must provide
+    # single execution. N concurrent FIRST fix_one calls, with a
+    # counting reconciliation double whose await yields (opening
+    # the exact race window the unguarded check-then-await-then-set
+    # had), must run reconciliation EXACTLY once. On the pre-fix
+    # code every caller observes _engine_ready == False before any
+    # of them sets it, so the count is N and this test fails.
+    _reset()
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _settings()
+    n = 5
+    for msg_id in range(1, n + 1):
+        _seed_ledger(msg_id=msg_id)
+    msg = _message()
+    script = {(CHAT, i): msg for i in range(1, n + 1)}
+    _clients(script, script)
+    calls = {"n": 0}
+    orig_reconcile = engine.reconcile_on_startup
+
+    async def counting_reconcile():
+        calls["n"] += 1
+        await asyncio.sleep(0.05)  # yield: concurrent callers interleave here
+        return 0
+
+    engine.reconcile_on_startup = counting_reconcile
+    engine._engine_ready = False
+    try:
+        async def go():
+            return await asyncio.gather(*[
+                engine.fix_one(_payload(request_id=f"e2-{i}", msg_id=i))
+                for i in range(1, n + 1)])
+
+        results = _run(go())
+        assert calls["n"] == 1, calls
+        assert all(r["state"] == "dry_run_complete" for r in results), results
+        # Fast path after init: a later fix does not re-run it.
+        later = _run(engine.fix_one(_payload(request_id="e2-after",
+                                             msg_id=1)))
+        assert later["state"] == "dry_run_complete"
+        assert calls["n"] == 1, calls
+    finally:
+        engine.reconcile_on_startup = orig_reconcile
+
+
 # ------------------------------------------------------------------
 # Page context: fix_history in the C5 contract shape (§4.6)
 # ------------------------------------------------------------------

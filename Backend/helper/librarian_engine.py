@@ -27,6 +27,7 @@ PROBE_TIMEOUT = 30  # seconds, per client (DESIGN §8 probe)
 RESTART_ERROR = "app restarted mid-operation — outcome unverified"
 
 _WRITE_LOCK = asyncio.Lock()
+_INIT_LOCK = asyncio.Lock()
 _engine_ready = False
 
 
@@ -262,8 +263,11 @@ async def _ensure_engine_init():
     global _engine_ready
     if _engine_ready:
         return
-    await reconcile_on_startup()
-    _engine_ready = True
+    async with _INIT_LOCK:
+        if _engine_ready:
+            return
+        await reconcile_on_startup()
+        _engine_ready = True
 
 
 # ------------------------------------------------------------------
