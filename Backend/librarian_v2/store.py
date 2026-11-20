@@ -21,7 +21,11 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 def open_store(path):
     """Open (creating if needed) the v2 store at `path` and apply the schema."""
-    conn = sqlite3.connect(str(path), timeout=30.0)
+    # check_same_thread=False: the store is shared between the app's
+    # request threads and the job worker thread by design. WAL +
+    # short transactions + the 30s busy timeout serialise writers.
+    conn = sqlite3.connect(str(path), timeout=30.0,
+                           check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.isolation_level = None  # explicit transactions via Store.tx()
     conn.execute("PRAGMA journal_mode = WAL")

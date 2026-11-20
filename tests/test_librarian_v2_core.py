@@ -94,6 +94,28 @@ def test_plan_hash_stable_and_tamper_evident():
     assert len(store.list_plan_items(pid)) == 2
 
 
+def test_store_usable_from_worker_thread():
+    # Regression (staging proof, 2026-11-20): the store is opened on the
+    # app's thread and used from the job worker thread — sqlite3's
+    # default thread check crashed exactly that in production shape.
+    import threading
+    store = _store()
+    errors = []
+
+    def work():
+        try:
+            store.upsert_channel(-1001, "Ani", now=T0)
+            store.upsert_series("Threaded", kind="tv", now=T0)
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=work)
+    t.start()
+    t.join(timeout=10)
+    assert not errors, errors
+    assert store.list_series()
+
+
 def test_revisions_roundtrip():
     store = _store()
     f1 = _file(store, 21)
