@@ -1243,6 +1243,69 @@ def test_placement_non_donghua_falls_through_to_standard_path():
     _run(go())
 
 
+def test_placement_conflicting_signals_fail_safe_no_override():
+    _reset()
+    _settings(channel_titles={"-100111": "Anime Dumping"})
+    # DISP-3a conflict branch: the series record establishes
+    # donghua, but the channel name signals NOT donghua. The
+    # signals conflict, so the series is NOT donghua for placement
+    # purposes (fail-safe) — the override must NOT fire even though
+    # the record alone would pass the gate. The file files through
+    # metadata()'s standard path and resolve_series is never
+    # called for placement.
+    META["result"] = _tv_payload(
+        tmdb=DONGHUA_TMDB, imdb=DONGHUA_IMDB, season=0, episode=7,
+        title="Donghua Fixture", quality="1080p", ep_title="Standard S00")
+    msg = _donghua_message()
+
+    async def go():
+        await _seed_donghua_record(media_type="donghua")
+        result = await _serve(receiver.reindex_one_post(
+            object(), msg, placement={"season": 0, "episode": 9},
+            expected_ids={"tmdb": DONGHUA_TMDB, "imdb": DONGHUA_IMDB},
+            series_ids={"tmdb": DONGHUA_TMDB, "tvdb": 333354}))
+        assert RESOLVE["calls"] == []
+        assert META["calls"], "standard filing must proceed"
+        assert result["state"] == "indexed"
+        assert result["filed"] == {"season": 0, "episode": 7}
+
+    _run(go())
+
+
+def test_placement_channel_only_signal_fires():
+    _reset()
+    _settings()
+    # DISP-3a channel-only branch: NO series record exists for any
+    # of the candidate provider ids, so the record lookup finds
+    # nothing and the channel name alone is the signal — the
+    # default fixture channel is "Donghua Dumping", which signals
+    # donghua, so the gate passes and the placement override fires
+    # (the spike shape: metadata() resolves in the movie namespace,
+    # the seam re-resolves by TV resolution at the placed S/E).
+    META["result"] = _movie_payload(tmdb=555, imdb="tt0000555")
+    RESOLVE["result"] = _tv_payload(
+        tmdb=DONGHUA_TMDB, imdb=DONGHUA_IMDB, season=0, episode=7,
+        title="Donghua Fixture", quality="1080p", ep_title="Placed Title")
+    msg = _donghua_message()
+
+    async def go():
+        # No _seed_donghua_record(): the store holds no record.
+        assert await store.get_record_by_id_field(
+            "tmdb", DONGHUA_TMDB) is None
+        result = await _serve(receiver.reindex_one_post(
+            object(), msg, placement={"season": 0, "episode": 7},
+            expected_ids={"tmdb": DONGHUA_TMDB, "imdb": DONGHUA_IMDB},
+            series_ids={"tmdb": DONGHUA_TMDB, "tvdb": 333354}))
+        assert result["state"] == "indexed"
+        assert result["ids"] == (DONGHUA_IMDB, DONGHUA_TMDB, "tv")
+        assert result["filed"] == {"season": 0, "episode": 7}
+        assert len(RESOLVE["calls"]) == 1
+        call = RESOLVE["calls"][0]
+        assert call["season"] == 0 and call["episode"] == 7
+
+    _run(go())
+
+
 def test_absolute_placement_uses_tvdb_lookup_not_arithmetic():
     _reset()
     _settings()
