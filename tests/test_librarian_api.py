@@ -932,6 +932,12 @@ backup = load_module("Backend.helper.backup", "Backend/helper/backup.py")
 sys.modules["Backend.helper"].backup = backup
 api_routes = load_module("api_routes_under_test", "Backend/fastapi/routes/api_routes.py")
 store = load_module("Backend.helper.librarian_store", "Backend/helper/librarian_store.py")
+# The engine is wired the same way (C-1 harness fix): the bot
+# routes import it lazily (`from Backend.helper import
+# librarian_engine`), so without this registration any api-suite
+# test that drives a valid fix/undo body dies with ImportError
+# unless another module happened to load the engine first.
+engine = load_module("Backend.helper.librarian_engine", "Backend/helper/librarian_engine.py")
 
 HASH_SENTINEL = "deadbeef" * 8  # a known non-empty hash value
 
@@ -1562,12 +1568,19 @@ def test_former_stub_routes_are_real():
     # No stub routes remain: fix/fix-batch landed in Phase 4, scan
     # in Phase 5 Workstream D (§5.2), and undo in Phase 5
     # Workstream C (C-1, §4.3) — _not_implemented was deleted with
-    # its last consumer. This harness never loads the engine
-    # module, so here undo is asserted up to its validation
-    # boundary (400 before the engine, §4.3); the valid-body path
-    # (the pinned test-mode refusal in this harness's default
-    # settings) and all engine coverage live in
-    # tests/test_librarian_engine.py.
+    # its last consumer. The harness wires the real engine (see
+    # the load_module block at the top of this file), so a valid
+    # undo body reaches undo_one: in this harness's default
+    # settings (test mode on) it answers the pinned test-mode
+    # refusal (§4.1); invalid bodies 400 before the engine (§4.3).
+    # Full undo coverage lives in tests/test_librarian_engine.py.
+    resp = _call("POST", "/api/librarian/undo",
+                 _authed_req(body={"request_id": "u-1", "chat_id": -100111,
+                                   "msg_id": 1}))
+    assert resp.status_code == 200
+    assert resp.content == {
+        "request_id": "u-1", "state": "refused_precondition",
+        "error": "undo mutates Telegram — test mode is on"}
     resp = _call("POST", "/api/librarian/undo", _authed_req(raw_body="{not json"))
     assert resp.status_code == 400
     resp = _call("POST", "/api/librarian/undo", _authed_req(body={"request_id": "u-1"}))
