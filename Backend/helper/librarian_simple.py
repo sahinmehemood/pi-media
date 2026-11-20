@@ -83,6 +83,7 @@ def real_deps() -> Deps:
         # that posted/admins the library channels) edits them fine.
         # Bot API stays as the fallback.
         from Backend.pyrofork import bot as botmod
+        ub_error = "userbot not built"
         if botmod.Userbot is not None:
             try:
                 await botmod.Userbot.edit_message_caption(
@@ -96,6 +97,7 @@ def real_deps() -> Deps:
                     raise err
                 if "not modified" in str(e).lower():
                     return
+                ub_error = f"{type(e).__name__}: {e}"
                 # fall through to the Bot API attempt below
         import aiohttp
         token = SettingsManager.current().hermes_bot_token
