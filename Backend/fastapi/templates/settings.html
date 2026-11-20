@@ -1002,29 +1002,6 @@
             <p id="librarian-token-warn" style="font-size:0.8rem;color:var(--warn);margin-top:0.5rem"></p>
         </div>
         <p id="librarian-token-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
-
-        <hr class="divider">
-
-        <label class="s-label">Writer Bot</label>
-        {% set lib_writer_fp = settings.librarian_writer_token_fingerprint if settings.librarian_writer_token_fingerprint is defined else '' %}
-        {% set lib_writer_name = settings.librarian_writer_bot_username if settings.librarian_writer_bot_username is defined else '' %}
-        {% set lib_writer_set = lib_writer_fp or lib_writer_name %}
-        <p style="font-size:0.85rem;color:var(--text-sec);margin-bottom:0.75rem">
-            <span id="librarian-writer-status">{% if lib_writer_set %}Writer bot: @{{ lib_writer_name }} (…{{ lib_writer_fp }}){% else %}Writer bot: Not set{% endif %}</span>
-            <span style="display:block;font-size:0.78rem;margin-top:0.25rem">
-                The Media Manager bot's own BotFather token — the writer identity the
-                fix engine sends edits as. It is set only through the button below,
-                never through this page's settings save, and it is never shown back.
-                Replacing the token here does not revoke the old one — only BotFather /revoke does.
-            </span>
-        </p>
-        <div class="add-row">
-            <input type="password" id="librarian-writer-token" class="s-input"
-                placeholder="Media Manager bot token" autocomplete="off" spellcheck="false">
-            <button type="button" class="add-btn" id="librarian-writer-set" onclick="setLibrarianWriterToken()">Set writer token</button>
-            <button type="button" class="add-btn" id="librarian-writer-clear" onclick="clearLibrarianWriterToken()">Clear</button>
-        </div>
-        <p id="librarian-writer-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
     </div>
 
 <!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
@@ -1604,6 +1581,31 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
                 onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('helper_tokens')}">
             <button class="add-btn" onclick="addItem('helper_tokens')">+ Add Token</button>
         </div>
+    </div>
+
+    <!-- ── Hermes Bot (Media Manager) ─────────────────────────────── -->
+    <div class="settings-card">
+        <h2><i class="fa-brands fa-telegram"></i> Hermes Bot — Media Manager</h2>
+        <label class="s-label">Writer Bot</label>
+        {% set lib_writer_fp = settings.librarian_writer_token_fingerprint if settings.librarian_writer_token_fingerprint is defined else '' %}
+        {% set lib_writer_name = settings.librarian_writer_bot_username if settings.librarian_writer_bot_username is defined else '' %}
+        {% set lib_writer_set = lib_writer_fp or lib_writer_name %}
+        <p style="font-size:0.85rem;color:var(--text-sec);margin-bottom:0.75rem">
+            <span id="librarian-writer-status">{% if lib_writer_set %}Writer bot: @{{ lib_writer_name }} (…{{ lib_writer_fp }}){% else %}Writer bot: Not set{% endif %}</span>
+            <span style="display:block;font-size:0.78rem;margin-top:0.25rem">
+                The Media Manager bot's own BotFather token — the writer identity the
+                fix engine sends edits as. It is set only through the button below,
+                never through this page's settings save, and it is never shown back.
+                Replacing the token here does not revoke the old one — only BotFather /revoke does.
+            </span>
+        </p>
+        <div class="add-row">
+            <input type="password" id="librarian-writer-token" class="s-input"
+                placeholder="Media Manager bot token" autocomplete="off" spellcheck="false">
+            <button type="button" class="add-btn" id="librarian-writer-set" onclick="setLibrarianWriterToken()">Set writer token</button>
+            <button type="button" class="add-btn" id="librarian-writer-clear" onclick="clearLibrarianWriterToken()">Clear</button>
+        </div>
+        <p id="librarian-writer-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
     </div>
 
     <!-- ── Backup & Restore ───────────────────────────────────────────── -->
