@@ -34,6 +34,7 @@ PLUGIN_FILES=(
   Backend/librarian_v2/store.py
   Backend/librarian_v2/jobs.py
   Backend/librarian_v2/identify.py
+  Backend/librarian_v2/orders.py
   Backend/pyrofork/plugins/dl_link.py
   Backend/pyrofork/plugins/prewarm_hooks.py
   Backend/fastapi/templates/dl_index.html
@@ -62,6 +63,7 @@ PLUGIN_FILES=(
   tests/test_librarian_v2_harness.py
   tests/test_librarian_v2_core.py
   tests/test_librarian_v2_identify.py
+  tests/test_librarian_v2_orders.py
   docs/librarian/DESIGN.md
   docs/librarian/DESIGN-v4.md
   docs/librarian/DESIGN-v5.md
