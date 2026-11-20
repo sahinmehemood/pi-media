@@ -256,3 +256,225 @@ def test_seam9_store_failure_falls_through():
         run(go())
     finally:
         store.find_active_fix = original
+
+
+# ------------------------------------------------------------------
+# D-ACC-1 / D-ACC-2 — the scan route (real handler, accessor doubles
+# at the real api_routes boundary)
+# ------------------------------------------------------------------
+
+class CountingScanManager:
+    """Production-shaped manager double: the real start signature
+    (scan_manager.py:192) and result dict, get_status() returning
+    the real key set (via the harness's FakeScanManager, whose
+    shape is copied from _blank_state/get_status). Fresh instance
+    per test — no shared call log."""
+
+    def __init__(self, result=None):
+        self.calls = []
+        self._result = result or {"ok": True, "message": "Scan started."}
+        self._status = api.FakeScanManager()
+        self._status.state["status"] = "running"
+
+    async def start(self, client, channels, mode="scan"):
+        self.calls.append((client, list(channels), mode))
+        return dict(self._result)
+
+    def get_status(self):
+        return self._status.get_status()
+
+
+_ORIG_GET_MANAGER = api.api_routes.get_scan_manager
+_ORIG_GET_CLIENT = api.api_routes.get_scan_client
+
+
+def _patch_accessors(manager, client):
+    api.api_routes.get_scan_manager = lambda: manager
+    api.api_routes.get_scan_client = lambda: client
+
+
+def _restore_accessors():
+    api.api_routes.get_scan_manager = _ORIG_GET_MANAGER
+    api.api_routes.get_scan_client = _ORIG_GET_CLIENT
+
+
+def _scan_call(body):
+    return api._call("POST", "/api/librarian/scan", api._authed_req(body=body))
+
+
+def test_scan_route_test_mode_refuses_and_never_starts():
+    api._reset_api()
+    api._enable(librarian_test_mode=True, librarian_channels=["-100111"])
+    mgr = CountingScanManager()
+    _patch_accessors(mgr, object())
+    try:
+        resp = _scan_call({})
+        assert resp.status_code == 200
+        assert resp.content == {
+            "state": "refused_precondition",
+            "error": "scan posts a probe message into the channel — test mode is on"}
+        assert mgr.calls == []
+    finally:
+        _restore_accessors()
+
+
+def test_scan_route_disabled_refuses_and_never_starts():
+    api._reset_api()
+    api._enable(librarian_test_mode=False, librarian_channels=["-100111"])
+    api._set_settings(librarian_enabled=False)
+    mgr = CountingScanManager()
+    _patch_accessors(mgr, object())
+    try:
+        resp = _scan_call({})
+        assert resp.status_code == 403
+        assert resp.content == {"state": "disabled",
+                                "error": "librarian is disabled"}
+        assert mgr.calls == []
+    finally:
+        _restore_accessors()
+
+
+def test_scan_route_out_of_allowlist_channel_refused():
+    api._reset_api()
+    api._enable(librarian_test_mode=False, librarian_channels=["-100111"])
+    mgr = CountingScanManager()
+    _patch_accessors(mgr, object())
+    try:
+        resp = _scan_call({"channel": "-100222"})
+        assert resp.status_code == 200
+        assert resp.content == {"state": "refused_precondition",
+                                "error": "channel is not in librarian_channels"}
+        # A non-string channel is refused the same way.
+        resp = _scan_call({"channel": -100111})
+        assert resp.content == {"state": "refused_precondition",
+                                "error": "channel is not in librarian_channels"}
+        assert mgr.calls == []
+    finally:
+        _restore_accessors()
+
+
+def test_scan_route_starts_allowlist_scan():
+    api._reset_api()
+    api._enable(librarian_test_mode=False,
+                librarian_channels=["-100111", "-100222"])
+    mgr = CountingScanManager()
+    client = object()
+    _patch_accessors(mgr, client)
+    try:
+        resp = _scan_call({})
+        assert resp.status_code == 200
+        assert resp.content["state"] == "started"
+        assert resp.content["scan"]["status"] == "running"
+        assert resp.content["scan"] == mgr.get_status()
+        assert mgr.calls == [(client, ["-100111", "-100222"], "scan")]
+    finally:
+        _restore_accessors()
+
+
+def test_scan_route_explicit_allowlisted_channel():
+    api._reset_api()
+    api._enable(librarian_test_mode=False,
+                librarian_channels=["-100111", "-100222"])
+    mgr = CountingScanManager()
+    client = object()
+    _patch_accessors(mgr, client)
+    try:
+        resp = _scan_call({"channel": "-100222"})
+        assert resp.content["state"] == "started"
+        assert mgr.calls == [(client, ["-100222"], "scan")]
+    finally:
+        _restore_accessors()
+
+
+def test_scan_route_no_client_is_error_outcome():
+    api._reset_api()
+    api._enable(librarian_test_mode=False, librarian_channels=["-100111"])
+    mgr = CountingScanManager()
+    _patch_accessors(mgr, None)
+    try:
+        resp = _scan_call({})
+        assert resp.status_code == 200
+        assert resp.content == {"state": "error",
+                                "error": "no Telegram client is connected yet"}
+        assert mgr.calls == []
+    finally:
+        _restore_accessors()
+
+
+def test_scan_route_already_running_message_verbatim():
+    api._reset_api()
+    api._enable(librarian_test_mode=False, librarian_channels=["-100111"])
+    mgr = CountingScanManager(
+        result={"ok": False, "message": "A scan is already running."})
+    _patch_accessors(mgr, object())
+    try:
+        resp = _scan_call({})
+        assert resp.status_code == 200
+        assert resp.content == {"state": "refused",
+                                "error": "A scan is already running."}
+        assert len(mgr.calls) == 1
+    finally:
+        _restore_accessors()
+
+
+def test_scan_route_empty_allowlist_refused_before_start():
+    api._reset_api()
+    api._enable(librarian_test_mode=False, librarian_channels=[])
+    mgr = CountingScanManager()
+    _patch_accessors(mgr, object())
+    try:
+        resp = _scan_call({})
+        assert resp.status_code == 200
+        # The expected string comes from the REAL ScanManager's own
+        # empty-channels behaviour, not a copied literal (§10.5):
+        # a fresh real manager with no leftover pending refuses
+        # with exactly this message.
+        async def real_empty_message():
+            fresh = RealScanManager()
+            result = await fresh.start(object(), [], mode="scan")
+            assert result["ok"] is False
+            return result["message"]
+
+        import asyncio as _a
+        expected = _a.run(real_empty_message())
+        assert resp.content == {"state": "refused", "error": expected}
+        assert expected == "No channels selected."
+        assert mgr.calls == []
+    finally:
+        _restore_accessors()
+
+
+def test_scan_route_empty_allowlist_never_resumes_leftover_pending():
+    # D-ACC-2's resume case (Senior B-3): the REAL ScanManager,
+    # seeded with non-empty leftover pending, behind the REAL
+    # route. A spy counts start invocations but delegates to the
+    # real method — no start double replaces its behaviour, so if
+    # the route delegated the empty case, the real manager WOULD
+    # resume and this test would see it.
+    api._reset_api()
+    api._enable(librarian_test_mode=False, librarian_channels=[])
+    mgr = RealScanManager()
+    mgr.state["status"] = "paused"
+    mgr.state["pending"] = [CHAT_STR]
+    mgr.state["selected_channels"] = [CHAT_STR]
+    start_calls = []
+    real_start = mgr.start
+
+    async def spy_start(client, channels, mode="scan"):
+        start_calls.append((client, list(channels), mode))
+        return await real_start(client, channels, mode=mode)
+
+    mgr.start = spy_start
+    _patch_accessors(mgr, object())
+    try:
+        resp = _scan_call({})
+        assert resp.status_code == 200
+        assert resp.content == {"state": "refused",
+                                "error": "No channels selected."}
+        assert start_calls == []
+        # No resume occurred: state is exactly as seeded.
+        assert mgr.state["status"] == "paused"
+        assert mgr.state["pending"] == [CHAT_STR]
+        assert mgr._task is None
+    finally:
+        _restore_accessors()

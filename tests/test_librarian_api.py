@@ -1559,15 +1559,22 @@ def test_status_and_mode_shapes():
 def test_stub_routes_not_implemented():
     _reset_api()
     _enable()
-    # Phase 4 (§4.5.3): undo / scan keep the stub verbatim; fix and
+    # Phase 4 (§4.5.3): undo keeps the stub verbatim; fix and
     # fix-batch are real from Phase 4 and are covered by
-    # tests/test_librarian_engine.py instead.
-    for path in ("/api/librarian/undo", "/api/librarian/scan"):
-        resp = _call("POST", path, _authed_req(body={"request_id": "u-1"}))
-        assert resp.status_code == 200, path
-        assert resp.content == {"state": "not_implemented"}, path
-        resp = _call("POST", path, _authed_req(raw_body="{not json"))
-        assert resp.status_code == 400, path
+    # tests/test_librarian_engine.py instead. Scan was the second
+    # stub until Phase 5 Workstream D (§5.2) made it real — in this
+    # harness's default settings (test mode on) it now answers the
+    # pinned test-mode refusal; its full route coverage lives in
+    # tests/test_librarian_scan.py.
+    resp = _call("POST", "/api/librarian/undo", _authed_req(body={"request_id": "u-1"}))
+    assert resp.status_code == 200
+    assert resp.content == {"state": "not_implemented"}
+    resp = _call("POST", "/api/librarian/undo", _authed_req(raw_body="{not json"))
+    assert resp.status_code == 400
+    resp = _call("POST", "/api/librarian/scan", _authed_req(body={}))
+    assert resp.status_code == 200
+    assert resp.content["state"] == "refused_precondition"
+    assert "test mode" in resp.content["error"]
     # Nothing was written anywhere.
     assert fake_db.dbs["tracking"]["reject_ledger"].docs == []
     assert fake_db.dbs["tracking"]["librarian_fixes"].docs == []

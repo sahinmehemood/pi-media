@@ -42,13 +42,10 @@ constructed URL's host is asserted loopback before the first call;
 the closed-port failure case uses a loopback address.
 
 Scan note: §10.4's scan case asserts the §5.2 test-mode refusal
-shape once Workstream D's route lands. At this tree the scan route
-is still the Phase 3 stub, so the scan test below pins the wire
-behaviour that holds in both worlds (real POST dispatch, auth
-header as received, exit 0, a ``state`` field over the wire) and
-accepts either the stub state or D's refusal state — the refusal
-branch additionally checks the test-mode wording. Tightening this
-to the refusal shape only is a named follow-up of D-2's landing.
+shape. Workstream D's route has landed (D-2), so the scan test
+below asserts ``refused_precondition`` ONLY — the stub-era
+either-state acceptance was discharged in D-2's commit, as the
+Senior Review of E-3 required.
 """
 
 import asyncio
@@ -337,7 +334,8 @@ def test_http_scan_dispatch_over_real_transport():
         assert json.loads(rec["request_body"].decode("utf-8")) == {}
         assert out.encode("utf-8") == rec["response_body"]
         body = json.loads(out)
-        # Stub today; Workstream D's test-mode refusal once D lands.
-        assert body["state"] in ("not_implemented", "refused_precondition"), body
-        if body["state"] == "refused_precondition":
-            assert "test mode" in body["error"]
+        # Workstream D landed (D-2): the scan route is real, and in
+        # test mode it refuses with refused_precondition ONLY — the
+        # either-state acceptance from the stub era is discharged.
+        assert body["state"] == "refused_precondition", body
+        assert "test mode" in body["error"]

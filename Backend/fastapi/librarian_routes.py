@@ -316,7 +316,8 @@ async def librarian_mode(request: Request):
 
 # ------------------------------------------------------------------
 # Fix / fix-batch (Phase 4, §4.5): validation, then the test-mode
-# engine. undo / scan keep the Phase 3 stub (§4.5.3).
+# engine. undo keeps the Phase 3 stub (§4.5.3); scan is real from
+# Phase 5 Workstream D (§5.2 of the Phase 5 plan).
 # ------------------------------------------------------------------
 
 _ID_FIELD_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -493,7 +494,63 @@ async def librarian_undo(request: Request):
 
 @router.post("/api/librarian/scan")
 async def librarian_scan(request: Request):
-    return await _not_implemented(request)
+    # DESIGN §9's scan paragraph + Phase 5 plan §5.2: drive
+    # ScanManager through the seam-7 accessors, mode="scan", over
+    # the librarian_channels allowlist (or one allowlisted
+    # --channel). Every operation outcome is HTTP 200; a refusal is
+    # a result, not a transport error. The route returns after
+    # start() — ScanManager runs its own task; the bot polls
+    # scan-status.
+    err = await _require_token(request)
+    if err is not None:
+        return err
+    body, body_err = await _body_json(request)
+    if body_err is not None:
+        return body_err
+    from Backend.helper.settings_manager import SettingsManager
+
+    settings = SettingsManager.current()
+    channel = body.get("channel")
+    if channel is not None:
+        # An explicit channel is pinned to the allowlist (plan
+        # C-6): a scan posts a probe message into the channel, so
+        # it is channel work under the bot's permission. This check
+        # is deliberately a single comparison — removing it is a
+        # one-line change if sign-off overrules the pin.
+        allowlist = [str(c).strip() for c in settings.librarian_channels]
+        if not isinstance(channel, str) or channel.strip() not in allowlist:
+            return _json(200, {"state": "refused_precondition",
+                               "error": "channel is not in librarian_channels"})
+    if settings.librarian_test_mode:
+        # ScanManager's last-message probe posts a visible message
+        # into the channel — a Telegram write, which test mode's
+        # no-writes rule bars (plan §5.2 item 3).
+        return _json(200, {"state": "refused_precondition",
+                           "error": "scan posts a probe message into the "
+                                    "channel — test mode is on"})
+    from Backend.fastapi.routes.api_routes import get_scan_client, get_scan_manager
+
+    client = get_scan_client()
+    if client is None:
+        return _json(200, {"state": "error",
+                           "error": "no Telegram client is connected yet"})
+    if channel is not None:
+        channels = [channel]
+    else:
+        channels = list(settings.librarian_channels)
+        if not channels:
+            # Refused by the route itself, before start (Senior
+            # B-3): ScanManager.start with empty channels and
+            # non-empty leftover pending RESUMES the pending
+            # channels — UI resume semantics this route's
+            # "scan the allowlist" contract must never inherit.
+            return _json(200, {"state": "refused",
+                               "error": "No channels selected."})
+    manager = get_scan_manager()
+    result = await manager.start(client, channels, mode="scan")
+    if result.get("ok"):
+        return _json(200, {"state": "started", "scan": manager.get_status()})
+    return _json(200, {"state": "refused", "error": result.get("message")})
 
 
 # ------------------------------------------------------------------
