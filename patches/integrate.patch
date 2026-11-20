@@ -944,7 +944,7 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 62bda08..a96a9b2 100644
+index 62bda08..7e56c69 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
 @@ -143,26 +143,13 @@
@@ -978,7 +978,7 @@ index 62bda08..a96a9b2 100644
  
          <hr class="divider">
  
-@@ -693,6 +680,209 @@
+@@ -693,6 +680,386 @@
      {% endif %}
  </div>
  
@@ -1152,46 +1152,6 @@ index 62bda08..a96a9b2 100644
 +    {% endif %}
 +</div>
 +
-+<!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
-+<div class="settings-card">
-+    <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
-+    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
-+        <i class="fa-solid fa-circle-info"></i>
-+        Optional. Create a <strong>private</strong> channel, add all your bots as admins
-+        (Tools → Bot Admin Manager does it in one click), and paste its ID here.
-+        Files you DM to the bot are copied into this channel and streamed by the
-+        whole bot pool — your Userbot session is then never used for DM links.
-+        Leave empty to keep the current userbot-based DM links.<br>
-+        Tip: forward any post from the channel to the bot in DM and it replies with the channel ID.
-+    </p>
-+    <label class="s-label" for="dl_channel_id">DL CHANNEL</label>
-+    <div class="multi-item" style="margin-top:0.25rem">
-+        {% set dl_t = (settings.channel_titles or {}).get(settings.dl_channel_id|string, settings.dl_channel_id) %}
-+        <input type="text" id="dl_channel_id" class="s-input"
-+            value="{{ dl_t if settings.dl_channel_id else '' }}"
-+            data-id="{{ settings.dl_channel_id or '' }}"
-+            {% if settings.dl_channel_id %}readonly{% endif %}
-+            placeholder="-100xxxxxxxxxx (channels only)"
-+            oninput="if(!this.readOnly){this.dataset.id='';}">
-+        <button type="button" class="remove-btn" id="dl_channel_id_clear"
-+            style="{% if not settings.dl_channel_id %}display:none{% endif %}"
-+            onclick="clearSingleChannel('dl_channel_id')" title="Remove">
-+            <i class="fa-solid fa-xmark"></i>
-+        </button>
-+    </div>
-+    <label class="s-label" for="dl_expire_days" style="margin-top:1rem">POOLED FILE EXPIRY (DAYS)</label>
-+    <input type="number" id="dl_expire_days" class="s-input" min="0" max="3650"
-+        value="{{ settings.dl_expire_days if settings.dl_expire_days is not none else 0 }}">
-+    <p class="s-help">Pooled files older than this are deleted from the channel by a daily sweep. 0 = keep forever. Pinned files (📌 via /dl pin or the DL Index page) never expire.</p>
-+</div>
-+
- <style>
- .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
- .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1292,6 +1482,183 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
-         </div>
-     </div>
- 
 +    <!-- ── Librarian ─────────────────────────────────────────────────── -->
 +    <div class="settings-card" id="librarian-card">
 +        <h2><i class="fa-solid fa-book-open"></i> Librarian</h2>
@@ -1369,9 +1329,42 @@ index 62bda08..a96a9b2 100644
 +        <p id="librarian-writer-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
 +    </div>
 +
- </div><!-- /settings-root -->
- 
++<!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
++<div class="settings-card">
++    <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
++    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
++        <i class="fa-solid fa-circle-info"></i>
++        Optional. Create a <strong>private</strong> channel, add all your bots as admins
++        (Tools → Bot Admin Manager does it in one click), and paste its ID here.
++        Files you DM to the bot are copied into this channel and streamed by the
++        whole bot pool — your Userbot session is then never used for DM links.
++        Leave empty to keep the current userbot-based DM links.<br>
++        Tip: forward any post from the channel to the bot in DM and it replies with the channel ID.
++    </p>
++    <label class="s-label" for="dl_channel_id">DL CHANNEL</label>
++    <div class="multi-item" style="margin-top:0.25rem">
++        {% set dl_t = (settings.channel_titles or {}).get(settings.dl_channel_id|string, settings.dl_channel_id) %}
++        <input type="text" id="dl_channel_id" class="s-input"
++            value="{{ dl_t if settings.dl_channel_id else '' }}"
++            data-id="{{ settings.dl_channel_id or '' }}"
++            {% if settings.dl_channel_id %}readonly{% endif %}
++            placeholder="-100xxxxxxxxxx (channels only)"
++            oninput="if(!this.readOnly){this.dataset.id='';}">
++        <button type="button" class="remove-btn" id="dl_channel_id_clear"
++            style="{% if not settings.dl_channel_id %}display:none{% endif %}"
++            onclick="clearSingleChannel('dl_channel_id')" title="Remove">
++            <i class="fa-solid fa-xmark"></i>
++        </button>
++    </div>
++    <label class="s-label" for="dl_expire_days" style="margin-top:1rem">POOLED FILE EXPIRY (DAYS)</label>
++    <input type="number" id="dl_expire_days" class="s-input" min="0" max="3650"
++        value="{{ settings.dl_expire_days if settings.dl_expire_days is not none else 0 }}">
++    <p class="s-help">Pooled files older than this are deleted from the channel by a daily sweep. 0 = keep forever. Pinned files (📌 via /dl pin or the DL Index page) never expire.</p>
++</div>
++
  <style>
+ .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
+ .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
 @@ -1569,7 +1936,7 @@ function addItem(listKey) {
      const value = newInput.value.trim();
      if (!value) return;
