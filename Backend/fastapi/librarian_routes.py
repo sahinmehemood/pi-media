@@ -669,9 +669,9 @@ async def librarian_find(request: Request):
                     entry["qualities"] = [_quality_out(q) for q in (doc.get("telegram") or [])]
                 else:
                     entry["seasons"] = [
-                        {"season": season.get("season"),
+                        {"season": season.get("season_number"),
                          "episodes": [
-                             {"episode": ep.get("episode"),
+                             {"episode": ep.get("episode_number"),
                               "qualities": [_quality_out(q) for q in (ep.get("telegram") or [])]}
                              for ep in (season.get("episodes") or [])]}
                         for season in (doc.get("seasons") or [])]
@@ -721,8 +721,8 @@ async def _find_indexed(chat_id, msg_id):
                             return {"ids": {"imdb": doc.get("imdb_id"),
                                             "tmdb": doc.get("tmdb_id")},
                                     "media_type": "tv", "db_index": db_index,
-                                    "season": season.get("season"),
-                                    "episode": ep.get("episode"),
+                                    "season": season.get("season_number"),
+                                    "episode": ep.get("episode_number"),
                                     "absolute": ep.get("absolute_episode"),
                                     "quality": q.get("quality"),
                                     "name": q.get("name")}

@@ -1619,24 +1619,39 @@ sys.modules["Backend.helper"].librarian_gateway = _gw_mod
 
 
 def _seed_storage():
+    # Production-shaped seeds (E-4): the seasons/qualities below are
+    # byte-equal to the .dict() output of the real models in
+    # Backend/helper/modal.py — Season(season_number=…, episodes=[
+    # Episode(episode_number=…, title=…, telegram=[QualityDetail(
+    # quality=…, id=…, name=…, size=…, parts=[QualityPart(
+    # part_number=…, chat_id=…, msg_id=…, size_bytes=…)])])]) —
+    # the shape database.py's insert_media actually stores. (The
+    # pre-E-4 seeds used invented "season"/"episode" keys, which
+    # masked the routes' wrong-key reads.)
     storage = fake_db.dbs["storage_1"]
     storage["movie"].docs.append({
         "title": "Fixture Film", "title_english": None, "original_title": None,
         "release_year": 2020, "imdb_id": "tt0000001", "tmdb_id": 101,
         "kitsu_id": 55,
-        "telegram": [{"quality": "1080p", "name": "Fixture Film 2020 1080p.mkv",
-                      "size": "1.00GB",
-                      "parts": [{"chat_id": 111, "msg_id": 55}]}],
+        "telegram": [{"quality": "1080p", "id": "enc:111:55",
+                      "name": "Fixture Film 2020 1080p.mkv",
+                      "size": "1.00GB", "group_key": None,
+                      "parts": [{"part_number": 1, "chat_id": 111,
+                                 "msg_id": 55, "size_bytes": 1073741824}]}],
     })
     storage["tv"].docs.append({
         "title": "Fixture Show", "title_english": None, "original_title": None,
         "release_year": 2021, "imdb_id": "tt0000002", "tmdb_id": 202,
         "kitsu_id": None,
-        "seasons": [{"season": 1, "episodes": [
-            {"episode": 2, "telegram": [
-                {"quality": "720p", "name": "Fixture Show S01E02 720p.mkv",
-                 "size": "700.00MB",
-                 "parts": [{"chat_id": 111, "msg_id": 56}]}]}]}],
+        "seasons": [{"season_number": 1, "episodes": [
+            {"episode_number": 2, "title": "Ep Title",
+             "episode_backdrop": None, "overview": None, "released": None,
+             "absolute_episode": None, "telegram": [
+                 {"quality": "720p", "id": "enc:111:56",
+                  "name": "Fixture Show S01E02 720p.mkv",
+                  "size": "700.00MB", "group_key": None,
+                  "parts": [{"part_number": 1, "chat_id": 111,
+                             "msg_id": 56, "size_bytes": 734003200}]}]}]}],
     })
 
 
@@ -1754,11 +1769,15 @@ def test_file_readback_absolute_filings():
         "title": "Absolute Show", "title_english": None,
         "original_title": None, "release_year": 2022,
         "imdb_id": "tt0000003", "tmdb_id": 303, "kitsu_id": None,
-        "seasons": [{"season": 3, "episodes": [
-            {"episode": 2, "absolute_episode": 30, "telegram": [
-                {"quality": "1080p", "name": "Absolute Show 030 1080p.mkv",
-                 "size": "1.00GB",
-                 "parts": [{"chat_id": 111, "msg_id": 60}]}]}]}]})
+        "seasons": [{"season_number": 3, "episodes": [
+            {"episode_number": 2, "title": "Absolute Ep Title",
+             "episode_backdrop": None, "overview": None, "released": None,
+             "absolute_episode": 30, "telegram": [
+                 {"quality": "1080p", "id": "enc:111:60",
+                  "name": "Absolute Show 030 1080p.mkv",
+                  "size": "1.00GB", "group_key": None,
+                  "parts": [{"part_number": 1, "chat_id": 111,
+                             "msg_id": 60, "size_bytes": 1073741824}]}]}]}]})
     # Absolute filing: absolute is the stored number.
     resp = _call("GET", "/api/librarian/file",
                  _authed_req(query={"chat": "-100111", "msg": "60"}))
