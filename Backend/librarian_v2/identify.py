@@ -264,6 +264,41 @@ class Identifier:
         sid = self._materialise(best, kind, now)
         return Resolution(sid, "search", score, breakdown, "identified", best)
 
+    def verify_proposal(self, proposal, kind="tv", year=None, now=None):
+        """Verify an identity the BOT researched (SPEC amendment 2).
+
+        The shadow run (2026-11-20) proved the ladder alone cannot crack
+        this library's abbreviated stems when a primary provider is down:
+        expansion of 'pw' -> 'Perfect World' is research, and research is
+        the bot's job. The server's job is to VERIFY the bot's claim
+        against the provider and score the evidence:
+          - provider confirms the proposed ID            -> 0.90
+          - + the proposed IMDb ID matches the record    -> 0.97
+          - ID does not verify and no title to fall back -> unresolved
+        Slotting fit (+0.03) is added later, at plan time."""
+        now = int(time.time()) if now is None else now
+        kind = kind or "tv"
+        cand = None
+        if proposal.get("provider") and proposal.get("provider_id"):
+            cand = self._lookup(proposal["provider"],
+                                str(proposal["provider_id"]), kind, now)
+        if cand is None:
+            if proposal.get("title"):
+                return self.resolve(proposal["title"], kind=kind, year=year,
+                                    now=now)
+            return Resolution(None, "verify_proposal", 0.0,
+                              {"proposal_unverified": True}, "unresolved")
+        sid = self._materialise(cand, kind, now)
+        breakdown = {"proposal_verified": True,
+                     "provider": cand.get("provider")}
+        score = 0.90
+        if proposal.get("imdb_id") and \
+                cand.get("imdb_id") == proposal["imdb_id"]:
+            score = 0.97
+            breakdown["imdb_corroborated"] = True
+        return Resolution(sid, "verify_proposal", score, breakdown,
+                          "identified", cand)
+
     def _materialise(self, cand, kind, now, status="identified"):
         sid = self.store.upsert_series(
             cand.get("title") or "", kind=kind, year=cand.get("year"),

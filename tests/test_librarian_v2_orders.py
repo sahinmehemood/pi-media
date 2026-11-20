@@ -273,6 +273,20 @@ def test_undo_order_restores_everything():
     assert svc.progress(oid)["applied"] == 0
 
 
+def test_successful_apply_teaches_alias():
+    store, tg, svc, chan, sid, expected = _setup()
+    fid = _add_file(store, tg, chan, 101, "sg raw 1")
+    oid = _open_series_order(svc, sid)
+    it = _item(fid, sid, 1)
+    it["stem"] = "sg"
+    expected[(ANI_TG, 101)] = it["new_caption"]
+    svc.build_plan(oid, [it], T0)
+    svc.apply_plan(oid, T0)
+    _drain(svc, store)
+    found = store.find_series_by_alias(identify.normalise("sg"), "tv")
+    assert found and found["id"] == sid
+
+
 def test_dry_run_refuses_apply():
     store, tg, svc, chan, sid, expected = _setup(dry_run=True)
     fid = _add_file(store, tg, chan, 101, "sg raw 1")

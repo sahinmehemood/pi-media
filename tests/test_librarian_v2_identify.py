@@ -168,6 +168,36 @@ def test_search_cache_avoids_repeat_calls():
     assert len([c for c in prov.calls if c[0] == "search"]) == n
 
 
+def test_verify_proposal_scores():
+    store, prov, ident = _setup()
+    prov.by_id[("tmdb", "999")] = _cand("tmdb", "999", "Perfect World",
+                                        2021, "tt14986786")
+    # IMDb-corroborated proposal -> 0.97
+    res = ident.verify_proposal(
+        {"provider": "tmdb", "provider_id": "999",
+         "imdb_id": "tt14986786"}, kind="donghua", now=T0)
+    assert res.method == "verify_proposal" and res.score == 0.97
+    assert res.breakdown["imdb_corroborated"] is True
+    # Provider-confirmed only -> 0.90
+    store2, prov2, ident2 = _setup()
+    prov2.by_id[("tmdb", "999")] = _cand("tmdb", "999", "Perfect World",
+                                         2021, "tt14986786")
+    res2 = ident2.verify_proposal({"provider": "tmdb", "provider_id": "999"},
+                                  kind="donghua", now=T0)
+    assert res2.score == 0.90
+    # Unverifiable ID, no title -> unresolved
+    res3 = ident2.verify_proposal({"provider": "tmdb", "provider_id": "404"},
+                                  kind="donghua", now=T0)
+    assert res3.status == "unresolved" and res3.score == 0.0
+    # Unverifiable ID with a title -> falls back to the search ladder
+    prov2.search_results[("tmdb", "Perfect World")] = [
+        _cand("tmdb", "999", "Perfect World", 2021, "tt14986786")]
+    res4 = ident2.verify_proposal(
+        {"provider": "tmdb", "provider_id": "404", "title": "Perfect World"},
+        kind="donghua", year=2021, now=T0)
+    assert res4.status == "identified" and res4.method == "search"
+
+
 def test_slotting_and_fit_bonus():
     store, prov, ident = _setup()
     sid = store.upsert_series("Donghua Show", kind="donghua", year=2022,

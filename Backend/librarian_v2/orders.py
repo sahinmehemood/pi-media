@@ -18,6 +18,7 @@ attribute and become job snoozes (SPEC §7).
 
 import time
 
+from . import identify as identify_mod
 from . import jobs as jobs_mod
 
 
@@ -118,6 +119,7 @@ class OrderService:
                 "refusal_reason": refusal,
                 "_series_id": it.get("series_id"),
                 "_bits": it.get("bits") or {},
+                "_stem": it.get("stem"),
             })
         # The artefact hash covers only outcome-changing fields (store).
         plan_id = self.store.create_plan(order_id, plan_items, now)
@@ -130,6 +132,7 @@ class OrderService:
                 bd = _json.loads(row["score_breakdown"])
                 bd["_series_id"] = src["_series_id"]
                 bd["_bits"] = src["_bits"]
+                bd["_stem"] = src.get("_stem")
                 self.store.conn.execute(
                     "UPDATE plan_item SET score_breakdown=? WHERE id=?",
                     (_json.dumps(bd), row["id"]))
@@ -257,6 +260,14 @@ class OrderService:
         store.add_order_applies(order["id"], 1, now)
         if item["episode_id"]:
             store.set_order_cursor(order["id"], item["episode_id"], now)
+        # Amendment 2: a successful fix teaches the stem->series alias, so
+        # the bot's research becomes a permanent server-side shortcut.
+        stem = breakdown.get("_stem")
+        if stem and series_id:
+            series = store.get_series(series_id)
+            if series:
+                store.add_alias(series_id, identify_mod.normalise(stem),
+                                series["kind"])
 
     # -- progress (the bot's live view — SPEC §8 amendment 1) ----------------------
     def progress(self, order_id):

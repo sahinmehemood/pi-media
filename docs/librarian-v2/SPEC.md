@@ -293,6 +293,19 @@ byte-compare + full suite is the release proof for every phase.
 
 ## Amendments
 
+2. 2026-11-20 (Phase 2 shadow run): the ladder alone resolved **0/40**
+   known-fixed stems on the live library — TMDB was unreachable for the
+   whole run, the merged search facade left only Cinemeta, and the
+   shadow store's alias table was empty (migration seeds it in reality).
+   The deeper lesson: expanding abbreviated stems is *research* (the
+   bot's strength), while the server's strength is verification. Added
+   `Identifier.verify_proposal`: the bot proposes an identity it
+   researched; the server verifies the ID against the provider and
+   scores it (0.90 provider-confirmed, 0.97 with IMDb corroboration).
+   Successful applies also teach the stem→series alias (orders hook),
+   so every bot success becomes a permanent server-side shortcut.
+   Shadow re-run with the v1 alias map seeded is required before the
+   Phase 2 gate can be called passed.
 1. 2026-11-20 (Phase 1, at Yan's question): §8 `report` made explicitly a
    **live progress** read — planned/applied/verified/failed/remaining +
    percent + budget used, callable at any time during an apply, so the bot
