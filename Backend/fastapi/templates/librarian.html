@@ -116,12 +116,12 @@ table.lib-t td,table.lib-t th{padding:.35rem .4rem;border-top:1px solid var(--bo
 <div class="lib-card">
   {% if channels %}
   {% for c in channels %}
-  <div class="lib-row"><span class="lib-name">{{ c.channel_name }}</span><span class="lib-sub">{{ c.channel_id }}</span><span>{{ c.type or 'unknown' }}</span></div>
+  <div class="lib-row"><span class="lib-name">{{ c.channel_name }}</span><span class="lib-sub">{{ c.channel_id }}</span></div>
   {% endfor %}
   {% else %}
   <p class="lib-sub">No channels are allowlisted yet.</p>
   {% endif %}
-  <p class="lib-sub" style="margin-top:.6rem">The type shown is the stored ground truth the gateway and bot consume. Edit the allowlist and types in <a href="/admin/settings" style="color:var(--primary)">Settings → Librarian</a>.</p>
+  <p class="lib-sub" style="margin-top:.6rem">The bot reads each channel's name to understand what belongs there. Edit the allowlist in <a href="/admin/settings" style="color:var(--primary)">Settings → Librarian</a>.</p>
 </div>
 
 {% if librarian_enabled %}

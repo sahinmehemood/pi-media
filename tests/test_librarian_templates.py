@@ -210,6 +210,30 @@ def test_C5_page_size_with_history_seeded():
 
 
 # ------------------------------------------------------------------
+# librarian.html — Channels section (Yan, 2026-11-20: channel types
+# retired page-wide — the bot infers a channel's nature from its
+# NAME; this section shows name + ID only, no stored type)
+# ------------------------------------------------------------------
+
+def test_librarian_channels_section_no_types():
+    text = LIB_HTML.read_text(encoding="utf-8")
+    start = text.index("Channels")
+    section = text[start:]
+    # Rows render the channel name and ID — and no type value.
+    assert "c.channel_name" in section
+    assert "c.channel_id" in section
+    assert "c.type" not in section
+    # The retired ground-truth wording is gone; the replacement
+    # states the name-inference model and keeps the Settings pointer.
+    assert "ground truth" not in section
+    assert "reads each channel's name to understand" in section
+    assert "Edit the allowlist in" in section
+    assert "Settings → Librarian" in section
+    # Empty state unchanged.
+    assert "No channels are allowlisted yet." in section
+
+
+# ------------------------------------------------------------------
 # settings.html — Writer bot block (§4.6, §9.4 W-5 point 6, A-6, W-7)
 # ------------------------------------------------------------------
 
