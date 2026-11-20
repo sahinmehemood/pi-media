@@ -47,8 +47,9 @@ class GwDeps:
     def __init__(self, tmdb_candidates, tvdb_search, tvdb_episodes,
                  tvdb_extended, cinemeta_search, cinemeta_detail,
                  kitsu_search, kitsu_mappings, http_post, http_get,
-                 cache):
+                 cache, tmdb_seasons=None):
         self.tmdb_candidates = tmdb_candidates  # async (q, kind) -> [cand]
+        self.tmdb_seasons = tmdb_seasons  # async id -> {season: [ep]}|None
         self.tvdb_search = tvdb_search          # async title -> dict|None
         self.tvdb_episodes = tvdb_episodes      # async (id, order) -> [ep]
         self.tvdb_extended = tvdb_extended      # async id -> dict|None
@@ -86,8 +87,29 @@ def real_deps() -> GwDeps:
             return await entry.search_movie_candidates(query)
         return await entry.search_tv_candidates(query)
 
+    async def tmdb_seasons(tmdb_id):
+        from Backend.helper.metadata.providers import tmdb as tmdb_p
+        key = tmdb_p.tmdb_api_key()
+        if not key:
+            return None
+        base = "https://api.themoviedb.org/3"
+        show = await http_get(f"{base}/tv/{tmdb_id}?api_key={key}")
+        seasons = {}
+        for s in (show or {}).get("seasons") or []:
+            n = s.get("season_number")
+            if n is None or (s.get("episode_count") or 0) > 400:
+                continue
+            data = await http_get(
+                f"{base}/tv/{tmdb_id}/season/{n}?api_key={key}")
+            seasons[int(n)] = [
+                {"season": n, "episode": e.get("episode_number"),
+                 "absolute": None, "title": e.get("name"),
+                 "air_date": e.get("air_date")}
+                for e in (data or {}).get("episodes") or []]
+        return seasons
+
     return GwDeps(
-        tmdb_candidates=candidates,
+        tmdb_candidates=candidates, tmdb_seasons=tmdb_seasons,
         tvdb_search=tvdb.search,
         tvdb_episodes=tvdb._iter_series_episodes,
         tvdb_extended=tvdb.series_extended,
@@ -402,6 +424,27 @@ async def series(deps: GwDeps, ref: str):
                 out["absolute"].append(row)
         except Exception:
             down.append("tvdb")
+    tmdb_id = ids.get("tmdb")
+    if tmdb_id and deps.tmdb_seasons is not None:
+        try:
+            seasons = await deps.tmdb_seasons(int(tmdb_id))
+            t_aired, t_specials = [], []
+            for n in sorted((seasons or {}).keys()):
+                (t_specials if n == 0 else t_aired).extend(seasons[n])
+            if t_aired or t_specials:
+                if out["aired"] or out["specials"]:
+                    # Both worlds answered — the bot compares them;
+                    # for donghua this comparison IS the verification.
+                    out["tmdb_aired"] = t_aired
+                    out["tmdb_specials"] = t_specials
+                    out["notes"].append(
+                        "main lists are TVDB; TMDB lists included for "
+                        "comparison (tmdb_aired / tmdb_specials)")
+                else:
+                    out["aired"], out["specials"] = t_aired, t_specials
+                    out["notes"].append("episodes from TMDB")
+        except Exception:
+            down.append("tmdb")
     mal_id = ids.get("mal")
     if mal_id and not out["aired"]:
         try:

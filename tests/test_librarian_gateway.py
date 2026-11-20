@@ -149,3 +149,19 @@ def test_series_unknown_provider_is_plain():
     deps = _deps()
     out = _run(gw.series(deps, "bogus:1"))
     assert out["aired"] == [] and out["absolute"] == []
+
+
+def test_series_includes_tmdb_lists_for_comparison():
+    deps = _deps()
+
+    async def tmdb_seasons(tmdb_id):
+        return {0: [{"season": 0, "episode": 1, "absolute": None,
+                     "title": "TMDB Special", "air_date": "2021-05-01"}],
+                1: [{"season": 1, "episode": 1, "absolute": None,
+                     "title": "TMDB Ep 1", "air_date": "2021-04-01"}]}
+    deps.tmdb_seasons = tmdb_seasons
+    out = _run(gw.series(deps, "tvdb:555"))
+    # TVDB stays the main list; TMDB rides along for comparison.
+    assert out["specials"][0]["title"] == "Special 1"
+    assert out["tmdb_specials"][0]["title"] == "TMDB Special"
+    assert any("comparison" in n for n in out["notes"])
