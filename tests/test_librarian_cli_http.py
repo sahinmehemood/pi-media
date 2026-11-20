@@ -46,6 +46,24 @@ shape. Workstream D's route has landed (D-2), so the scan test
 below asserts ``refused_precondition`` ONLY — the stub-era
 either-state acceptance was discharged in D-2's commit, as the
 Senior Review of E-3 required.
+
+Undo deferral history (recorded here at C-2, closing the gap the
+Senior Review of E-3 named: the deferral was noted in QA's E-3
+report but not in this docstring): §6.3 made E-3's coverage of
+``undo --target-request-id`` conditional — "if OQ-1's CLI change
+lands in Workstream C, E-3's coverage includes it as a dispatch
+case through the real transport". E-3 landed (c699e85) BEFORE
+Workstream C: the CLI had no ``--target-request-id`` flag yet
+(DISP-8 was still awaiting Yan's OQ-1 ratification), so the case
+could not be written then and was deferred to C-2, the commit
+that adds the flag. The undo case below is that deferred case.
+The undo route at this tree is still the ``not_implemented``
+stub (the real route lands with C-1), so — exactly as this
+file's scan case did before D-2 — the case pins the wire
+behaviour (POST dispatch, auth header, payload byte-shape
+including ``target_request_id``) and accepts the stub's response
+state; tightening it to the real route's shapes is C-1's
+follow-up, mirroring the scan case's D-2 tightening.
 """
 
 import asyncio
@@ -339,3 +357,38 @@ def test_http_scan_dispatch_over_real_transport():
         # either-state acceptance from the stub era is discharged.
         assert body["state"] == "refused_precondition", body
         assert "test mode" in body["error"]
+
+
+# ------------------------------------------------------------------
+# undo --target-request-id — POST dispatch through the real
+# transport (the E-3 case deferred to C-2; see the docstring's
+# deferral history). The undo route is still the not_implemented
+# stub at this tree, so the case pins the wire behaviour and
+# accepts the stub's response state, exactly as the scan case
+# did before D-2.
+# ------------------------------------------------------------------
+
+def test_http_undo_target_request_id_dispatch_over_real_transport():
+    eng._reset()
+    api._enable()
+    with _Server() as server:
+        code, out, err = _run_cli(
+            ["undo", str(CHAT), "55", "--request-id", "u-1",
+             "--target-request-id", "fix-1"], server.url, TOKEN)
+        assert code == 0, (code, err, out)
+        assert len(server.records) == 1
+        rec = server.records[0]
+        assert rec["method"] == "POST"
+        assert rec["path"] == "/api/librarian/undo"
+        assert rec["authorization"] == f"Bearer {TOKEN}"
+        assert rec["content_type"] == "application/json"
+        # Payload byte-shape over the wire: the undo's own key and
+        # the target fix's key cross as distinct fields (DISP-8).
+        assert json.loads(rec["request_body"].decode("utf-8")) == {
+            "chat_id": CHAT, "msg_id": 55,
+            "request_id": "u-1", "target_request_id": "fix-1"}
+        assert out.encode("utf-8") == rec["response_body"]
+        # The stub-era response state, accepted as the scan case
+        # accepted it before D-2; C-1 tightens this when the real
+        # undo route lands.
+        assert json.loads(out) == {"state": "not_implemented"}

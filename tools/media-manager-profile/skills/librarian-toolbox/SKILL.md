@@ -332,13 +332,18 @@ plain words, and never upgrade it in the telling:
 
 ### 7. Undo, park, unpark, escalate
 
-- `undo <chat> <msg>` reverses one fix: an edit undo restores the
-  exact previous caption; a repost undo removes the replacement.
-  Address the current location of the post, not a stale locator.
-  Undo targets the most recent `fixed` operation for that locator;
-  it is itself an operation, is refused while another operation on
-  the post is non-terminal, and works with the writes flag off
-  (it is an operator reversal, not new work).
+- `undo <chat> <msg> [--request-id <uuid>] [--target-request-id <uuid>]`
+  reverses one fix: an edit undo restores the exact previous
+  caption; a repost undo removes the replacement. Address the
+  current location of the post, not a stale locator.
+  `--request-id` is the undo operation's OWN idempotency key —
+  a fresh ID you generate for this undo, never the fix's ID.
+  `--target-request-id` names the specific `fixed` operation to
+  undo (that fix's `request_id`, e.g. from `history`); when it
+  is absent, undo targets the most recent `fixed` operation for
+  that locator. Undo is itself an operation, is refused while
+  another operation on the post is non-terminal, and works with
+  the writes flag off (it is an operator reversal, not new work).
 - `park <key> --reason <text>` sets a waiting item aside without
   deciding it, recording the plain-words reason on the ledger row
   (`park_reason`). Park multipart releases and other

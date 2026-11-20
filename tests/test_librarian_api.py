@@ -2416,6 +2416,14 @@ def test_cli_command_map():
         (["undo", "-100111", "55", "--request-id", "u-1"],
          ("POST", "/api/librarian/undo",
           {"chat_id": -100111, "msg_id": 55, "request_id": "u-1"})),
+        (["undo", "-100111", "55", "--target-request-id", "fix-1"],
+         ("POST", "/api/librarian/undo",
+          {"chat_id": -100111, "msg_id": 55, "target_request_id": "fix-1"})),
+        (["undo", "-100111", "55", "--request-id", "u-1",
+          "--target-request-id", "fix-1"],
+         ("POST", "/api/librarian/undo",
+          {"chat_id": -100111, "msg_id": 55, "request_id": "u-1",
+           "target_request_id": "fix-1"})),
         (["scan"], ("POST", "/api/librarian/scan", {})),
         (["scan", "--channel", "-100111"],
          ("POST", "/api/librarian/scan", {"channel": "-100111"})),
@@ -2424,6 +2432,30 @@ def test_cli_command_map():
         code, out, err, calls = _run_cli(argv, http_result=(200, "{}"))
         assert code == 0, (argv, code, err)
         assert calls == [expected], (argv, calls, expected)
+
+
+def test_cli_undo_target_request_id_parsing():
+    # Phase 5 C-2 (plan §4.3, DISP-8, OQ-1 (a)): --request-id is the
+    # undo's OWN idempotency key; --target-request-id optionally
+    # names the fix to undo. Absent keys are omitted from the
+    # payload, exactly as the pre-C-2 dispatch omitted request_id.
+    # Flag order does not matter (both orders dispatch identically).
+    code, out, err, calls = _run_cli(
+        ["undo", "-100111", "55", "--target-request-id", "fix-1",
+         "--request-id", "u-1"], http_result=(200, "{}"))
+    assert code == 0, (code, err)
+    assert calls == [("POST", "/api/librarian/undo",
+                      {"chat_id": -100111, "msg_id": 55,
+                       "request_id": "u-1", "target_request_id": "fix-1"})]
+    # The flag requires a value: a trailing --target-request-id is a
+    # local usage error (exit 3) and no request is dispatched.
+    code, out, err, calls = _run_cli(
+        ["undo", "-100111", "55", "--target-request-id"],
+        http_result=(200, "{}"))
+    assert code == 3 and calls == [] and "--target-request-id" in err
+    # The usage line carries the new flag in its pinned form.
+    assert ("undo <chat> <msg> [--request-id <uuid>] "
+            "[--target-request-id <uuid>]") in cli.USAGE
 
 
 def test_cli_exit_codes_and_verbatim_output():

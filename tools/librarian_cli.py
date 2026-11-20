@@ -208,7 +208,8 @@ def _dispatch(argv):
         return "POST", f"/api/librarian/{cmd}", _read_json_file(opts["--json-file"])
 
     if cmd == "undo":
-        pos, opts = _parse_args(rest, 2, set(), {"--request-id"})
+        pos, opts = _parse_args(rest, 2, set(),
+                                {"--request-id", "--target-request-id"})
         try:
             chat, msg = int(pos[0]), int(pos[1])
         except ValueError:
@@ -216,6 +217,8 @@ def _dispatch(argv):
         payload = {"chat_id": chat, "msg_id": msg}
         if opts.get("--request-id") is not None:
             payload["request_id"] = opts["--request-id"]
+        if opts.get("--target-request-id") is not None:
+            payload["target_request_id"] = opts["--target-request-id"]
         return "POST", "/api/librarian/undo", payload
 
     if cmd == "scan":
@@ -243,7 +246,7 @@ USAGE = """usage: librarian_cli.py <command> [arguments]
   alias-set <channel> <stem> <record> | alias-forget <channel> <stem>
   park <key> --reason <text> | unpark <key> | escalate <key> --reason <text>
   fix --json-file <path|-> | fix-batch --json-file <path|->
-  undo <chat> <msg> [--request-id <uuid>]
+  undo <chat> <msg> [--request-id <uuid>] [--target-request-id <uuid>]
   scan [--channel <chat>]
 """
 
