@@ -186,7 +186,7 @@ mid-apply and asserting recovery.
 | open_order | `POST /orders` {scope, limits} | order id + effective limits |
 | plan | `POST /orders/{id}/plan` {items[]} | per-item validation, tiers, refusals; plan hash |
 | apply | `POST /orders/{id}/apply` | accepted; progress via report/SSE |
-| report | `GET /orders/{id}/report` | state, cursor, fixed/gaps/conflicts, needs-eyes list |
+| report | `GET /orders/{id}/report` | **live progress at any moment**: state, cursor, items planned / applied / verified / failed / remaining + percent, budget used, fixed/gaps/conflicts, needs-eyes list. Callable mid-apply, not just at the end — the bot always knows exactly how much of its work has landed (Yan's requirement, 2026-11-20) |
 | search | `GET /search?q=&scope=` | read-only series/file search |
 
 The v1 CLI (`tools/librarian_cli.py`) gains a v2 mode in Phase 3; the bot's
@@ -293,4 +293,8 @@ byte-compare + full suite is the release proof for every phase.
 
 ## Amendments
 
-(none yet)
+1. 2026-11-20 (Phase 1, at Yan's question): §8 `report` made explicitly a
+   **live progress** read — planned/applied/verified/failed/remaining +
+   percent + budget used, callable at any time during an apply, so the bot
+   can always see how much of its work has been applied. Progress derives
+   from plan_item/job states and caption_revision counts; no extra storage.

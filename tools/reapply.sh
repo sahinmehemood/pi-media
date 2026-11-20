@@ -29,7 +29,10 @@ PLUGIN_FILES=(
   Backend/helper/hermes_bot.py
   Backend/helper/librarian.py
   Backend/helper/automations.py
+  Backend/librarian_v2/__init__.py
   Backend/librarian_v2/schema.sql
+  Backend/librarian_v2/store.py
+  Backend/librarian_v2/jobs.py
   Backend/pyrofork/plugins/dl_link.py
   Backend/pyrofork/plugins/prewarm_hooks.py
   Backend/fastapi/templates/dl_index.html
@@ -56,6 +59,7 @@ PLUGIN_FILES=(
   tests/librarian_v2/__init__.py
   tests/librarian_v2/harness.py
   tests/test_librarian_v2_harness.py
+  tests/test_librarian_v2_core.py
   docs/librarian/DESIGN.md
   docs/librarian/DESIGN-v4.md
   docs/librarian/DESIGN-v5.md
