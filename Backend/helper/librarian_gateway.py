@@ -365,11 +365,18 @@ async def crossid(deps: GwDeps, ref: str):
                 elif "kitsu" in u:
                     ids["kitsu"] = u.rstrip("/").split("/")[-1]
         elif provider == "kitsu":
-            maps = await deps.kitsu_mappings(int(value))
+            doc = await deps.kitsu_mappings(int(value))
             ids = {"kitsu": int(value)}
-            for k, v in (maps or {}).items():
+            # AniZip returns a whole document (titles/episodes/
+            # mappings) — only the mappings block holds cross-ids.
+            raw = ((doc or {}).get("mappings") or {})
+            rename = {"mal_id": "mal", "anilist_id": "anilist",
+                      "thetvdb_id": "tvdb", "themoviedb_id": "tmdb",
+                      "imdb_id": "imdb", "anidb_id": "anidb",
+                      "kitsu_id": "kitsu"}
+            for k, v in raw.items():
                 if v:
-                    ids[str(k).lower()] = v
+                    ids[rename.get(k, str(k).lower())] = v
         elif provider in ("tmdb", "imdb"):
             ids = {provider: value}
             # TMDB<->IMDb bridging for series lives in the app search:

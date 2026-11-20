@@ -67,7 +67,11 @@ def _deps(**over):
         return None
 
     async def kitsu_mappings(kid):
-        return None
+        return {"titles": {"en": "Perfect World"},
+                "episodes": {"1": {"episode": "1"}},
+                "mappings": {"mal_id": 47405, "anilist_id": 120218,
+                             "thetvdb_id": None, "imdb_id": "tt999",
+                             "anidb_id": 16281, "kitsu_id": kid}}
 
     async def http_post(url, payload):
         return {"data": {"Page": {"media": [{
@@ -135,6 +139,15 @@ def test_crossid_tvdb_remote_ids():
     deps = _deps()
     out = _run(gw.crossid(deps, "tvdb:555"))
     assert out["ids"] == {"tvdb": 555, "imdb": "tt14986786", "tmdb": 999}
+
+
+def test_crossid_kitsu_reads_only_the_mappings_block():
+    deps = _deps()
+    out = _run(gw.crossid(deps, "kitsu:44400"))
+    assert out["ids"] == {"kitsu": 44400, "mal": 47405,
+                          "anilist": 120218, "imdb": "tt999",
+                          "anidb": 16281}
+    assert "episodes" not in out["ids"] and "titles" not in out["ids"]
 
 
 def test_series_splits_specials_and_absolute():
