@@ -1,0 +1,27 @@
+# Seam manifest — every upstream file the plugin patches.
+# patches/integrate.patch is regenerated ONLY from this list:
+#   git diff e4f1169 -- $(grep -v "^#" tools/seam_manifest.txt) > patches/integrate.patch
+# tools/reapply.sh byte-compares every file listed here after a pristine apply.
+.gitignore
+Backend/__main__.py
+Backend/fastapi/main.py
+Backend/fastapi/routes/api_routes.py
+Backend/fastapi/routes/stream_routes.py
+Backend/fastapi/routes/stremio_routes.py
+Backend/fastapi/routes/template_routes.py
+Backend/fastapi/templates/admin_dashboard.html
+Backend/fastapi/templates/base.html
+Backend/fastapi/templates/dashboard.html
+Backend/fastapi/templates/settings.html
+Backend/fastapi/templates/tools.html
+Backend/helper/database.py
+Backend/helper/health.py
+Backend/helper/metadata/providers/tmdb.py
+Backend/helper/pyro.py
+Backend/helper/scan_manager.py
+Backend/helper/settings_manager.py
+Backend/helper/skip_channel.py
+Backend/pyrofork/clients.py
+README.md
+docs/index.html
+docs/setup.html

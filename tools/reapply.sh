@@ -10,10 +10,15 @@
 #   3. Applies patches/integrate.patch — every edit to upstream files
 #      (integration seams + donation removal), nothing else.
 #   4. Runs the plugin test suite inside the target.
+#   5. Byte-compares every PLUGIN_FILES entry and every file in
+#      tools/seam_manifest.txt between the target and this tree —
+#      the release proof that a pristine apply reproduces this tree
+#      exactly (Librarian DESIGN §4).
 #
-# Exit code 0 means the plugin applies cleanly to that upstream ref and
-# all tests pass. Run it after every official update; if the patch no
-# longer applies, upstream touched a seam — see docs/stream-buffer/DESIGN.md §6.
+# Exit code 0 means the plugin applies cleanly to that upstream ref,
+# all tests pass, and the byte-compare is clean. Run it after every
+# official update; if the patch no longer applies, upstream touched a
+# seam — see docs/stream-buffer/DESIGN.md §6.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,6 +63,7 @@ PLUGIN_FILES=(
   docs/wave-2/DESIGN.md
   docs/website-rebuild/DESIGN.md
   tools/reapply.sh
+  tools/seam_manifest.txt
   patches/integrate.patch
   .github/workflows/upstream-check.yml
 )
@@ -84,4 +90,22 @@ git -C "$TARGET" apply "$SRC/patches/integrate.patch"
 echo "==> Running plugin tests"
 (cd "$TARGET" && python3 tests/run_all.py)
 
-echo "==> OK: streaming buffer plugin applied to $REF and all tests pass"
+echo "==> Byte-comparing plugin + seam files against $SRC"
+SEAM_FILES=()
+while IFS= read -r line; do
+  case "$line" in ''|'#'*) continue ;; esac
+  SEAM_FILES+=("$line")
+done < "$SRC/tools/seam_manifest.txt"
+MISMATCH=0
+for f in "${PLUGIN_FILES[@]}" "${SEAM_FILES[@]}"; do
+  if ! cmp --silent "$SRC/$f" "$TARGET/$f"; then
+    echo "MISMATCH: $f"
+    MISMATCH=1
+  fi
+done
+if [ "$MISMATCH" -ne 0 ]; then
+  echo "==> FAIL: pristine apply does not reproduce the working tree"
+  exit 1
+fi
+
+echo "==> OK: streaming buffer plugin applied to $REF, all tests pass, byte-compare clean"

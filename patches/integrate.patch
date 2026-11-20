@@ -28,7 +28,7 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..9a71e42 100644
+index 9ae7925..faca784 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
 @@ -70,8 +70,14 @@ from Backend.fastapi.routes.api_routes import (
@@ -54,10 +54,11 @@ index 9ae7925..9a71e42 100644
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -293,6 +300,60 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -292,6 +299,59 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+ @app.get("/admin/dashboard", response_class=HTMLResponse)
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
- 
++
 +@app.get("/admin/dl-index", response_class=HTMLResponse)
 +async def admin_dl_index(request: Request, _: bool = Depends(require_auth)):
 +    return await dl_index_page(request, _)
@@ -98,7 +99,6 @@ index 9ae7925..9a71e42 100644
 +
 +
 +
-+# --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
 +
 +
 +
@@ -111,11 +111,10 @@ index 9ae7925..9a71e42 100644
 +
 +
 +
-+
+ 
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
-     return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +874,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +873,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
