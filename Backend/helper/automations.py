@@ -316,6 +316,14 @@ def run_now(job_id: str) -> dict:
 async def _ticker() -> None:
     while True:
         try:
+            # Librarian v2 job driving (SPEC seam): a no-op unless v2 is
+            # enabled; never allowed to take the ticker down.
+            try:
+                from Backend.librarian_v2 import api as _v2api
+                if _v2api.enabled():
+                    _v2api.get_runtime().tick()
+            except Exception:
+                pass
             for d in JOB_DEFS:
                 cfg = await get_config(d["id"])
                 nxt = next_run_ts(cfg)

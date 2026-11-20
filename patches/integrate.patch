@@ -28,7 +28,7 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..eeaa78e 100644
+index 9ae7925..ad3f76e 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
 @@ -70,8 +70,21 @@ from Backend.fastapi.routes.api_routes import (
@@ -72,7 +72,7 @@ index 9ae7925..eeaa78e 100644
  
  
  #----- Streaming and Stremio routers
-@@ -293,6 +311,50 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +311,114 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -120,10 +120,74 @@ index 9ae7925..eeaa78e 100644
 +async def librarian_search(request: Request):
 +    return await librarian_bot_search_api(request)
 +
++# --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
++from Backend.librarian_v2.api import (
++    v2_approve_api,
++    v2_files_register_api,
++    v2_orders_apply_api,
++    v2_orders_kill_api,
++    v2_orders_open_api,
++    v2_orders_plan_api,
++    v2_orders_report_api,
++    v2_series_list_api,
++    v2_series_resolve_api,
++    v2_status_api,
++    v2_undo_api,
++    v2_unidentified_api,
++)
++
++@app.get("/api/librarian/v2/status")
++async def librarian_v2_status(request: Request):
++    return await v2_status_api(request)
++
++@app.get("/api/librarian/v2/series")
++async def librarian_v2_series(request: Request):
++    return await v2_series_list_api(request)
++
++@app.post("/api/librarian/v2/series/resolve")
++async def librarian_v2_resolve(request: Request):
++    return await v2_series_resolve_api(request)
++
++@app.get("/api/librarian/v2/unidentified")
++async def librarian_v2_unidentified(request: Request):
++    return await v2_unidentified_api(request)
++
++@app.post("/api/librarian/v2/files")
++async def librarian_v2_files(request: Request):
++    return await v2_files_register_api(request)
++
++@app.post("/api/librarian/v2/orders")
++async def librarian_v2_orders_open(request: Request):
++    return await v2_orders_open_api(request)
++
++@app.post("/api/librarian/v2/orders/plan")
++async def librarian_v2_orders_plan(request: Request):
++    return await v2_orders_plan_api(request)
++
++@app.post("/api/librarian/v2/orders/apply")
++async def librarian_v2_orders_apply(request: Request):
++    return await v2_orders_apply_api(request)
++
++@app.get("/api/librarian/v2/orders/report")
++async def librarian_v2_orders_report(request: Request):
++    return await v2_orders_report_api(request)
++
++@app.post("/api/librarian/v2/orders/kill")
++async def librarian_v2_orders_kill(request: Request):
++    return await v2_orders_kill_api(request)
++
++@app.post("/api/librarian/v2/undo")
++async def librarian_v2_undo(request: Request):
++    return await v2_undo_api(request)
++
++@app.post("/api/admin/librarian/v2/approve")
++async def librarian_v2_approve(request: Request, _: bool = Depends(require_auth)):
++    return await v2_approve_api(request)
++
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +875,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +939,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
@@ -2002,7 +2066,7 @@ index 49c2d40..a274d73 100644
                  LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
              return
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..a158267 100644
+index 2b7712c..1436880 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,10 @@ from typing import Any, Dict, List
@@ -2031,7 +2095,7 @@ index 2b7712c..a158267 100644
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -63,6 +75,39 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -63,6 +75,46 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -2068,10 +2132,17 @@ index 2b7712c..a158267 100644
 +    "librarian_apply_workers": 4,
 +    "librarian_gate_strict_year": False,
 +    "librarian_specials_policy": "guard",
++    "librarian_v2_enabled": False,
++    "librarian_v2_db_path": "",
++    "librarian_v2_dry_run": True,
++    "librarian_v2_daily_budget": 5000,
++    "librarian_v2_auto_floor": 0.95,
++    "librarian_v2_approval_floor": 0.80,
++    "librarian_v2_specials_policy": "guard",
  }
  
  
-@@ -158,6 +203,17 @@ class Settings:
+@@ -158,6 +210,17 @@ class Settings:
      def announce_new_content(self) -> bool:
          return bool(self._d.get("announce_new_content", False))
  
@@ -2089,7 +2160,7 @@ index 2b7712c..a158267 100644
      @property
      def delete_on_metadata_fail(self) -> bool:
          return bool(self._d.get("delete_on_metadata_fail", False))
-@@ -170,6 +226,31 @@ class Settings:
+@@ -170,6 +233,31 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -2121,7 +2192,7 @@ index 2b7712c..a158267 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +386,199 @@ class Settings:
+@@ -305,6 +393,240 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -2318,10 +2389,51 @@ index 2b7712c..a158267 100644
 +        value = str(self._d.get("librarian_specials_policy") or "guard").strip().lower()
 +        return value if value in ("guard", "off") else "guard"
 +
++    #----- Librarian v2 (Work Orders — docs/librarian-v2/SPEC.md).
++    @property
++    def librarian_v2_enabled(self) -> bool:
++        return bool(self._d.get("librarian_v2_enabled", False))
++
++    @property
++    def librarian_v2_db_path(self) -> str:
++        return str(self._d.get("librarian_v2_db_path") or
++                   "librarian_v2.sqlite3")
++
++    @property
++    def librarian_v2_dry_run(self) -> bool:
++        return bool(self._d.get("librarian_v2_dry_run", True))
++
++    @property
++    def librarian_v2_daily_budget(self) -> int:
++        try:
++            return int(self._d.get("librarian_v2_daily_budget", 5000))
++        except (TypeError, ValueError):
++            return 5000
++
++    @property
++    def librarian_v2_auto_floor(self) -> float:
++        try:
++            return float(self._d.get("librarian_v2_auto_floor", 0.95))
++        except (TypeError, ValueError):
++            return 0.95
++
++    @property
++    def librarian_v2_approval_floor(self) -> float:
++        try:
++            return float(self._d.get("librarian_v2_approval_floor", 0.80))
++        except (TypeError, ValueError):
++            return 0.80
++
++    @property
++    def librarian_v2_specials_policy(self) -> str:
++        value = str(self._d.get("librarian_v2_specials_policy") or
++                    "guard").strip().lower()
++        return value if value in ("guard", "off") else "guard"
++
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +654,7 @@ class SettingsManager:
+@@ -380,7 +702,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -2330,7 +2442,7 @@ index 2b7712c..a158267 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +801,23 @@ class SettingsManager:
+@@ -527,4 +849,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  

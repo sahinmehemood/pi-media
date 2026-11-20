@@ -108,6 +108,13 @@ _DEFAULTS: Dict[str, Any] = {
     "librarian_apply_workers": 4,
     "librarian_gate_strict_year": False,
     "librarian_specials_policy": "guard",
+    "librarian_v2_enabled": False,
+    "librarian_v2_db_path": "",
+    "librarian_v2_dry_run": True,
+    "librarian_v2_daily_budget": 5000,
+    "librarian_v2_auto_floor": 0.95,
+    "librarian_v2_approval_floor": 0.80,
+    "librarian_v2_specials_policy": "guard",
 }
 
 
@@ -577,6 +584,47 @@ class Settings:
     @property
     def librarian_specials_policy(self) -> str:
         value = str(self._d.get("librarian_specials_policy") or "guard").strip().lower()
+        return value if value in ("guard", "off") else "guard"
+
+    #----- Librarian v2 (Work Orders — docs/librarian-v2/SPEC.md).
+    @property
+    def librarian_v2_enabled(self) -> bool:
+        return bool(self._d.get("librarian_v2_enabled", False))
+
+    @property
+    def librarian_v2_db_path(self) -> str:
+        return str(self._d.get("librarian_v2_db_path") or
+                   "librarian_v2.sqlite3")
+
+    @property
+    def librarian_v2_dry_run(self) -> bool:
+        return bool(self._d.get("librarian_v2_dry_run", True))
+
+    @property
+    def librarian_v2_daily_budget(self) -> int:
+        try:
+            return int(self._d.get("librarian_v2_daily_budget", 5000))
+        except (TypeError, ValueError):
+            return 5000
+
+    @property
+    def librarian_v2_auto_floor(self) -> float:
+        try:
+            return float(self._d.get("librarian_v2_auto_floor", 0.95))
+        except (TypeError, ValueError):
+            return 0.95
+
+    @property
+    def librarian_v2_approval_floor(self) -> float:
+        try:
+            return float(self._d.get("librarian_v2_approval_floor", 0.80))
+        except (TypeError, ValueError):
+            return 0.80
+
+    @property
+    def librarian_v2_specials_policy(self) -> str:
+        value = str(self._d.get("librarian_v2_specials_policy") or
+                    "guard").strip().lower()
         return value if value in ("guard", "off") else "guard"
 
     #----- Lists

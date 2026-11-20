@@ -355,6 +355,70 @@ async def librarian_rollback(request: Request):
 async def librarian_search(request: Request):
     return await librarian_bot_search_api(request)
 
+# --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
+from Backend.librarian_v2.api import (
+    v2_approve_api,
+    v2_files_register_api,
+    v2_orders_apply_api,
+    v2_orders_kill_api,
+    v2_orders_open_api,
+    v2_orders_plan_api,
+    v2_orders_report_api,
+    v2_series_list_api,
+    v2_series_resolve_api,
+    v2_status_api,
+    v2_undo_api,
+    v2_unidentified_api,
+)
+
+@app.get("/api/librarian/v2/status")
+async def librarian_v2_status(request: Request):
+    return await v2_status_api(request)
+
+@app.get("/api/librarian/v2/series")
+async def librarian_v2_series(request: Request):
+    return await v2_series_list_api(request)
+
+@app.post("/api/librarian/v2/series/resolve")
+async def librarian_v2_resolve(request: Request):
+    return await v2_series_resolve_api(request)
+
+@app.get("/api/librarian/v2/unidentified")
+async def librarian_v2_unidentified(request: Request):
+    return await v2_unidentified_api(request)
+
+@app.post("/api/librarian/v2/files")
+async def librarian_v2_files(request: Request):
+    return await v2_files_register_api(request)
+
+@app.post("/api/librarian/v2/orders")
+async def librarian_v2_orders_open(request: Request):
+    return await v2_orders_open_api(request)
+
+@app.post("/api/librarian/v2/orders/plan")
+async def librarian_v2_orders_plan(request: Request):
+    return await v2_orders_plan_api(request)
+
+@app.post("/api/librarian/v2/orders/apply")
+async def librarian_v2_orders_apply(request: Request):
+    return await v2_orders_apply_api(request)
+
+@app.get("/api/librarian/v2/orders/report")
+async def librarian_v2_orders_report(request: Request):
+    return await v2_orders_report_api(request)
+
+@app.post("/api/librarian/v2/orders/kill")
+async def librarian_v2_orders_kill(request: Request):
+    return await v2_orders_kill_api(request)
+
+@app.post("/api/librarian/v2/undo")
+async def librarian_v2_undo(request: Request):
+    return await v2_undo_api(request)
+
+@app.post("/api/admin/librarian/v2/approve")
+async def librarian_v2_approve(request: Request, _: bool = Depends(require_auth)):
+    return await v2_approve_api(request)
+
 @app.get("/media/manage", response_class=HTMLResponse)
 async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
     return await media_management_page(request, media_type, custom, _)
