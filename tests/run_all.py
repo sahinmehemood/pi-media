@@ -14,7 +14,7 @@ MODULES = ["test_stream_buffer_core", "test_buffered_streamer", "test_static_sea
            "test_dl_link", "test_wave2_engine", "test_wave2_prewarm",
            "test_wave2_update_manager", "test_hermes_bot", "test_librarian",
            "test_automations", "test_librarian_v2_harness",
-           "test_librarian_v2_core"]
+           "test_librarian_v2_core", "test_librarian_v2_identify"]
 
 
 def main() -> int:
