@@ -59,6 +59,56 @@ def call(method: str, path: str, payload: dict | None = None) -> dict:
         return {"ok": False, "message": f"request failed: {e}"}
 
 
+def _v2(args) -> dict:
+    """Librarian v2 Work Orders — the bot's only capability surface.
+    Thin pass-throughs to /api/librarian/v2/*; all rules live server-side."""
+    cmd = args.v2cmd
+    if cmd == "status":
+        return call("GET", "/api/librarian/v2/status")
+    if cmd == "series":
+        q = f"?kind={args.kind}" if args.kind else ""
+        return call("GET", f"/api/librarian/v2/series{q}")
+    if cmd == "resolve":
+        payload: dict = {"kind": args.kind, "year": args.year}
+        if args.proposal:
+            with open(args.proposal, "r", encoding="utf-8") as fh:
+                payload["proposal"] = json.load(fh)
+        else:
+            payload["title"] = args.title
+        return call("POST", "/api/librarian/v2/series/resolve", payload)
+    if cmd == "unidentified":
+        q = f"?channel={args.channel}" if args.channel else ""
+        return call("GET", f"/api/librarian/v2/unidentified{q}")
+    if cmd == "register":
+        with open(args.file, "r", encoding="utf-8") as fh:
+            return call("POST", "/api/librarian/v2/files", json.load(fh))
+    if cmd == "open":
+        payload = {"scope": args.scope, "series_id": args.series,
+                   "channel_id": args.channel, "budget": args.budget}
+        return call("POST", "/api/librarian/v2/orders", payload)
+    if cmd == "plan":
+        with open(args.file, "r", encoding="utf-8") as fh:
+            items = json.load(fh)
+        if isinstance(items, dict):
+            items = items.get("items") or []
+        return call("POST", "/api/librarian/v2/orders/plan",
+                    {"order_id": args.order, "items": items})
+    if cmd == "apply":
+        return call("POST", "/api/librarian/v2/orders/apply",
+                    {"order_id": args.order})
+    if cmd == "report":
+        return call("GET", f"/api/librarian/v2/orders/report"
+                           f"?order_id={args.order}")
+    if cmd == "kill":
+        return call("POST", "/api/librarian/v2/orders/kill",
+                    {"order_id": args.order})
+    if cmd == "undo":
+        payload = {"order_id": args.order} if args.order \
+            else {"file_id": args.file}
+        return call("POST", "/api/librarian/v2/undo", payload)
+    return {"ok": False, "message": f"unknown v2 command {cmd}"}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="librarian-cli")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -77,6 +127,40 @@ def main() -> int:
     p.add_argument("--id", required=True)
     p = sub.add_parser("rollback")
     p.add_argument("--id", required=True)
+    # --- Librarian v2 (Work Orders) ---
+    v2 = sub.add_parser("v2")
+    v2sub = v2.add_subparsers(dest="v2cmd", required=True)
+    v2sub.add_parser("status")
+    p = v2sub.add_parser("series")
+    p.add_argument("--kind", default="")
+    p = v2sub.add_parser("resolve")
+    p.add_argument("--title", default="")
+    p.add_argument("--kind", default="tv")
+    p.add_argument("--year", type=int, default=None)
+    p.add_argument("--proposal", default="",
+                   help="JSON file: {provider, provider_id, imdb_id, title}")
+    p = v2sub.add_parser("unidentified")
+    p.add_argument("--channel", default="")
+    p = v2sub.add_parser("register")
+    p.add_argument("--file", required=True)
+    p = v2sub.add_parser("open")
+    p.add_argument("--scope", default="series",
+                   choices=["series", "channel_unidentified"])
+    p.add_argument("--series", type=int, default=None)
+    p.add_argument("--channel", type=int, default=None)
+    p.add_argument("--budget", type=int, default=None)
+    p = v2sub.add_parser("plan")
+    p.add_argument("--order", type=int, required=True)
+    p.add_argument("--file", required=True)
+    p = v2sub.add_parser("apply")
+    p.add_argument("--order", type=int, required=True)
+    p = v2sub.add_parser("report")
+    p.add_argument("--order", type=int, required=True)
+    p = v2sub.add_parser("kill")
+    p.add_argument("--order", type=int, required=True)
+    p = v2sub.add_parser("undo")
+    p.add_argument("--order", type=int, default=None)
+    p.add_argument("--file", type=int, default=None)
     args = ap.parse_args()
 
     if args.cmd == "status":
@@ -93,6 +177,8 @@ def main() -> int:
         out = call("POST", "/api/librarian/apply", {"proposal_id": args.id})
     elif args.cmd == "rollback":
         out = call("POST", "/api/librarian/rollback", {"proposal_id": args.id})
+    elif args.cmd == "v2":
+        out = _v2(args)
     else:  # pragma: no cover
         out = {"ok": False, "message": "unknown command"}
     print(json.dumps(out, indent=2, ensure_ascii=False))
