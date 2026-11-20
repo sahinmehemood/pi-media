@@ -356,3 +356,60 @@ def test_W5_settings_page_context_blanks_secrets():
     current = FakeSettingsManager.current()
     assert current.librarian_writer_token == WRITER_SENTINEL
     assert current.librarian_api_token_hash == hash_sentinel
+
+
+# ------------------------------------------------------------------
+# F2 (Phase 4 gate follow-up) — the settings PAGE showed "Pairing
+# token: Not set" while a token WAS set. The JSON API computes
+# librarian_api_token_hash_set from the real value before blanking
+# (R1); the page route blanked the hash WITHOUT setting the flag, so
+# the template's fallback read the blanked hash and rendered
+# "Not set". The page route must mirror the API: flag computed from
+# the stored value first, hash still never in context or HTML (C-2).
+# ------------------------------------------------------------------
+
+def _render_settings(ctx):
+    """Render the REAL settings.html with a captured route context,
+    via the templates suite's env (stub base). Returns None where
+    jinja2 is unavailable — the context assertions below always run;
+    render assertions run in envs that have jinja2 (app/staging)."""
+    import test_librarian_templates as tpl
+
+    source = tpl.SETTINGS_HTML.read_text(encoding="utf-8")
+    return tpl._try_render("settings.html", source, ctx)
+
+
+def test_F2_settings_page_context_sets_pairing_flag():
+    _reset()
+    template_routes = _load_template_routes()
+    hash_sentinel = "hash" * 16
+    api._set_settings(**{"librarian_api_token_hash": hash_sentinel})
+    template_routes.templates.calls = []
+    _run(template_routes.settings_page(_session_req()))
+    assert template_routes.templates.calls, "settings_page rendered nothing"
+    _name, ctx = template_routes.templates.calls[-1]
+    settings = ctx["settings"]
+    # The flag mirrors the API: computed from the stored value...
+    assert settings["librarian_api_token_hash_set"] is True
+    # ...while the hash itself is still blanked and nowhere in ctx.
+    assert settings["librarian_api_token_hash"] == ""
+    assert hash_sentinel not in json.dumps(ctx, default=str)
+    # The stored value itself is untouched — only the context copy.
+    assert FakeSettingsManager.current().librarian_api_token_hash == hash_sentinel
+    # Rendered label logic yields "Set"; the hash is nowhere in HTML.
+    html = _render_settings(ctx)
+    if html is not None:
+        assert hash_sentinel not in html
+        assert 'id="librarian-token-status">Set<' in html
+
+    # Negative direction: no stored hash -> flag False, "Not set".
+    _reset()
+    api._set_settings(**{"librarian_api_token_hash": ""})
+    template_routes.templates.calls = []
+    _run(template_routes.settings_page(_session_req()))
+    assert template_routes.templates.calls, "settings_page rendered nothing"
+    _name, ctx = template_routes.templates.calls[-1]
+    assert ctx["settings"]["librarian_api_token_hash_set"] is False
+    html = _render_settings(ctx)
+    if html is not None:
+        assert 'id="librarian-token-status">Not set<' in html

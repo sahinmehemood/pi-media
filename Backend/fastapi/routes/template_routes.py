@@ -312,6 +312,13 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
     #----- token is a plaintext credential, the pairing hash and the
     #----- session secret ride along in the same fix.
     settings["librarian_writer_token"] = ""
+    #----- F2 (Phase 4 gate follow-up): mirror get_settings_api — the
+    #----- template's pairing label reads the _set flag, and its
+    #----- fallback reads the (blanked) hash, so the flag must be
+    #----- computed from the real value BEFORE blanking; without it
+    #----- the page rendered "Not set" while a token was set. The
+    #----- hash itself still never enters the rendered page (C-2).
+    settings["librarian_api_token_hash_set"] = bool(settings.get("librarian_api_token_hash"))
     settings["librarian_api_token_hash"] = ""
     settings["session_secret"] = ""
     try:
