@@ -3372,3 +3372,47 @@ async def librarian_bot_search_api(request: Request) -> dict:
     else:
         results = await search_any_candidates(query)
     return {"results": results}
+
+
+# --- Librarian, simple (Yan's model): the bot verifies and writes the
+# caption; these endpoints only apply it. See helper/librarian_simple.py.
+
+async def librarian_simple_status_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian_simple
+    return await librarian_simple.counts(librarian_simple.real_deps())
+
+
+async def librarian_simple_waiting_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian_simple
+    return await librarian_simple.waiting(
+        librarian_simple.real_deps(),
+        channel=request.query_params.get("channel"),
+        stem=request.query_params.get("stem"),
+        limit=int(request.query_params.get("limit") or 30))
+
+
+async def librarian_simple_fix_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian_simple
+    payload = await request.json()
+    return await librarian_simple.fix(
+        librarian_simple.real_deps(),
+        int(payload["chat_id"]), int(payload["msg_id"]),
+        str(payload.get("new_caption") or ""),
+        str(payload.get("expected_caption") or ""),
+        key=payload.get("key"), stem=payload.get("stem"))
+
+
+async def librarian_simple_undo_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    from Backend.helper import librarian_simple
+    payload = await request.json()
+    return await librarian_simple.undo(
+        librarian_simple.real_deps(),
+        int(payload["chat_id"]), int(payload["msg_id"]))

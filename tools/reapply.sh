@@ -28,6 +28,7 @@ PLUGIN_FILES=(
   Backend/helper/update_manager.py
   Backend/helper/hermes_bot.py
   Backend/helper/librarian.py
+Backend/helper/librarian_simple.py
   Backend/helper/automations.py
   Backend/librarian_v2/__init__.py
   Backend/librarian_v2/schema.sql
@@ -66,6 +67,7 @@ PLUGIN_FILES=(
   tests/test_librarian_v2_identify.py
   tests/test_librarian_v2_orders.py
   tests/test_librarian_v2_api.py
+  tests/test_librarian_simple.py
   docs/librarian/DESIGN.md
   docs/librarian/DESIGN-v4.md
   docs/librarian/DESIGN-v5.md
@@ -76,6 +78,7 @@ PLUGIN_FILES=(
   tools/media-manager-profile/memories/MEMORY.md
   tools/media-manager-profile/memories/USER.md
   tools/media-manager-profile/skills/librarian/SKILL.md
+  tools/media-manager-profile/skills/librarian-simple/SKILL.md
   tools/media-manager-profile/skills/provider-research/SKILL.md
   tools/media-manager-profile/skills/release-naming/SKILL.md
   tools/media-manager-profile/skills/movie-naming/SKILL.md

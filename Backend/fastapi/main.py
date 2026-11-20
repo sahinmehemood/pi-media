@@ -78,6 +78,10 @@ from Backend.fastapi.routes.api_routes import (
     librarian_bot_rollback_api,
     librarian_bot_search_api,
     librarian_bot_status_api,
+    librarian_simple_fix_api,
+    librarian_simple_status_api,
+    librarian_simple_undo_api,
+    librarian_simple_waiting_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
     update_manager_check_api,
@@ -354,6 +358,22 @@ async def librarian_rollback(request: Request):
 @app.get("/api/librarian/search")
 async def librarian_search(request: Request):
     return await librarian_bot_search_api(request)
+
+@app.get("/api/librarian/simple/status")
+async def librarian_simple_status(request: Request):
+    return await librarian_simple_status_api(request)
+
+@app.get("/api/librarian/simple/waiting")
+async def librarian_simple_waiting(request: Request):
+    return await librarian_simple_waiting_api(request)
+
+@app.post("/api/librarian/simple/fix")
+async def librarian_simple_fix(request: Request):
+    return await librarian_simple_fix_api(request)
+
+@app.post("/api/librarian/simple/undo")
+async def librarian_simple_undo(request: Request):
+    return await librarian_simple_undo_api(request)
 
 # --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
 from Backend.librarian_v2.api import (

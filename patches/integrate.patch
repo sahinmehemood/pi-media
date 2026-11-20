@@ -28,10 +28,10 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..ad3f76e 100644
+index 9ae7925..d5acf0d 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
-@@ -70,8 +70,21 @@ from Backend.fastapi.routes.api_routes import (
+@@ -70,8 +70,25 @@ from Backend.fastapi.routes.api_routes import (
      get_system_stats_api,
      get_tools_channels_api,
      bot_admin_scan_api,
@@ -43,6 +43,10 @@ index 9ae7925..ad3f76e 100644
 +    librarian_bot_rollback_api,
 +    librarian_bot_search_api,
 +    librarian_bot_status_api,
++    librarian_simple_fix_api,
++    librarian_simple_status_api,
++    librarian_simple_undo_api,
++    librarian_simple_waiting_api,
      bot_admin_apply_api,
      bot_admin_apply_status_api,
 +    update_manager_check_api,
@@ -53,7 +57,7 @@ index 9ae7925..ad3f76e 100644
      clear_manual_session_api,
      search_manual_session_api,
      set_manual_session_api,
-@@ -124,6 +137,9 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+@@ -124,6 +141,9 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
  from Backend.fastapi.routes.template_routes import (
      admin_access_page,
      admin_dashboard_page,
@@ -63,7 +67,7 @@ index 9ae7925..ad3f76e 100644
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -169,6 +185,8 @@ async def _startup():
+@@ -169,6 +189,8 @@ async def _startup():
      asyncio.create_task(decay_client_failures())
      from Backend.helper.version_check import version_check_loop
      asyncio.create_task(version_check_loop())
@@ -72,7 +76,7 @@ index 9ae7925..ad3f76e 100644
  
  
  #----- Streaming and Stremio routers
-@@ -293,6 +311,114 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +315,130 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -119,6 +123,22 @@ index 9ae7925..ad3f76e 100644
 +@app.get("/api/librarian/search")
 +async def librarian_search(request: Request):
 +    return await librarian_bot_search_api(request)
++
++@app.get("/api/librarian/simple/status")
++async def librarian_simple_status(request: Request):
++    return await librarian_simple_status_api(request)
++
++@app.get("/api/librarian/simple/waiting")
++async def librarian_simple_waiting(request: Request):
++    return await librarian_simple_waiting_api(request)
++
++@app.post("/api/librarian/simple/fix")
++async def librarian_simple_fix(request: Request):
++    return await librarian_simple_fix_api(request)
++
++@app.post("/api/librarian/simple/undo")
++async def librarian_simple_undo(request: Request):
++    return await librarian_simple_undo_api(request)
 +
 +# --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
 +from Backend.librarian_v2.api import (
@@ -187,7 +207,7 @@ index 9ae7925..ad3f76e 100644
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +939,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +959,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
@@ -215,7 +235,7 @@ index 9ae7925..ad3f76e 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..6d4654d 100644
+index e6d9542..9a1ce9d 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -599,7 +619,7 @@ index e6d9542..6d4654d 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3124,251 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3124,295 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -851,6 +871,50 @@ index e6d9542..6d4654d 100644
 +    else:
 +        results = await search_any_candidates(query)
 +    return {"results": results}
++
++
++# --- Librarian, simple (Yan's model): the bot verifies and writes the
++# caption; these endpoints only apply it. See helper/librarian_simple.py.
++
++async def librarian_simple_status_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian_simple
++    return await librarian_simple.counts(librarian_simple.real_deps())
++
++
++async def librarian_simple_waiting_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian_simple
++    return await librarian_simple.waiting(
++        librarian_simple.real_deps(),
++        channel=request.query_params.get("channel"),
++        stem=request.query_params.get("stem"),
++        limit=int(request.query_params.get("limit") or 30))
++
++
++async def librarian_simple_fix_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian_simple
++    payload = await request.json()
++    return await librarian_simple.fix(
++        librarian_simple.real_deps(),
++        int(payload["chat_id"]), int(payload["msg_id"]),
++        str(payload.get("new_caption") or ""),
++        str(payload.get("expected_caption") or ""),
++        key=payload.get("key"), stem=payload.get("stem"))
++
++
++async def librarian_simple_undo_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    from Backend.helper import librarian_simple
++    payload = await request.json()
++    return await librarian_simple.undo(
++        librarian_simple.real_deps(),
++        int(payload["chat_id"]), int(payload["msg_id"]))
 diff --git a/Backend/fastapi/routes/stream_routes.py b/Backend/fastapi/routes/stream_routes.py
 index be9b286..a6f3b85 100644
 --- a/Backend/fastapi/routes/stream_routes.py

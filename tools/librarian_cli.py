@@ -59,6 +59,29 @@ def call(method: str, path: str, payload: dict | None = None) -> dict:
         return {"ok": False, "message": f"request failed: {e}"}
 
 
+def _simple(args) -> dict:
+    """Librarian, simple — thin pass-throughs to /api/librarian/simple/*.
+    fix.json: {chat_id, msg_id, expected_caption, new_caption, key, stem}"""
+    cmd = args.smpcmd
+    if cmd == "status":
+        return call("GET", "/api/librarian/simple/status")
+    if cmd == "waiting":
+        q = f"limit={args.limit}"
+        if args.channel:
+            q += f"&channel={args.channel}"
+        if args.stem:
+            from urllib.parse import quote
+            q += f"&stem={quote(args.stem)}"
+        return call("GET", f"/api/librarian/simple/waiting?{q}")
+    if cmd == "fix":
+        with open(args.file, "r", encoding="utf-8") as fh:
+            return call("POST", "/api/librarian/simple/fix", json.load(fh))
+    if cmd == "undo":
+        return call("POST", "/api/librarian/simple/undo",
+                    {"chat_id": int(args.chat), "msg_id": int(args.msg)})
+    return {"ok": False, "message": f"unknown simple command {cmd}"}
+
+
 def _v2(args) -> dict:
     """Librarian v2 Work Orders — the bot's only capability surface.
     Thin pass-throughs to /api/librarian/v2/*; all rules live server-side."""
@@ -127,6 +150,19 @@ def main() -> int:
     p.add_argument("--id", required=True)
     p = sub.add_parser("rollback")
     p.add_argument("--id", required=True)
+    # --- Librarian, simple: bot verifies + writes, API applies ---
+    smp = sub.add_parser("simple")
+    smpsub = smp.add_subparsers(dest="smpcmd", required=True)
+    smpsub.add_parser("status")
+    p = smpsub.add_parser("waiting")
+    p.add_argument("--channel", default="")
+    p.add_argument("--stem", default="")
+    p.add_argument("--limit", type=int, default=30)
+    p = smpsub.add_parser("fix")
+    p.add_argument("--file", required=True)
+    p = smpsub.add_parser("undo")
+    p.add_argument("--chat", required=True)
+    p.add_argument("--msg", required=True)
     # --- Librarian v2 (Work Orders) ---
     v2 = sub.add_parser("v2")
     v2sub = v2.add_subparsers(dest="v2cmd", required=True)
@@ -177,6 +213,8 @@ def main() -> int:
         out = call("POST", "/api/librarian/apply", {"proposal_id": args.id})
     elif args.cmd == "rollback":
         out = call("POST", "/api/librarian/rollback", {"proposal_id": args.id})
+    elif args.cmd == "simple":
+        out = _simple(args)
     elif args.cmd == "v2":
         out = _v2(args)
     else:  # pragma: no cover
