@@ -180,7 +180,7 @@ class Identifier:
             cand = self._lookup(explicit["provider"], explicit["provider_id"],
                                 kind, now)
             if cand:
-                sid = self._materialise(cand, kind, now)
+                sid = self._materialise(cand, kind, now, teach_names=True)
                 return Resolution(sid, "explicit_id", 1.00,
                                   {"explicit_id": 1.00}, "identified", cand)
 
@@ -299,7 +299,7 @@ class Identifier:
                                     now=now)
             return Resolution(None, "verify_proposal", 0.0,
                               {"proposal_unverified": True}, "unresolved")
-        sid = self._materialise(cand, kind, now)
+        sid = self._materialise(cand, kind, now, teach_names=True)
         breakdown = {"proposal_verified": True,
                      "provider": cand.get("provider")}
         score = 0.90
@@ -310,17 +310,26 @@ class Identifier:
         return Resolution(sid, "verify_proposal", score, breakdown,
                           "identified", cand)
 
-    def _materialise(self, cand, kind, now, status="identified"):
+    def _materialise(self, cand, kind, now, status="identified",
+                     teach_names=False):
         sid = self.store.upsert_series(
             cand.get("title") or "", kind=kind, year=cand.get("year"),
             provider=cand.get("provider"), provider_id=cand.get("provider_id"),
             imdb_id=cand.get("imdb_id"), status=status, now=now)
-        # Dual-named titles (romaji vs western vs native): teach EVERY
-        # name variant the provider knows as an alias, so a file using
-        # any of them resolves instantly next time.
-        for alt in cand.get("also_known_as") or []:
-            if alt and normalise(alt) != normalise(cand.get("title")):
-                self.store.add_alias(sid, normalise(alt), kind)
+        # Dual-named titles (romaji vs western vs native): teach every
+        # name the provider knows — canonical title included — as an
+        # alias, so a file using any of them resolves instantly. ONLY
+        # from high-trust paths (explicit ID, verified proposal): a
+        # series that came from a weak search must not teach its names,
+        # or one wrong match would spread to every variant (the BTTH
+        # failure mode). Search-born series earn aliases when a fix
+        # actually applies (orders hook).
+        if teach_names:
+            if cand.get("title"):
+                self.store.add_alias(sid, normalise(cand["title"]), kind)
+            for alt in cand.get("also_known_as") or []:
+                if alt and normalise(alt) != normalise(cand.get("title")):
+                    self.store.add_alias(sid, normalise(alt), kind)
         self.ensure_episodes(sid, now)
         return sid
 

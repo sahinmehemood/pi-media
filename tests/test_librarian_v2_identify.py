@@ -239,13 +239,13 @@ def test_verify_proposal_scores():
     res3 = ident2.verify_proposal({"provider": "tmdb", "provider_id": "404"},
                                   kind="donghua", now=T0)
     assert res3.status == "unresolved" and res3.score == 0.0
-    # Unverifiable ID with a title -> falls back to the search ladder
-    prov2.search_results[("tmdb", "Perfect World")] = [
-        _cand("tmdb", "999", "Perfect World", 2021, "tt14986786")]
+    # Unverifiable ID with a title -> falls back to resolution; the
+    # earlier verified proposal taught the title as an alias, so the
+    # fallback lands on the same series instantly.
     res4 = ident2.verify_proposal(
         {"provider": "tmdb", "provider_id": "404", "title": "Perfect World"},
         kind="donghua", year=2021, now=T0)
-    assert res4.status == "identified" and res4.method == "search"
+    assert res4.status == "identified" and res4.series_id == res2.series_id
 
 
 def test_slotting_and_fit_bonus():
