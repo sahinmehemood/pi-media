@@ -93,6 +93,9 @@ def _v6(args) -> dict:
     if cmd == "file":
         return call("GET", f"/api/librarian/v6/file?chat={args.chat}"
                            f"&msg={args.msg}")
+    if cmd == "probe":
+        return call("GET", f"/api/librarian/v6/probe?chat={args.chat}"
+                           f"&msg={args.msg}")
     if cmd == "lookup":
         q = f"q={quote(args.name)}"
         if args.type:
@@ -224,6 +227,9 @@ def main() -> int:
     p = sub.add_parser("file")
     p.add_argument("--chat", required=True)
     p.add_argument("--msg", required=True)
+    p = sub.add_parser("probe")
+    p.add_argument("--chat", required=True)
+    p.add_argument("--msg", required=True)
     p = sub.add_parser("lookup")
     p.add_argument("name")
     p.add_argument("--type", default="")
@@ -306,7 +312,7 @@ def main() -> int:
         out = call("POST", "/api/librarian/rollback", {"proposal_id": args.id})
     elif args.cmd == "simple":
         out = _simple(args)
-    elif args.cmd in ("find", "file", "lookup", "series", "crossid",
+    elif args.cmd in ("find", "file", "probe", "lookup", "series", "crossid",
                       "history", "fix-batch", "record-get", "record-set",
                       "aliases", "alias-forget", "park", "unpark",
                       "scan", "scan-status", "mode"):

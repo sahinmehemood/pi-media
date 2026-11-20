@@ -28,10 +28,10 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..bcc1577 100644
+index 9ae7925..aa6ae68 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
-@@ -70,8 +70,41 @@ from Backend.fastapi.routes.api_routes import (
+@@ -70,8 +70,42 @@ from Backend.fastapi.routes.api_routes import (
      get_system_stats_api,
      get_tools_channels_api,
      bot_admin_scan_api,
@@ -59,6 +59,7 @@ index 9ae7925..bcc1577 100644
 +    librarian_v6_history_api,
 +    librarian_v6_mode_api,
 +    librarian_v6_park_api,
++    librarian_v6_probe_api,
 +    librarian_v6_record_get_api,
 +    librarian_v6_record_set_api,
 +    librarian_v6_scan_api,
@@ -73,7 +74,7 @@ index 9ae7925..bcc1577 100644
      clear_manual_session_api,
      search_manual_session_api,
      set_manual_session_api,
-@@ -124,6 +157,11 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+@@ -124,6 +158,11 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
  from Backend.fastapi.routes.template_routes import (
      admin_access_page,
      admin_dashboard_page,
@@ -85,7 +86,7 @@ index 9ae7925..bcc1577 100644
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -169,6 +207,8 @@ async def _startup():
+@@ -169,6 +208,8 @@ async def _startup():
      asyncio.create_task(decay_client_failures())
      from Backend.helper.version_check import version_check_loop
      asyncio.create_task(version_check_loop())
@@ -94,7 +95,7 @@ index 9ae7925..bcc1577 100644
  
  
  #----- Streaming and Stremio routers
-@@ -293,6 +333,202 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +334,206 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -218,6 +219,10 @@ index 9ae7925..bcc1577 100644
 +async def librarian_v6_scan_status(request: Request):
 +    return await librarian_v6_scan_status_api(request)
 +
++@app.get("/api/librarian/v6/probe")
++async def librarian_v6_probe(request: Request):
++    return await librarian_v6_probe_api(request)
++
 +@app.get("/api/librarian/gw/lookup")
 +async def librarian_gw_lookup(request: Request):
 +    return await librarian_gw_lookup_api(request)
@@ -297,7 +302,7 @@ index 9ae7925..bcc1577 100644
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +1049,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +1054,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
@@ -325,7 +330,7 @@ index 9ae7925..bcc1577 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..7a31266 100644
+index e6d9542..ebd2348 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
@@ -709,7 +714,7 @@ index e6d9542..7a31266 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3124,435 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3124,444 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -1117,6 +1122,15 @@ index e6d9542..7a31266 100644
 +        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
 +    ls, deps = _simple_deps()
 +    return await ls.scan_status(deps)
++
++
++async def librarian_v6_probe_api(request: Request) -> dict:
++    if not _librarian_token_ok(request):
++        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
++    ls, deps = _simple_deps()
++    return await ls.probe(
++        deps, int(request.query_params.get("chat") or 0),
++        int(request.query_params.get("msg") or 0))
 +
 +
 +async def librarian_gw_lookup_api(request: Request) -> dict:

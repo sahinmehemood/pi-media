@@ -3530,6 +3530,15 @@ async def librarian_v6_scan_status_api(request: Request) -> dict:
     return await ls.scan_status(deps)
 
 
+async def librarian_v6_probe_api(request: Request) -> dict:
+    if not _librarian_token_ok(request):
+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
+    ls, deps = _simple_deps()
+    return await ls.probe(
+        deps, int(request.query_params.get("chat") or 0),
+        int(request.query_params.get("msg") or 0))
+
+
 async def librarian_gw_lookup_api(request: Request) -> dict:
     if not _librarian_token_ok(request):
         raise HTTPException(status_code=401, detail="Invalid Librarian API token.")

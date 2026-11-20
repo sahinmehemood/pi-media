@@ -94,6 +94,7 @@ from Backend.fastapi.routes.api_routes import (
     librarian_v6_history_api,
     librarian_v6_mode_api,
     librarian_v6_park_api,
+    librarian_v6_probe_api,
     librarian_v6_record_get_api,
     librarian_v6_record_set_api,
     librarian_v6_scan_api,
@@ -452,6 +453,10 @@ async def librarian_v6_scan(request: Request):
 @app.get("/api/librarian/v6/scan-status")
 async def librarian_v6_scan_status(request: Request):
     return await librarian_v6_scan_status_api(request)
+
+@app.get("/api/librarian/v6/probe")
+async def librarian_v6_probe(request: Request):
+    return await librarian_v6_probe_api(request)
 
 @app.get("/api/librarian/gw/lookup")
 async def librarian_gw_lookup(request: Request):

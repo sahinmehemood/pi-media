@@ -47,7 +47,7 @@ class Deps:
                  locator, fixes, teach_alias, settings,
                  records=None, aliases=None, media_search=None,
                  scan_start=None, scan_status_of=None,
-                 copy_message=None, delete_message=None):
+                 copy_message=None, delete_message=None, probe=None):
         self.read_caption = read_caption    # async (chat, msg) -> str|None
         self.edit_caption = edit_caption    # async (chat, msg, caption)
         self.copy_message = copy_message    # async (chat, msg, caption) -> new msg id
@@ -63,6 +63,7 @@ class Deps:
         self.media_search = media_search    # async text -> [indexed doc]
         self.scan_start = scan_start        # async channels -> dict
         self.scan_status_of = scan_status_of  # () -> dict
+        self.probe = probe                  # async (chat, msg) -> dict
 
 
 def real_deps() -> Deps:
@@ -148,6 +149,33 @@ def real_deps() -> Deps:
                  "year": d.get("release_year")}
                 for d in (res or {}).get("results") or []]
 
+    async def probe(chat_id, msg_id):
+        """Diagnostics: which clients exist, what each sees for one
+        message, and what kind of media it carries."""
+        from Backend.pyrofork import bot as botmod
+        out = {"userbot_built": botmod.Userbot is not None}
+        for name, client in (("userbot", botmod.Userbot),
+                             ("streambot", botmod.StreamBot)):
+            if client is None:
+                out[name] = None
+                continue
+            try:
+                m = await client.get_messages(chat_id, msg_id)
+                if m is None or getattr(m, "empty", False):
+                    out[name] = {"empty": True}
+                    continue
+                media = [a for a in ("document", "video", "audio",
+                                     "photo", "animation", "voice",
+                                     "video_note", "sticker")
+                         if getattr(m, a, None) is not None]
+                out[name] = {"empty": False, "caption": m.caption,
+                             "media": media,
+                             "sender_chat": bool(getattr(m, "sender_chat", None)),
+                             "from_user": bool(getattr(m, "from_user", None))}
+            except Exception as e:
+                out[name] = {"error": f"{type(e).__name__}: {e}"}
+        return out
+
     async def copy_message(chat_id, msg_id, caption):
         # pyrofork's copy_message silently no-ops on these posts
         # (returns None, nothing lands — proven live 2026-11-20).
@@ -197,7 +225,7 @@ def real_deps() -> Deps:
         aliases=tracking["alias_map"] if tracking is not None else None,
         media_search=media_search, scan_start=scan_start,
         scan_status_of=scan_status_of, copy_message=copy_message,
-        delete_message=delete_message)
+        delete_message=delete_message, probe=probe)
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +694,13 @@ async def scan(deps: Deps, channel=None):
         return {"ok": False,
                 "message": "no channels configured in Settings"}
     return await deps.scan_start(channels)
+
+
+async def probe(deps: Deps, chat_id, msg_id):
+    if deps.probe is None:
+        return {"ok": False, "message": "probe unavailable"}
+    out = await deps.probe(chat_id, msg_id)
+    return {"ok": True, "chat_id": chat_id, "msg_id": msg_id, **out}
 
 
 async def scan_status(deps: Deps):
