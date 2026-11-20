@@ -924,14 +924,20 @@
 
         <label class="s-label">LIBRARIAN CHANNELS
             <span style="font-weight:400;text-transform:none;letter-spacing:0">
-                — the allowlist of channels the bot may work and write in</span>
+                — the allowlist of channels the bot may work and write in. Each channel's
+                stored media type sits beside its ID — the ground truth the gateway and bot
+                consume. A channel left as <strong>unknown</strong> has no stored type.</span>
         </label>
-        <div class="multi-list-items" id="librarian_channels_items">
+        {% set lib_ctypes = settings.librarian_channel_types or {} %}
+        {% set lib_type_vocab = ['movie', 'tv', 'anime', 'donghua', 'cartoon', 'drama', 'ova', 'special', 'unknown'] %}
+        <div id="librarian_channel_types_rows">
             {% for ch in settings.librarian_channels %}
-            {% set t = (settings.channel_titles or {}).get(ch|string, ch|string) %}
-            <div class="multi-item">
-                <span class="channel-chip" data-list="librarian_channels" data-id="{{ ch }}" title="{{ ch }}">{{ t }}</span>
-                <button class="remove-btn" onclick="removeItem(this)" title="Remove">
+            <div class="lct-row" style="display:flex;gap:0.5rem;margin-bottom:0.4rem">
+                <input type="text" class="s-input lct-channel" value="{{ ch }}" placeholder="-100xxxxxxxxxx" style="flex:1">
+                <select class="s-input lct-type" style="flex:0 0 9rem">
+                    {% for t in lib_type_vocab %}<option value="{{ t }}" {% if lib_ctypes.get(ch|string, 'unknown') == t %}selected{% endif %}>{{ t }}</option>{% endfor %}
+                </select>
+                <button type="button" class="remove-btn" onclick="removeLibrarianChannelTypeRow(this)" title="Remove">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
@@ -940,47 +946,9 @@
         <div class="add-row">
             <input type="text" id="librarian_channels_new" class="s-input"
                 placeholder="-100xxxxxxxxxx (channels only)"
-                onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
-            <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
+                onkeydown="if(event.key==='Enter'){event.preventDefault();addLibrarianChannelRow()}">
+            <button type="button" class="add-btn" onclick="addLibrarianChannelRow()">+ Add Channel</button>
         </div>
-
-        <hr class="divider">
-
-        <label class="s-label">CHANNEL TYPES
-            <span style="font-weight:400;text-transform:none;letter-spacing:0">
-                — each channel's stored media type, the ground truth the gateway and bot consume.
-                A channel with no stored type is <strong>unknown</strong>; rows offered below for
-                allowlisted channels without a type are only saved once you pick a type.</span>
-        </label>
-        {% set lib_ctypes = settings.librarian_channel_types or {} %}
-        {% set lib_type_vocab = ['movie', 'tv', 'anime', 'donghua', 'cartoon', 'drama', 'ova', 'special', 'unknown'] %}
-        <div id="librarian_channel_types_rows">
-            {% for ch, tp in lib_ctypes.items() %}
-            <div class="lct-row" data-stored="true" style="display:flex;gap:0.5rem;margin-bottom:0.4rem">
-                <input type="text" class="s-input lct-channel" value="{{ ch }}" placeholder="-100xxxxxxxxxx" style="flex:1">
-                <select class="s-input lct-type" style="flex:0 0 9rem">
-                    {% for t in lib_type_vocab %}<option value="{{ t }}" {% if tp == t %}selected{% endif %}>{{ t }}</option>{% endfor %}
-                </select>
-                <button type="button" class="remove-btn" onclick="removeLibrarianChannelTypeRow(this)" title="Remove">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-            {% endfor %}
-            {% for ch in settings.librarian_channels %}
-            {% if (ch|string) not in lib_ctypes %}
-            <div class="lct-row" data-stored="false" style="display:flex;gap:0.5rem;margin-bottom:0.4rem">
-                <input type="text" class="s-input lct-channel" value="{{ ch }}" placeholder="-100xxxxxxxxxx" style="flex:1">
-                <select class="s-input lct-type" style="flex:0 0 9rem">
-                    {% for t in lib_type_vocab %}<option value="{{ t }}" {% if t == 'unknown' %}selected{% endif %}>{{ t }}</option>{% endfor %}
-                </select>
-                <button type="button" class="remove-btn" onclick="removeLibrarianChannelTypeRow(this)" title="Remove">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-            {% endif %}
-            {% endfor %}
-        </div>
-        <button type="button" class="add-btn" onclick="addLibrarianChannelTypeRow()">+ Add Channel Type</button>
 
         <hr class="divider">
 
@@ -2036,10 +2004,10 @@ function collectList(listKey) {
         .filter(Boolean);
 }
 
-/* ── Librarian: channel-types editor + pairing token ─────────────────── */
+/* ── Librarian: channel rows (allowlist + types) + pairing token ─────── */
 const LIBRARIAN_CHANNEL_TYPES = ['movie', 'tv', 'anime', 'donghua', 'cartoon', 'drama', 'ova', 'special', 'unknown'];
 
-function librarianChannelTypeRowHTML(channel, type, stored) {
+function librarianChannelTypeRowHTML(channel, type) {
     const opts = LIBRARIAN_CHANNEL_TYPES.map(t =>
         `<option value="${t}" ${t === type ? 'selected' : ''}>${t}</option>`).join('');
     return `
@@ -2051,14 +2019,13 @@ function librarianChannelTypeRowHTML(channel, type, stored) {
     `;
 }
 
-function addLibrarianChannelTypeRow(channel, type, stored) {
+function addLibrarianChannelTypeRow(channel, type) {
     const container = document.getElementById('librarian_channel_types_rows');
     if (!container) return;
     const row = document.createElement('div');
     row.className = 'lct-row';
-    row.dataset.stored = stored ? 'true' : 'false';
     row.style.cssText = 'display:flex;gap:0.5rem;margin-bottom:0.4rem';
-    row.innerHTML = librarianChannelTypeRowHTML(channel || '', type || 'unknown', stored);
+    row.innerHTML = librarianChannelTypeRowHTML(channel || '', type || 'unknown');
     container.appendChild(row);
     const input = row.querySelector('.lct-channel');
     if (input && !channel) input.focus();
@@ -2069,19 +2036,47 @@ function removeLibrarianChannelTypeRow(btn) {
     if (row) row.remove();
 }
 
+function collectLibrarianChannels() {
+    const out = [];
+    document.querySelectorAll('#librarian_channel_types_rows .lct-row').forEach(row => {
+        const chEl = row.querySelector('.lct-channel');
+        if (!chEl) return;
+        const ch = extractChannelId(chEl.value);
+        if (ch) out.push(ch);
+    });
+    return out;
+}
+
+function addLibrarianChannelRow() {
+    const newInput = document.getElementById('librarian_channels_new');
+    if (!newInput) return;
+    const value = newInput.value.trim();
+    if (!value) return;
+    if (!isValidChannelId(value)) {
+        alert('Only channel IDs in -100xxxxxxxxxx format are accepted (channels only).');
+        return;
+    }
+    if (collectLibrarianChannels().includes(value)) {
+        alert('This channel is already added.');
+        return;
+    }
+    addLibrarianChannelTypeRow(value, 'unknown');
+    newInput.value = '';
+    newInput.focus();
+}
+
 function collectLibrarianChannelTypes() {
     const out = {};
     document.querySelectorAll('#librarian_channel_types_rows .lct-row').forEach(row => {
         const chEl = row.querySelector('.lct-channel');
         const tpEl = row.querySelector('.lct-type');
         if (!chEl || !tpEl) return;
-        const ch = chEl.value.trim();
+        const ch = extractChannelId(chEl.value);
         const tp = tpEl.value;
         if (!ch) return;
-        // A row offered for an allowlisted channel with no stored type is
-        // omitted while it still says unknown — absent means unknown, so
-        // an untouched offered row must not manufacture a stored entry.
-        if (row.dataset.stored !== 'true' && tp === 'unknown') return;
+        // Absent means unknown: a row still set to unknown stores no
+        // type entry — the map holds only explicit types.
+        if (tp === 'unknown') return;
         out[ch] = tp;
     });
     return out;
@@ -2092,9 +2087,8 @@ function rebuildLibrarianChannelTypes(types, channels) {
     if (!container) return;
     types = types || {};
     container.innerHTML = '';
-    Object.entries(types).forEach(([ch, tp]) => addLibrarianChannelTypeRow(ch, tp, true));
     (channels || []).forEach(ch => {
-        if (!(String(ch) in types)) addLibrarianChannelTypeRow(String(ch), 'unknown', false);
+        addLibrarianChannelTypeRow(String(ch), types[String(ch)] || 'unknown');
     });
 }
 
@@ -2264,7 +2258,7 @@ async function saveSettings() {
         ...collectList('auth_channels'),
         ...collectList('global_search_channels'),
         ...collectList('manual_channels'),
-        ...collectList('librarian_channels'),
+        ...collectLibrarianChannels(),
     ];
     const acEl = document.getElementById('announcement_channel');
     const scEl = document.getElementById('skip_channel');
@@ -2367,7 +2361,7 @@ async function saveSettings() {
         librarian_test_mode:           document.getElementById('librarian_test_mode').checked,
         librarian_writes_enabled:      document.getElementById('librarian_writes_enabled').checked,
         librarian_edit_budget_per_day: parseInt(document.getElementById('librarian_edit_budget_per_day').value, 10) || 0,
-        librarian_channels:            collectList('librarian_channels'),
+        librarian_channels:            collectLibrarianChannels(),
         librarian_channel_types:       collectLibrarianChannelTypes(),
     };
     const dsEl = document.getElementById('default_streaming');
@@ -2529,7 +2523,6 @@ function renderSettings(s) {
         document.getElementById('librarian_test_mode').checked = (s.librarian_test_mode ?? true);
         document.getElementById('librarian_writes_enabled').checked = !!s.librarian_writes_enabled;
         document.getElementById('librarian_edit_budget_per_day').value = (s.librarian_edit_budget_per_day ?? 10);
-        rebuildSimpleList('librarian_channels_items', s.librarian_channels, 'text', (s.channel_titles || {}));
         rebuildLibrarianChannelTypes(s.librarian_channel_types || {}, s.librarian_channels || []);
         if (s.librarian_api_token_hash_set !== undefined) {
             const st = document.getElementById('librarian-token-status');
