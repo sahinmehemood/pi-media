@@ -850,6 +850,39 @@
     {% endif %}
 </div>
 
+<!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
+<div class="settings-card">
+    <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
+    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
+        <i class="fa-solid fa-circle-info"></i>
+        Optional. Create a <strong>private</strong> channel, add all your bots as admins
+        (Tools → Bot Admin Manager does it in one click), and paste its ID here.
+        Files you DM to the bot are copied into this channel and streamed by the
+        whole bot pool — your Userbot session is then never used for DM links.
+        Leave empty to keep the current userbot-based DM links.<br>
+        Tip: forward any post from the channel to the bot in DM and it replies with the channel ID.
+    </p>
+    <label class="s-label" for="dl_channel_id">DL CHANNEL</label>
+    <div class="multi-item" style="margin-top:0.25rem">
+        {% set dl_t = (settings.channel_titles or {}).get(settings.dl_channel_id|string, settings.dl_channel_id) %}
+        <input type="text" id="dl_channel_id" class="s-input"
+            value="{{ dl_t if settings.dl_channel_id else '' }}"
+            data-id="{{ settings.dl_channel_id or '' }}"
+            {% if settings.dl_channel_id %}readonly{% endif %}
+            placeholder="-100xxxxxxxxxx (channels only)"
+            oninput="if(!this.readOnly){this.dataset.id='';}">
+        <button type="button" class="remove-btn" id="dl_channel_id_clear"
+            style="{% if not settings.dl_channel_id %}display:none{% endif %}"
+            onclick="clearSingleChannel('dl_channel_id')" title="Remove">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    </div>
+    <label class="s-label" for="dl_expire_days" style="margin-top:1rem">POOLED FILE EXPIRY (DAYS)</label>
+    <input type="number" id="dl_expire_days" class="s-input" min="0" max="3650"
+        value="{{ settings.dl_expire_days if settings.dl_expire_days is not none else 0 }}">
+    <p class="s-help">Pooled files older than this are deleted from the channel by a daily sweep. 0 = keep forever. Pinned files (📌 via /dl pin or the DL Index page) never expire.</p>
+</div>
+
     <!-- ── Librarian ─────────────────────────────────────────────────── -->
     <div class="settings-card" id="librarian-card">
         <h2><i class="fa-solid fa-book-open"></i> Librarian</h2>
@@ -971,39 +1004,6 @@
         </div>
         <p id="librarian-token-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
     </div>
-
-<!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
-<div class="settings-card">
-    <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
-    <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
-        <i class="fa-solid fa-circle-info"></i>
-        Optional. Create a <strong>private</strong> channel, add all your bots as admins
-        (Tools → Bot Admin Manager does it in one click), and paste its ID here.
-        Files you DM to the bot are copied into this channel and streamed by the
-        whole bot pool — your Userbot session is then never used for DM links.
-        Leave empty to keep the current userbot-based DM links.<br>
-        Tip: forward any post from the channel to the bot in DM and it replies with the channel ID.
-    </p>
-    <label class="s-label" for="dl_channel_id">DL CHANNEL</label>
-    <div class="multi-item" style="margin-top:0.25rem">
-        {% set dl_t = (settings.channel_titles or {}).get(settings.dl_channel_id|string, settings.dl_channel_id) %}
-        <input type="text" id="dl_channel_id" class="s-input"
-            value="{{ dl_t if settings.dl_channel_id else '' }}"
-            data-id="{{ settings.dl_channel_id or '' }}"
-            {% if settings.dl_channel_id %}readonly{% endif %}
-            placeholder="-100xxxxxxxxxx (channels only)"
-            oninput="if(!this.readOnly){this.dataset.id='';}">
-        <button type="button" class="remove-btn" id="dl_channel_id_clear"
-            style="{% if not settings.dl_channel_id %}display:none{% endif %}"
-            onclick="clearSingleChannel('dl_channel_id')" title="Remove">
-            <i class="fa-solid fa-xmark"></i>
-        </button>
-    </div>
-    <label class="s-label" for="dl_expire_days" style="margin-top:1rem">POOLED FILE EXPIRY (DAYS)</label>
-    <input type="number" id="dl_expire_days" class="s-input" min="0" max="3650"
-        value="{{ settings.dl_expire_days if settings.dl_expire_days is not none else 0 }}">
-    <p class="s-help">Pooled files older than this are deleted from the channel by a daily sweep. 0 = keep forever. Pinned files (📌 via /dl pin or the DL Index page) never expire.</p>
-</div>
 
 <style>
 .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
