@@ -46,9 +46,12 @@ class Deps:
     def __init__(self, read_caption, edit_caption, indexed_ids, ledger,
                  locator, fixes, teach_alias, settings,
                  records=None, aliases=None, media_search=None,
-                 scan_start=None, scan_status_of=None):
+                 scan_start=None, scan_status_of=None,
+                 copy_message=None, delete_message=None):
         self.read_caption = read_caption    # async (chat, msg) -> str|None
         self.edit_caption = edit_caption    # async (chat, msg, caption)
+        self.copy_message = copy_message    # async (chat, msg, caption) -> new msg id
+        self.delete_message = delete_message  # async (chat, msg) -> None
         self.indexed_ids = indexed_ids      # async (chat, msg) -> (imdb, tmdb)|None
         self.ledger = ledger                # motor collection | None
         self.locator = locator              # motor collection | None
@@ -145,6 +148,18 @@ def real_deps() -> Deps:
                  "year": d.get("release_year")}
                 for d in (res or {}).get("results") or []]
 
+    async def copy_message(chat_id, msg_id, caption):
+        from Backend.pyrofork import bot as botmod
+        client = botmod.Userbot or botmod.StreamBot
+        sent = await client.copy_message(
+            chat_id, chat_id, msg_id, caption=caption)
+        return sent.id
+
+    async def delete_message(chat_id, msg_id):
+        from Backend.pyrofork import bot as botmod
+        client = botmod.Userbot or botmod.StreamBot
+        await client.delete_messages(chat_id, msg_id)
+
     async def scan_start(channels):
         from Backend.helper.scan_manager import scan_manager
         from Backend.pyrofork.bot import StreamBot
@@ -164,7 +179,8 @@ def real_deps() -> Deps:
         records=tracking["series_records"] if tracking is not None else None,
         aliases=tracking["alias_map"] if tracking is not None else None,
         media_search=media_search, scan_start=scan_start,
-        scan_status_of=scan_status_of)
+        scan_status_of=scan_status_of, copy_message=copy_message,
+        delete_message=delete_message)
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +256,10 @@ async def fix(deps: Deps, chat_id, msg_id, new_caption, expected_caption,
         if retry is not None:
             return {"ok": False, "flood_wait": retry,
                     "message": f"Telegram says wait {retry}s."}
+        if deps.copy_message is not None and _uneditable(e):
+            return await _fix_via_repost(
+                deps, chat_id, msg_id, expected_caption, new_caption,
+                key, stem, actor)
         return {"ok": False, "message": f"Edit failed: {e}"}
     # Confirm the fix landed in the library index.
     want_imdb, want_tmdb = _caption_ids(new_caption)
@@ -275,6 +295,83 @@ async def fix(deps: Deps, chat_id, msg_id, new_caption, expected_caption,
                        "Caption edited; index not confirmed yet."}
 
 
+async def _confirm_index(deps: Deps, chat_id, msg_id, want_imdb,
+                         want_tmdb) -> bool:
+    """Poll the media index until this file shows the wanted ids."""
+    for _ in range(15):
+        got = await deps.indexed_ids(chat_id, msg_id)
+        if got:
+            if want_tmdb:
+                if int(got[1] or 0) == want_tmdb:
+                    return True
+            elif want_imdb:
+                if got[0] == want_imdb:
+                    return True
+            else:
+                return True
+        await asyncio.sleep(1.0)
+    return False
+
+
+def _uneditable(exc: Exception) -> bool:
+    """True when Telegram says this post cannot be edited in place
+    (not found / invalid id) — the repost path's trigger."""
+    text = str(exc).lower()
+    return ("not found" in text or "message_id_invalid" in text
+            or "message id is invalid" in text)
+
+
+async def _fix_via_repost(deps: Deps, chat_id, msg_id, expected_caption,
+                          new_caption, key, stem, actor):
+    """v1's proven fallback, userbot-driven: copy the file into the
+    same channel under the corrected caption, confirm the copy
+    indexed, then delete the uneditable original."""
+    try:
+        new_id = await deps.copy_message(chat_id, msg_id, new_caption)
+    except Exception as e:
+        flood = getattr(e, "value", None) or getattr(e, "retry_after", None)
+        if flood is not None:
+            return {"ok": False, "flood_wait": int(flood),
+                    "message": f"Telegram flood wait — wait {int(flood)}s "
+                               f"and try again."}
+        return {"ok": False,
+                "message": f"Edit impossible and repost failed: {e}"}
+    imdb_id, tmdb_id = _caption_ids(new_caption)
+    indexed = await _confirm_index(deps, chat_id, new_id, imdb_id, tmdb_id)
+    if not indexed:
+        try:
+            await deps.delete_message(chat_id, new_id)
+        except Exception:
+            pass
+        return {"ok": False, "indexed": False,
+                "message": "Reposted copy did not index — removed it; "
+                           "nothing changed."}
+    original_deleted = True
+    try:
+        await deps.delete_message(chat_id, msg_id)
+    except Exception:
+        original_deleted = False
+    if deps.fixes is not None:
+        await deps.fixes.insert_one({
+            "key": key, "chat_id": chat_id, "msg_id": msg_id,
+            "stem": stem, "before": expected_caption,
+            "after": new_caption, "ts": time.time(), "actor": actor,
+            "indexed": True, "reverted": False, "action": "repost",
+            "new_msg_id": new_id})
+    if key and deps.ledger is not None:
+        await deps.ledger.update_one(
+            {"key": key}, {"$set": {"status": "fixed"}})
+    if stem:
+        await deps.teach_alias(chat_id, stem, new_caption)
+    note = "" if original_deleted else \
+        " (warning: the original post could not be deleted)"
+    return {"ok": True, "indexed": True, "action": "repost",
+            "new_msg_id": new_id,
+            "message": "Fixed — the original post could not be edited, "
+                       "so it was reposted with the corrected caption."
+                       + note}
+
+
 async def undo(deps: Deps, chat_id, msg_id):
     if deps.fixes is None:
         return {"ok": False, "message": "fix history unavailable"}
@@ -283,6 +380,25 @@ async def undo(deps: Deps, chat_id, msg_id):
         sort=[("ts", -1)])
     if not doc:
         return {"ok": False, "message": "No fix recorded for that file."}
+    if doc.get("action") == "repost":
+        # The original post is gone; undoing removes the reposted
+        # copy and returns the file to the waiting pile.
+        if deps.delete_message is None:
+            return {"ok": False,
+                    "message": "Cannot undo a repost from here."}
+        try:
+            await deps.delete_message(chat_id, doc.get("new_msg_id"))
+        except Exception as e:
+            return {"ok": False, "message": f"Undo failed: {e}"}
+        await deps.fixes.update_one(
+            {"_id": doc["_id"]}, {"$set": {"reverted": True,
+                                           "reverted_at": time.time()}})
+        if doc.get("key") and deps.ledger is not None:
+            await deps.ledger.update_one(
+                {"key": doc["key"]}, {"$set": {"status": "open"}})
+        return {"ok": True,
+                "message": "Undone — reposted copy deleted; the file "
+                           "is back on the waiting list."}
     try:
         await deps.edit_caption(chat_id, msg_id, doc["before"])
     except Exception as e:

@@ -146,6 +146,17 @@ def _deps(**over):
                                librarian_digest="manual")
     deps = ls.Deps(read_caption, edit_caption, indexed_ids, ledger,
                    FakeColl(), fixes, teach_alias, settings)
+    state["copies"] = {}
+    state["deleted"] = []
+
+    async def copy_message(chat_id, msg_id, caption):
+        state["copies"][(chat_id, 999)] = caption
+        return 999
+
+    async def delete_message(chat_id, msg_id):
+        state["deleted"].append((chat_id, msg_id))
+    deps.copy_message = copy_message
+    deps.delete_message = delete_message
     deps.records = FakeColl()
     deps.aliases = FakeColl([{
         "_id": f"{ANI}:pw", "channel": ANI, "stem": "pw",
@@ -357,6 +368,38 @@ def test_mode_info_reports_settings():
     out = _run(ls.mode_info(deps))
     assert out["enabled"] and out["channels"] == [ANI]
     assert out["channel_names"] == ["Ani"]
+
+
+def test_fix_falls_back_to_repost_when_uneditable():
+    deps = _deps()
+
+    async def uneditable(chat, msg, caption):
+        raise RuntimeError("edit failed: Bad Request: message to edit "
+                           "not found (userbot attempt: MessageIdInvalid)")
+    deps.edit_caption = uneditable
+    deps._state["index"][(ANI, 999)] = ("tt14986786", None)
+    out = _run(ls.fix(deps, ANI, 101, NEW, OLD, key="k1", stem="pw"))
+    assert out["ok"] and out["action"] == "repost"
+    assert out["new_msg_id"] == 999 and out["indexed"]
+    assert deps._state["copies"][(ANI, 999)] == NEW
+    assert (ANI, 101) in deps._state["deleted"]  # original removed
+    assert deps.ledger.docs[0]["status"] == "fixed"
+    # Undo of a repost deletes the copy and reopens the ledger item.
+    out = _run(ls.undo(deps, ANI, 101))
+    assert out["ok"] and (ANI, 999) in deps._state["deleted"]
+    assert deps.ledger.docs[0]["status"] == "open"
+
+
+def test_repost_copy_that_does_not_index_is_removed():
+    deps = _deps()
+
+    async def uneditable(chat, msg, caption):
+        raise RuntimeError("message to edit not found")
+    deps.edit_caption = uneditable
+    out = _run(ls.fix(deps, ANI, 101, NEW, OLD, key="k1", stem="pw"))
+    assert not out["ok"] and "did not index" in out["message"]
+    assert (ANI, 999) in deps._state["deleted"]  # copy cleaned up
+    assert deps.ledger.docs[0]["status"] == "open"  # nothing changed
 
 
 def test_recent_fixes_newest_first():
