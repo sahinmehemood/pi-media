@@ -743,3 +743,160 @@ def test_funnel_delete_never_precedes_capture():
         assert _delete_events == [(-1003966209940, 101)]
 
     run(go())
+
+
+# ------------------------------------------------------------------
+# A-1: engine-only ledger transitions (§2.3) + budget-reservation
+# release (§2.3a)
+# ------------------------------------------------------------------
+
+def _seed_ledger(status, chat_id=-100111, msg_id=7):
+    _ledger().docs.append({
+        "source_locator": {"chat_id": chat_id, "msg_id": msg_id},
+        "current_locator": {"chat_id": chat_id, "msg_id": msg_id},
+        "skip_locator": None, "chat_id": chat_id, "status": status,
+        "origin": "live-fail", "park_reason": None,
+        "escalation_reason": None,
+    })
+
+
+def _fixes():
+    return fake_db.dbs["tracking"]["librarian_fixes"]
+
+
+def _seed_fix(request_id="rq-a1", state="prepared", budget_counted=True):
+    _fixes().docs.append({"request_id": request_id, "state": state,
+                          "budget_counted": budget_counted})
+
+
+def test_mark_ledger_fixed_happy():
+    _reset()
+    _seed_ledger("waiting")
+
+    async def go():
+        row, current = await store.mark_ledger_fixed(-100111, 7)
+        assert current == "waiting"
+        assert row["status"] == "fixed"
+        assert _ledger().docs[0]["status"] == "fixed"
+
+    run(go())
+
+
+def test_mark_ledger_fixed_wrong_status_no_write():
+    for status in ("parked", "escalated", "fixed"):
+        _reset()
+        _seed_ledger(status)
+
+        async def go(status=status):
+            row, current = await store.mark_ledger_fixed(-100111, 7)
+            assert current == status
+            assert row["status"] == status
+            assert _ledger().docs[0]["status"] == status  # no write
+
+        run(go())
+
+
+def test_mark_ledger_fixed_missing_row():
+    _reset()
+
+    async def go():
+        assert await store.mark_ledger_fixed(-100111, 7) == (None, None)
+
+    run(go())
+
+
+def test_return_ledger_to_waiting_happy():
+    _reset()
+    _seed_ledger("fixed")
+
+    async def go():
+        row, current = await store.return_ledger_to_waiting(-100111, 7)
+        assert current == "fixed"
+        assert row["status"] == "waiting"
+        assert _ledger().docs[0]["status"] == "waiting"
+
+    run(go())
+
+
+def test_return_ledger_to_waiting_wrong_status_no_write():
+    for status in ("waiting", "parked", "escalated"):
+        _reset()
+        _seed_ledger(status)
+
+        async def go(status=status):
+            row, current = await store.return_ledger_to_waiting(-100111, 7)
+            assert current == status
+            assert row["status"] == status
+            assert _ledger().docs[0]["status"] == status  # no write
+
+        run(go())
+
+
+def test_return_ledger_to_waiting_missing_row():
+    _reset()
+
+    async def go():
+        assert await store.return_ledger_to_waiting(-100111, 7) == (None, None)
+
+    run(go())
+
+
+def test_ledger_transitions_key_set_is_command_surface_only():
+    # DISP-1a's guard (Senior criterion): the command table must
+    # never gain a fix/un-fix transition — the engine's transitions
+    # are the two store functions above, not table entries.
+    assert set(store._LEDGER_TRANSITIONS) == {"park", "unpark", "escalate"}
+
+
+def test_release_budget_reservation_releases_prepared_counted():
+    _reset()
+    _seed_fix()
+
+    async def go():
+        assert await store.release_budget_reservation("rq-a1") is True
+        assert _fixes().docs[0]["budget_counted"] is False
+        # A second release finds nothing counted: no write, False.
+        assert await store.release_budget_reservation("rq-a1") is False
+
+    run(go())
+
+
+def test_release_budget_reservation_no_write_other_states():
+    # Any post-write state (editing or beyond) with a counted
+    # reservation: the reservation stands — no write, False.
+    for state in ("editing", "confirming", "done", "edit_failed",
+                  "refused_precondition"):
+        _reset()
+        _seed_fix(state=state, budget_counted=True)
+
+        async def go(state=state):
+            assert await store.release_budget_reservation("rq-a1") is False
+            assert _fixes().docs[0]["budget_counted"] is True  # no write
+            assert _fixes().docs[0]["state"] == state
+
+        run(go())
+
+
+def test_release_budget_reservation_prepared_uncounted_and_missing():
+    _reset()
+    _seed_fix(state="prepared", budget_counted=False)
+
+    async def go():
+        assert await store.release_budget_reservation("rq-a1") is False
+        assert _fixes().docs[0]["budget_counted"] is False
+        assert await store.release_budget_reservation("rq-absent") is False
+
+    run(go())
+
+
+def test_release_budget_reservation_has_no_call_site_yet():
+    # §2.3a's call-site restriction, A-1 stage: the function is
+    # defined exactly once (in the store) and NOTHING calls it
+    # yet — its sole call site lands with WS-A's DISP-2 skip-copy
+    # branch, which replaces this pin with its own.
+    store_src = Path("Backend/helper/librarian_store.py").read_text()
+    assert store_src.count("release_budget_reservation") == 1
+    for path in Path("Backend").rglob("*.py"):
+        if path.name == "librarian_store.py":
+            continue
+        assert "release_budget_reservation" not in path.read_text(), path

@@ -377,6 +377,49 @@ async def transition_ledger(chat_id, msg_id, action, reason=None) -> tuple:
     return row, current
 
 
+async def mark_ledger_fixed(chat_id, msg_id) -> tuple:
+    """Engine-only §6 transition waiting -> fixed (DISP-1a, §2.3).
+    Same return convention as transition_ledger: (row,
+    current_status); (None, None) when no row exists; on a wrong
+    from-status the row is returned WITHOUT writing. Deliberately
+    NOT routed through _LEDGER_TRANSITIONS — the command table is
+    the bot/page command surface and must never gain a fix
+    transition."""
+    row = await get_ledger_row(chat_id, msg_id)
+    if row is None:
+        return None, None
+    current = row.get("status")
+    if current != "waiting":
+        return row, current
+    fields = {"status": "fixed", "updated_at": _utcnow()}
+    await _tracking()["reject_ledger"].update_one(
+        {"source_locator.chat_id": int(chat_id), "source_locator.msg_id": int(msg_id)},
+        {"$set": fields},
+    )
+    row.update(fields)
+    return row, current
+
+
+async def return_ledger_to_waiting(chat_id, msg_id) -> tuple:
+    """Engine-only §6 transition fixed -> waiting (DISP-1a, §2.3;
+    the undo path). Same return convention as mark_ledger_fixed:
+    (row, current_status); (None, None) when no row exists; on a
+    wrong from-status the row is returned WITHOUT writing."""
+    row = await get_ledger_row(chat_id, msg_id)
+    if row is None:
+        return None, None
+    current = row.get("status")
+    if current != "fixed":
+        return row, current
+    fields = {"status": "waiting", "updated_at": _utcnow()}
+    await _tracking()["reject_ledger"].update_one(
+        {"source_locator.chat_id": int(chat_id), "source_locator.msg_id": int(msg_id)},
+        {"$set": fields},
+    )
+    row.update(fields)
+    return row, current
+
+
 async def list_escalated(limit=200) -> list:
     cursor = (
         _tracking()["reject_ledger"]
@@ -545,6 +588,27 @@ async def update_fix_state(request_id, state, *, error=_UNSET,
     await _tracking()["librarian_fixes"].update_one(
         {"request_id": request_id}, {"$set": fields}
     )
+
+
+async def release_budget_reservation(request_id) -> bool:
+    """Release a fix row's budget reservation (§2.3a, Security
+    S5-2): $sets budget_counted=false. The guard IS the function —
+    the update filter carries both conditions, so the write lands
+    ONLY when the row is still in the pre-write state `prepared`
+    (no writer call attempted for the operation) AND
+    budget_counted is currently true; any other row matches
+    nothing, nothing is written, and False is returned. Sole
+    legitimate call site: DISP-2's pre-write-refusal branch
+    (readable skip copy), reached before any write; NEVER call on
+    a post-write row (editing or beyond) — a post-write release
+    would falsify §8 step 9's "the reservation stands for every
+    real write attempt"."""
+    result = await _tracking()["librarian_fixes"].update_one(
+        {"request_id": request_id, "state": "prepared",
+         "budget_counted": True},
+        {"$set": {"budget_counted": False, "updated_at": _utcnow()}},
+    )
+    return bool(result is not None and result.matched_count)
 
 
 async def find_active_fix(chat_id, msg_id) -> Optional[dict]:
