@@ -1740,6 +1740,43 @@ def test_find_and_file_reads():
     assert resp.status_code == 400
 
 
+def test_file_readback_absolute_filings():
+    """Phase 5 B-3 (§3.4; DISP-4 item 3): _find_indexed's TV branch
+    surfaces the stored Episode's absolute_episode as `absolute` —
+    without it an absolute filing cannot be read back via `file`.
+    An episode without one reads back absolute: None; the movie
+    branch carries no absolute field."""
+    _reset_api()
+    _enable()
+    _seed_storage()
+    storage = fake_db.dbs["storage_1"]
+    storage["tv"].docs.append({
+        "title": "Absolute Show", "title_english": None,
+        "original_title": None, "release_year": 2022,
+        "imdb_id": "tt0000003", "tmdb_id": 303, "kitsu_id": None,
+        "seasons": [{"season": 3, "episodes": [
+            {"episode": 2, "absolute_episode": 30, "telegram": [
+                {"quality": "1080p", "name": "Absolute Show 030 1080p.mkv",
+                 "size": "1.00GB",
+                 "parts": [{"chat_id": 111, "msg_id": 60}]}]}]}]})
+    # Absolute filing: absolute is the stored number.
+    resp = _call("GET", "/api/librarian/file",
+                 _authed_req(query={"chat": "-100111", "msg": "60"}))
+    body = resp.content
+    assert body["indexed"]["media_type"] == "tv"
+    assert body["indexed"]["season"] == 3 and body["indexed"]["episode"] == 2
+    assert body["indexed"]["absolute"] == 30
+    # Ordinary TV filing (seeded msg 56): absolute is None.
+    resp = _call("GET", "/api/librarian/file",
+                 _authed_req(query={"chat": "-100111", "msg": "56"}))
+    assert resp.content["indexed"]["absolute"] is None
+    # Movie branch: unchanged shape, no absolute field.
+    resp = _call("GET", "/api/librarian/file",
+                 _authed_req(query={"chat": "-100111", "msg": "55"}))
+    assert resp.content["indexed"]["media_type"] == "movie"
+    assert "absolute" not in resp.content["indexed"]
+
+
 class FakeTgClient:
     def __init__(self, mode):
         self.mode = mode

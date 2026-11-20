@@ -723,6 +723,7 @@ async def _find_indexed(chat_id, msg_id):
                                     "media_type": "tv", "db_index": db_index,
                                     "season": season.get("season"),
                                     "episode": ep.get("episode"),
+                                    "absolute": ep.get("absolute_episode"),
                                     "quality": q.get("quality"),
                                     "name": q.get("name")}
     return None
