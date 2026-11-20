@@ -340,7 +340,6 @@ async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
 
 
 
-# --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
 
 
 
