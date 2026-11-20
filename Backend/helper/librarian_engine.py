@@ -428,26 +428,25 @@ async def fix_one(payload: dict) -> dict:
         err = userbot["error"] if userbot["state"] == "error" else bot["error"]
         return await _finish(request_id, "edit_failed", error=err)
 
-    #----- Steps 4–5 on a found read. Pin (§4.3.5): compare each
-    #----- found read's canonical caption against expected_caption;
-    #----- proceed on a read that matches, and run the exclusion
-    #----- check on that read; if neither matches, it is drift.
+    #----- Steps 4–5 on a found read, in DESIGN §8's order:
+    #----- step 4 exclusion BEFORE step 5 drift (DISP-9 / §6.1).
+    #----- Neither exclusion check depends on the caption — the
+    #----- subtitle check reads the found message's file name and
+    #----- the personal check reads the index — so both run first,
+    #----- on the FIRST found read in probe order (userbot first;
+    #----- first-found semantics, Senior N-1: never on every read,
+    #----- never on the drift-selected read). The drift pin then
+    #----- runs unchanged on the surviving reads: compare each
+    #----- found read's canonical caption against expected_caption
+    #----- and proceed on a read that matches; if none matches, it
+    #----- is drift.
     from Backend.helper.metadata.common import (caption_with_links,
                                                 extract_default_id)
     from Backend.helper.subtitles import is_subtitle_file
 
-    chosen = None
-    for read in found:  # userbot first — the probe's first client
-        if caption_with_links(read["message"]) == payload["expected_caption"]:
-            chosen = read
-            break
-    if chosen is None:
-        return await _finish(
-            request_id, "refused_drift",
-            error="the live caption no longer matches expected_caption")
-
-    media = (getattr(chosen["message"], "video", None)
-             or getattr(chosen["message"], "document", None))
+    first = found[0]
+    media = (getattr(first["message"], "video", None)
+             or getattr(first["message"], "document", None))
     file_name = getattr(media, "file_name", None) or ""
     if is_subtitle_file(file_name):
         return await _finish(
@@ -468,6 +467,16 @@ async def fix_one(payload: dict) -> dict:
                 request_id, "refused_personal",
                 error="the target is filed as personal media "
                       "(negative TMDB id) — never fixed")
+
+    chosen = None
+    for read in found:  # userbot first — the probe's first client
+        if caption_with_links(read["message"]) == payload["expected_caption"]:
+            chosen = read
+            break
+    if chosen is None:
+        return await _finish(
+            request_id, "refused_drift",
+            error="the live caption no longer matches expected_caption")
 
     expected_ids = payload["expected_ids"]
     expected_default = (expected_ids.get("imdb")

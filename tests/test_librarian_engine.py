@@ -657,6 +657,77 @@ def test_exclusion_personal_negative_tmdb():
     assert resp.content["state"] == "refused_personal"
 
 
+def test_E1_drifted_subtitle_refused_subtitle_not_drift():
+    # DISP-9 / §6.1 regression: exclusion (step 4) precedes drift
+    # (step 5). A subtitle whose caption has ALSO drifted is an
+    # exclusion, not drift — on the pre-reorder code this returned
+    # refused_drift.
+    _setup_found()
+    sub = _message(caption="Changed Caption tt1234567",
+                   file_name="Fixture Show S01E01.srt", as_document=True)
+    _clients({(CHAT, 1): sub}, {(CHAT, 1): sub})
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_subtitle", resp.content
+    assert _fixes_docs()[0]["state"] == "refused_subtitle"
+
+
+def test_E1_drifted_personal_refused_personal_not_drift():
+    # DISP-9 / §6.1 regression: a personal file (negative TMDB id
+    # in the index) whose caption has ALSO drifted is an exclusion,
+    # not drift — on the pre-reorder code this returned
+    # refused_drift.
+    _setup_found()
+    MEDIA_IDS[(111, 1)] = ("tt1234567", -5, "movie")  # stripped chat 111
+    drifted = _message(caption="Changed Caption tt1234567")
+    _clients({(CHAT, 1): drifted}, {(CHAT, 1): drifted})
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_personal", resp.content
+    assert _fixes_docs()[0]["state"] == "refused_personal"
+
+
+def test_E1_drifted_ordinary_still_refused_drift():
+    # DISP-9 / §6.1 control: a drifted ordinary file is still drift
+    # after the reorder — the reorder changes only exclusion
+    # precedence, not the drift outcome for non-excluded files.
+    _setup_found()
+    drifted = _message(caption="Changed Caption tt1234567")
+    _clients({(CHAT, 1): drifted}, {(CHAT, 1): drifted})
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_drift", resp.content
+
+
+def test_E1_exclusions_run_on_first_found_read():
+    # DISP-9 first-found pin (Senior N-1): the file-name check runs
+    # on the FIRST found read in probe order (userbot first), not
+    # on the drift-selected read. Here the userbot read is a
+    # drifted subtitle and the bot read is an ordinary file whose
+    # caption matches — pre-reorder code selected the bot read and
+    # completed; the reorder refuses on the first read's exclusion.
+    _setup_found()
+    sub = _message(caption="Changed Caption tt1234567",
+                   file_name="Fixture Show S01E01.srt", as_document=True)
+    ordinary = _message()
+    _clients({(CHAT, 1): sub}, {(CHAT, 1): ordinary})
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_subtitle", resp.content
+
+
+def test_E1_second_read_subtitle_not_excluded_when_first_is_ordinary():
+    # DISP-9 first-found pin, converse: exclusions do NOT run on
+    # every found read. The userbot (first) read is an ordinary
+    # drifted file; the bot read is a subtitle whose caption
+    # matches. The exclusion check passes on the first read, drift
+    # selection then proceeds on the surviving reads exactly as
+    # Phase 4 pinned it and selects the matching bot read.
+    _setup_found()
+    ordinary_drifted = _message(caption="Changed Caption tt1234567")
+    sub_matching = _message(file_name="Fixture Show S01E01.srt",
+                            as_document=True)
+    _clients({(CHAT, 1): ordinary_drifted}, {(CHAT, 1): sub_matching})
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "dry_run_complete", resp.content
+
+
 def test_drift_and_caption_id_mismatch():
     _setup_found()
     drifted = _message(caption="Changed Caption tt1234567")
