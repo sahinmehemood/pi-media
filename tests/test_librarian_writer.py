@@ -413,3 +413,244 @@ def test_F2_settings_page_context_sets_pairing_flag():
     html = _render_settings(ctx)
     if html is not None:
         assert 'id="librarian-token-status">Not set<' in html
+
+
+# ------------------------------------------------------------------
+# A-2 — the writer transport itself (Phase 5 plan §2.1, §10.2):
+# engine._bot_api_edit_caption against a REAL local HTTP server
+# returning REAL Bot API envelope shapes.
+#
+# Environment fact (checked at build time, the E-3 precedent):
+# aiohttp is NOT installed in this suite's environment, although
+# production has it (api_routes.py:1826 imports it). The double
+# below therefore stands in for the aiohttp CLIENT LIBRARY only —
+# the exact surface the writer uses (ClientSession as an async
+# context manager, session.post(url, json=, timeout=ClientTimeout)
+# returning an async-context-manager response with .status and
+# .json()) — and performs the request as REAL HTTP over a REAL
+# loopback socket via stdlib http.client, so the writer's URL
+# construction, JSON body, status/body handling, scrubbing and
+# no-chain discipline all execute unmodified. Like real aiohttp,
+# its connector error message EMBEDS the request URL (token and
+# all) — that is the S5-4 hazard shape, reproduced faithfully.
+# Server constraints (Security S5-11): 127.0.0.1 only, ephemeral
+# port, sentinel token only.
+# ------------------------------------------------------------------
+
+import http.client
+import threading
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+engine = load_module("Backend.helper.librarian_engine",
+                     "Backend/helper/librarian_engine.py")
+
+
+class _FakeClientTimeout:
+    def __init__(self, total=None):
+        self.total = total
+
+
+class _FakeResponse:
+    def __init__(self, status, body):
+        self.status = status
+        self._body = body
+
+    async def json(self, content_type=None):
+        return json.loads(self._body.decode("utf-8"))
+
+
+class _PostContext:
+    def __init__(self, session, url, payload, timeout):
+        self._session = session
+        self._url = url
+        self._payload = payload
+        self._timeout = timeout
+
+    async def __aenter__(self):
+        return await asyncio.to_thread(
+            self._session._do_post, self._url, self._payload, self._timeout)
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def post(self, url, json=None, timeout=None):
+        return _PostContext(self, url, json, timeout)
+
+    @staticmethod
+    def _do_post(url, payload, timeout):
+        parts = url.split("://", 1)[1]
+        hostport, _, path = parts.partition("/")
+        host, _, port = hostport.partition(":")
+        total = getattr(timeout, "total", None) or 30
+        conn = http.client.HTTPConnection(host, int(port), timeout=total)
+        try:
+            conn.request("POST", "/" + path,
+                         body=json.dumps(payload).encode("utf-8"),
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            return _FakeResponse(resp.status, resp.read())
+        except OSError as exc:
+            # aiohttp's connector errors stringify WITH the URL.
+            raise ConnectionError(
+                f"Cannot connect to {url} [{exc}]") from exc
+        finally:
+            conn.close()
+
+
+def _install_fake_aiohttp():
+    fake = types.ModuleType("aiohttp")
+    fake.ClientSession = _FakeSession
+    fake.ClientTimeout = _FakeClientTimeout
+    saved = sys.modules.get("aiohttp")
+    sys.modules["aiohttp"] = fake
+    return saved
+
+
+def _restore_aiohttp(saved):
+    if saved is None:
+        sys.modules.pop("aiohttp", None)
+    else:
+        sys.modules["aiohttp"] = saved
+
+
+class _BotApiHandler(BaseHTTPRequestHandler):
+    script = (200, b'{"ok": true, "result": {}}')
+    requests = []
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length)
+        type(self).requests.append(
+            (self.path, json.loads(raw.decode("utf-8"))))
+        status, body = type(self).script
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _serve_bot_api(script):
+    _BotApiHandler.script = script
+    _BotApiHandler.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _BotApiHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, server.server_address[1]
+
+
+def _writer_call(caption="<b>x</b>"):
+    return _run(engine._bot_api_edit_caption(-100111, 1, caption))
+
+
+def test_A2_bot_api_base_constant_is_the_real_telegram_host():
+    # The L-5 pin in unit form: the only sanctioned override is
+    # rebinding this constant in a scratch/test tree; its landed
+    # value is exactly the real host.
+    assert engine.BOT_API_BASE == "https://api.telegram.org"
+
+
+def test_A2_writer_transport_ok_request_shape_and_envelope():
+    _reset()
+    api._set_settings(librarian_writer_token=WRITER_SENTINEL)
+    server, port = _serve_bot_api(
+        (200, b'{"ok": true, "result": {"message_id": 1}}'))
+    saved_base, saved_aiohttp = engine.BOT_API_BASE, _install_fake_aiohttp()
+    engine.BOT_API_BASE = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _writer_call("Fixture <b>Caption</b>")
+    finally:
+        engine.BOT_API_BASE = saved_base
+        _restore_aiohttp(saved_aiohttp)
+        server.shutdown()
+    assert status == 200 and body == {"ok": True, "result": {"message_id": 1}}
+    assert len(_BotApiHandler.requests) == 1
+    path, payload = _BotApiHandler.requests[0]
+    # The token rides in the request PATH (server-side record only;
+    # it is asserted in no engine output anywhere in this suite).
+    assert path == f"/bot{WRITER_SENTINEL}/editMessageCaption"
+    assert payload == {"chat_id": -100111, "message_id": 1,
+                       "caption": "Fixture <b>Caption</b>",
+                       "parse_mode": "HTML"}
+
+
+def test_A2_writer_transport_429_envelope_classifies_flood_wait():
+    _reset()
+    api._set_settings(librarian_writer_token=WRITER_SENTINEL)
+    envelope = {"ok": False, "error_code": 429,
+                "description": "Too Many Requests: retry after 30",
+                "parameters": {"retry_after": 30}}
+    server, port = _serve_bot_api(
+        (429, json.dumps(envelope).encode("utf-8")))
+    saved_base, saved_aiohttp = engine.BOT_API_BASE, _install_fake_aiohttp()
+    engine.BOT_API_BASE = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _writer_call()
+    finally:
+        engine.BOT_API_BASE = saved_base
+        _restore_aiohttp(saved_aiohttp)
+        server.shutdown()
+    assert (status, body) == (429, envelope)
+    assert engine.classify_bot_api_error(status, body) == ("flood_wait", 30)
+
+
+def test_A2_writer_transport_non_json_body_normalises_to_empty():
+    _reset()
+    api._set_settings(librarian_writer_token=WRITER_SENTINEL)
+    server, port = _serve_bot_api((200, b"this is not json"))
+    saved_base, saved_aiohttp = engine.BOT_API_BASE, _install_fake_aiohttp()
+    engine.BOT_API_BASE = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _writer_call()
+    finally:
+        engine.BOT_API_BASE = saved_base
+        _restore_aiohttp(saved_aiohttp)
+        server.shutdown()
+    assert (status, body) == (200, {})
+    assert engine.classify_bot_api_error(status, body) == ("edit_failed", None)
+
+
+def test_A2_writer_transport_failure_scrubbed_and_unchained():
+    # S5-4 / A-ACC-6 extended: the connector error's text CONTAINS
+    # the token-bearing URL; the surfaced BotApiTransportError must
+    # carry the token in neither its message nor its exception
+    # chain (__cause__ / __context__ rendering included).
+    _reset()
+    api._set_settings(librarian_writer_token=WRITER_SENTINEL)
+    # A loopback port with nothing listening (bind, take the
+    # number, close) — the closed-port failure shape.
+    import socket as _socket
+    sock = _socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    saved_base, saved_aiohttp = engine.BOT_API_BASE, _install_fake_aiohttp()
+    engine.BOT_API_BASE = f"http://127.0.0.1:{port}"
+    caught = None
+    try:
+        _writer_call()
+    except engine.BotApiTransportError as exc:
+        caught = exc
+    finally:
+        engine.BOT_API_BASE = saved_base
+        _restore_aiohttp(saved_aiohttp)
+    assert caught is not None, "expected BotApiTransportError"
+    assert WRITER_SENTINEL not in str(caught)
+    assert "[writer-token]" in str(caught)
+    assert caught.__cause__ is None
+    assert caught.__context__ is None
+    rendered = "".join(traceback.format_exception(
+        type(caught), caught, caught.__traceback__))
+    assert WRITER_SENTINEL not in rendered

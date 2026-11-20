@@ -981,14 +981,18 @@ def test_release_budget_reservation_prepared_uncounted_and_missing():
     run(go())
 
 
-def test_release_budget_reservation_has_no_call_site_yet():
-    # §2.3a's call-site restriction, A-1 stage: the function is
-    # defined exactly once (in the store) and NOTHING calls it
-    # yet — its sole call site lands with WS-A's DISP-2 skip-copy
-    # branch, which replaces this pin with its own.
+def test_release_budget_reservation_single_call_site_in_engine():
+    # §2.3a's call-site restriction, A-2 stage (replaces the A-1
+    # no-call-site pin, as that pin promised): the function is
+    # defined exactly once (in the store) and called exactly once
+    # in the whole tree — in the engine's DISP-2 readable-skip-copy
+    # branch, the sole sanctioned call site. No post-write path
+    # (editing or beyond) may ever invoke it.
     store_src = Path("Backend/helper/librarian_store.py").read_text()
     assert store_src.count("release_budget_reservation") == 1
+    engine_src = Path("Backend/helper/librarian_engine.py").read_text()
+    assert engine_src.count("release_budget_reservation(") == 1
     for path in Path("Backend").rglob("*.py"):
-        if path.name == "librarian_store.py":
+        if path.name in ("librarian_store.py", "librarian_engine.py"):
             continue
         assert "release_budget_reservation" not in path.read_text(), path

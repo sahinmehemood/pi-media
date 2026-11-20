@@ -434,7 +434,11 @@ def test_T5a_hostile_writes_on_auto_still_dry_run():
     assert all(c[0] == "get_messages" for c in ub.calls + bt.calls)
 
 
-def test_T5b_c_test_mode_off_refused_two_gates():
+def test_T5b_test_mode_off_writes_gate_then_real_fix():
+    # Phase 4's part (c) asserted a refusal here ("no writer exists
+    # in this build"); Phase 5 A-2 removes that premise — with the
+    # writer landed, test mode off + writes on is the REAL path.
+    # Part (b) is unchanged: writes off still refuses at the gate.
     _reset()
     api._enable(librarian_channels=["-100111"],
                 librarian_channel_types={"-100111": "tv"})
@@ -448,13 +452,14 @@ def test_T5b_c_test_mode_off_refused_two_gates():
     assert resp.content["state"] == "refused_precondition"
     assert "writes_enabled" in resp.content["error"]
     assert _fixes_docs() == []
-    # (c) test mode off, writes on: still refused (no writer exists).
-    _settings(librarian_test_mode=False, librarian_writes_enabled=True)
-    resp = _fix_via_route(_payload(request_id="req-0002"))
-    assert resp.content["state"] == "refused_precondition"
-    assert "Phase 5" in resp.content["error"]
-    assert _fixes_docs() == []
     assert ub.calls == [] and bt.calls == []  # gates precede clients (T-2)
+    # (c) test mode off, writes on: the real fix runs (A-2 doubles).
+    _setup_real(msg=msg)
+    resp = _fix_via_route(_payload(request_id="req-0002"))
+    assert resp.status_code == 200, resp.content
+    assert resp.content["state"] == "fixed"
+    assert resp.content["dry_run"] is False
+    assert resp.content["budget_counted"] is True
 
 
 # ------------------------------------------------------------------
@@ -1163,3 +1168,765 @@ def test_page_context_carries_fix_history():
     assert item["new_caption_text"] == (
         "Fixture Show S01E01 1080p\nIMDb\n"
         "https://www.imdb.com/title/tt1234567")
+
+
+# ------------------------------------------------------------------
+# A-2 — the real path: the Bot API writer + §8 steps 6–9
+# (Phase 5 plan §2, DISP-1/DISP-2). The writer is doubled at the
+# transport seam (engine._bot_api_edit_caption) with scripted REAL
+# Bot API envelope shapes; the REAL transport (URL, JSON body,
+# token hygiene, no-chain) is exercised against a local HTTP
+# server in test_librarian_writer.py. The re-index seam is doubled
+# through the REAL bridge module (DISP-3 contract: fresh result
+# dicts per call, the (imdb, tmdb, media_type) triple, filed in
+# the form it was given).
+# ------------------------------------------------------------------
+
+bridge = load_module("Backend.helper.librarian_reindex",
+                     "Backend/helper/librarian_reindex.py")
+sys.modules["Backend.helper"].librarian_reindex = bridge
+
+NEW_CAPTION_TEXT = engine.canonical_from_html(NEW_CAPTION)
+IMDB_URL = "https://www.imdb.com/title/tt1234567"
+OK_ENVELOPE = (200, {"ok": True, "result": {"message_id": 1}})
+
+
+class FakeWriter:
+    """Scripted transport double: records every call; each outcome
+    is a (status, body) tuple or an exception to raise. An
+    unscripted call defaults to the success envelope — tests assert
+    exact call counts, so a hidden extra call still fails them."""
+
+    def __init__(self, outcomes=(), on_call=None):
+        self.outcomes = list(outcomes)
+        self.calls = []
+        self.on_call = on_call
+
+    async def __call__(self, chat_id, msg_id, caption_html):
+        self.calls.append((chat_id, msg_id, caption_html))
+        if self.on_call is not None:
+            self.on_call(len(self.calls), chat_id, msg_id, caption_html)
+        outcome = self.outcomes.pop(0) if self.outcomes else OK_ENVELOPE
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+class FakeSeam:
+    """DISP-3 bridge double: fresh result dict per call."""
+
+    def __init__(self, results=()):
+        self.results = list(results)
+        self.calls = []
+
+    async def __call__(self, client, message, *, placement=None,
+                       expected_ids=None, series_ids=None,
+                       future_timeout=120):
+        self.calls.append({"client": client, "message": message,
+                           "placement": placement,
+                           "expected_ids": expected_ids,
+                           "series_ids": series_ids,
+                           "future_timeout": future_timeout})
+        if self.results:
+            return copy.deepcopy(self.results.pop(0))
+        return {"state": "indexed", "ids": ("tt1234567", None, "tv"),
+                "filed": {"season": 1, "episode": 1}, "error": None}
+
+
+class SequencedClient(ExplodingClient):
+    """get_messages answers from a per-locator sequence (the last
+    answer repeats) — for re-probe tests whose second read must
+    differ from the first."""
+
+    def __init__(self, sequences=None):
+        super().__init__()
+        self._seq = {k: list(v) for k, v in (sequences or {}).items()}
+
+    async def get_messages(self, chat_id, msg_id):
+        self.calls.append(("get_messages", chat_id, msg_id))
+        seq = self._seq.get((chat_id, msg_id)) or self._seq.get("default")
+        if not seq:
+            return None
+        outcome = seq.pop(0) if len(seq) > 1 else seq[0]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _real_settings(**kw):
+    base = {"librarian_test_mode": False, "librarian_writes_enabled": True,
+            "librarian_writer_token": WRITER_SENTINEL,
+            "librarian_edit_budget_per_day": 10}
+    base.update(kw)
+    return _settings(**base)
+
+
+def _setup_real(msg=None, writer_outcomes=(), seam_results=(),
+                on_writer_call=None, seed=True, **settings_kw):
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings(**settings_kw)
+    if seed:
+        _seed_ledger()
+    msg = msg if msg is not None else _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    writer = FakeWriter(writer_outcomes, on_call=on_writer_call)
+    engine._bot_api_edit_caption = writer
+    seam = FakeSeam(seam_results)
+    bridge.register(seam)
+    return msg, writer, seam
+
+
+def _set_live_caption(msg, caption_text, url=None):
+    """Mutate a fake message so caption_with_links() yields the
+    given canonical text (plain text + the entity URL line)."""
+    if url:
+        msg.caption = caption_text[: -len(url)].rstrip("\n")
+        msg.caption_entities = [types.SimpleNamespace(url=url)]
+    else:
+        msg.caption = caption_text
+        msg.caption_entities = []
+
+
+def _apply_then_restore(msg):
+    """Writer on_call: call 1 lands the new caption, call 2 (the
+    restore) lands the old one — the live re-reads then confirm."""
+    def on_call(n, chat_id, msg_id, caption_html):
+        if n == 1:
+            _set_live_caption(msg, NEW_CAPTION_TEXT, IMDB_URL)
+        elif n == 2:
+            _set_live_caption(msg, CAPTION)
+    return on_call
+
+
+def _budget_used():
+    return _run(store.count_budget_used_today())
+
+
+# --- A-ACC-2: the full success walk ---------------------------------
+
+def test_A2_real_fix_walks_prepared_editing_reindexing_fixed():
+    msg, writer, seam = _setup_real()
+    resp = _fix_via_route(_payload())
+    assert resp.status_code == 200, resp.content
+    body = resp.content
+    assert body["state"] == "fixed"
+    assert body["index_confirmed"] is True
+    assert body["dry_run"] is False and body["budget_counted"] is True
+    assert body["error"] is None
+    row = _fixes_docs()[0]
+    assert row["state"] == "fixed"
+    assert row["budget_counted"] is True and row["dry_run"] is False
+    for stamp in ("prepared_at", "editing_at", "reindexing_at", "fixed_at"):
+        assert row[stamp] is not None, stamp
+    # Exactly one edit, carrying the payload's HTML caption verbatim.
+    assert writer.calls == [(CHAT, 1, NEW_CAPTION)]
+    # The seam was called once, through the bridge, with the bot
+    # client's post-edit message object and the contract kwargs.
+    assert len(seam.calls) == 1
+    call = seam.calls[0]
+    assert call["client"] is api.STUBS["bot"].StreamBot
+    assert call["message"] is msg
+    assert call["placement"] is None
+    assert call["expected_ids"] == {"imdb": "tt1234567"}
+    assert call["series_ids"] is None
+    # Ledger moved waiting -> fixed only on confirmed indexing.
+    assert _ledger_docs()[0]["status"] == "fixed"
+    assert _budget_used() == 1
+
+
+def test_A2_real_fix_series_ids_come_from_the_record():
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings()
+    _seed_ledger()
+
+    async def seed_record():
+        return await store.upsert_record({
+            "canonical_key": "fixture-show", "ids": {"tmdb": 999, "tvdb": 555},
+            "titles": ["Fixture Show"], "media_type": "tv",
+            "numbering": {"source": "tmdb", "order": "aired",
+                          "offset": None, "note": ""},
+            "status": "verified", "related_entries": []})
+
+    record = _run(seed_record())
+    msg = _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    writer = FakeWriter()
+    engine._bot_api_edit_caption = writer
+    seam = FakeSeam()
+    bridge.register(seam)
+    resp = _fix_via_route(_payload(
+        series_record_id=str(record["_id"]),
+        series_record_updated_at=record["updated_at"].isoformat()))
+    assert resp.content["state"] == "fixed", resp.content
+    assert seam.calls[0]["series_ids"] == {"tmdb": 999, "tvdb": 555}
+
+
+# --- Step 6 classifier branches (§2.2 item 2) ------------------------
+
+def test_A2_flood_wait_terminates_with_seconds_and_standing_reservation():
+    _msg, writer, seam = _setup_real(writer_outcomes=[(
+        429, {"ok": False, "error_code": 429,
+              "description": "Too Many Requests: retry after 30",
+              "parameters": {"retry_after": 30}})])
+    result = _run(engine.fix_one(_payload()))
+    assert result["state"] == "flood_wait"
+    assert result["retry_after"] == 30
+    assert "30-second" in result["error"]
+    row = _fixes_docs()[0]
+    assert row["state"] == "flood_wait"
+    assert row["budget_counted"] is True  # reservation stands (§8 step 9)
+    assert _ledger_docs()[0]["status"] == "waiting"
+    assert len(writer.calls) == 1 and seam.calls == []  # no retry, no seam
+
+
+def test_A2_flood_wait_without_retry_after_invents_no_seconds():
+    _msg, _writer, _seam = _setup_real(writer_outcomes=[(
+        429, {"ok": False, "error_code": 429,
+              "description": "Too Many Requests"})])
+    result = _run(engine.fix_one(_payload()))
+    assert result["state"] == "flood_wait"
+    assert "retry_after" not in result
+    assert "second" not in result["error"]
+
+
+def test_A2_flood_wait_terminates_the_batch_with_aborted_rows():
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings()
+    for msg_id in (1, 2, 3):
+        _seed_ledger(msg_id=msg_id)
+    msg = _message()
+    script = {(CHAT, i): msg for i in (1, 2, 3)}
+    ub, bt = _clients(script, script)
+    writer = FakeWriter([(429, {"ok": False, "error_code": 429,
+                                 "description": "Too Many Requests: retry after 30",
+                                 "parameters": {"retry_after": 30}})])
+    engine._bot_api_edit_caption = writer
+    bridge.register(FakeSeam())
+    items = [_payload(request_id=f"fw-{i}", msg_id=i) for i in (1, 2, 3)]
+    resp = api._call("POST", "/api/librarian/fix-batch",
+                     api._authed_req(body={"batch_id": "fw-batch",
+                                           "items": items}))
+    assert resp.status_code == 200, resp.content
+    states = [r["state"] for r in resp.content["results"]]
+    assert states == ["flood_wait", "aborted", "aborted"], states
+    rows = {r["request_id"]: r for r in _fixes_docs()}
+    assert len(rows) == 3
+    for rid in ("fw-2", "fw-3"):
+        row = rows[rid]
+        assert row["state"] == "aborted"
+        assert row["budget_counted"] is False
+        assert row["dry_run"] is False
+        assert row["index_confirmed"] is False
+        assert "flood" in row["error"].lower()
+        assert row["aborted_at"] is not None
+    # The remaining items were never attempted: one edit, and the
+    # only probes are the first item's.
+    assert len(writer.calls) == 1
+    assert ub.calls == [("get_messages", CHAT, 1)]
+    assert bt.calls == [("get_messages", CHAT, 1)]
+    assert all(r["status"] == "waiting" for r in _ledger_docs())
+
+
+def test_A2_not_editable_is_edit_failed_repost_deferred():
+    _msg, writer, _seam = _setup_real(writer_outcomes=[(
+        400, {"ok": False, "error_code": 400,
+              "description": "Bad Request: message can't be edited"})])
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "edit_failed"
+    assert "cannot be edited" in resp.content["error"]
+    assert "Phase 6" in resp.content["error"]
+    row = _fixes_docs()[0]
+    assert row["budget_counted"] is True  # a real write attempt stands
+    assert _ledger_docs()[0]["status"] == "waiting"
+    assert len(writer.calls) == 1  # no second client, no repost attempt
+
+
+def test_A2_not_modified_proceeds_to_confirmation():
+    _msg, _writer, _seam = _setup_real(writer_outcomes=[(
+        400, {"ok": False, "error_code": 400,
+              "description": "Bad Request: message is not modified"})])
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "fixed", resp.content
+
+
+def test_A2_generic_edit_error_is_edit_failed_with_scrubbed_description():
+    _msg, _writer, _seam = _setup_real(writer_outcomes=[(
+        400, {"ok": False, "error_code": 400,
+              "description": "Bad Request: chat not found"})])
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "edit_failed"
+    assert "chat not found" in resp.content["error"]
+
+
+def test_A2_not_found_reprobe_both_missing_is_refused_missing_post():
+    # Obligation 3 / S5-2: this branch NEVER releases the
+    # reservation — the row is post-write-attempt (it entered
+    # `editing` and the writer was called), so §2.3a is never
+    # invoked on it (pinned by c43a07b at the store level).
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings()
+    _seed_ledger()
+    msg = _message()
+    ub = SequencedClient({(CHAT, 1): [msg, None]})
+    bt = SequencedClient({(CHAT, 1): [msg, None]})
+    api.STUBS["bot"].Userbot = ub
+    api.STUBS["bot"].StreamBot = bt
+    writer = FakeWriter([(400, {"ok": False, "error_code": 400,
+                                 "description": "Bad Request: message to edit not found"})])
+    engine._bot_api_edit_caption = writer
+    bridge.register(FakeSeam())
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_missing_post", resp.content
+    assert "re-probe" in resp.content["error"]
+    row = _fixes_docs()[0]
+    assert row["budget_counted"] is True  # stands — never released
+    assert _ledger_docs()[0]["status"] == "waiting"
+    assert len(writer.calls) == 1  # the edit is never re-sent
+
+
+def test_A2_not_found_reprobe_still_found_is_edit_failed():
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings()
+    _seed_ledger()
+    msg = _message()
+    ub = SequencedClient({(CHAT, 1): [msg, msg]})
+    bt = SequencedClient({(CHAT, 1): [msg, msg]})
+    api.STUBS["bot"].Userbot = ub
+    api.STUBS["bot"].StreamBot = bt
+    writer = FakeWriter([(400, {"ok": False, "error_code": 400,
+                                 "description": "Bad Request: message to edit not found"})])
+    engine._bot_api_edit_caption = writer
+    bridge.register(FakeSeam())
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "edit_failed", resp.content
+    assert "re-probe" in resp.content["error"]
+    assert len(writer.calls) == 1
+
+
+def test_A2_ambiguous_timeout_caption_landed_proceeds_one_edit_only():
+    msg = _message()
+
+    def land(n, chat_id, msg_id, caption_html):
+        _set_live_caption(msg, NEW_CAPTION_TEXT, IMDB_URL)
+
+    _setup_real(msg=msg, writer_outcomes=[
+        engine.BotApiTransportError("TimeoutError: timed out")],
+        on_writer_call=land)
+    writer = engine._bot_api_edit_caption
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "fixed", resp.content
+    assert len(writer.calls) == 1  # never re-sent (§8 ambiguous rule)
+
+
+def test_A2_ambiguous_timeout_caption_not_landed_is_edit_failed():
+    _msg, writer, _seam = _setup_real(writer_outcomes=[
+        engine.BotApiTransportError("TimeoutError: timed out")])
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "edit_failed", resp.content
+    assert "ambiguous" in resp.content["error"]
+    assert len(writer.calls) == 1
+    assert _ledger_docs()[0]["status"] == "waiting"
+
+
+# --- Step 8 confirmation (§2.2 item 3) -------------------------------
+
+def test_A2_seam_error_is_edit_failed_with_seam_message():
+    _msg, _writer, _seam = _setup_real(seam_results=[
+        {"state": "error", "ids": None, "filed": None,
+         "error": "seam exploded"}])
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "edit_failed"
+    assert "seam exploded" in resp.content["error"]
+    assert _ledger_docs()[0]["status"] == "waiting"
+
+
+def test_A2_duplicate_with_matching_ids_and_filed_is_fixed():
+    _msg, _writer, _seam = _setup_real(seam_results=[
+        {"state": "duplicate", "ids": ("tt1234567", None, "tv"),
+         "filed": {"season": 1, "episode": 1}, "error": None}])
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "fixed", resp.content
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+def test_A2_indexed_filed_mismatch_restores_to_edited_unindexed():
+    msg = _message()
+    _setup_real(msg=msg, seam_results=[
+        {"state": "indexed", "ids": ("tt1234567", None, "tv"),
+         "filed": {"season": 1, "episode": 2}, "error": None}],
+        on_writer_call=_apply_then_restore(msg))
+    writer = engine._bot_api_edit_caption
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "edited_unindexed", resp.content
+    assert "previous caption restored" in resp.content["error"]
+    assert len(writer.calls) == 2
+    assert writer.calls[1] == (CHAT, 1, CAPTION)  # the old caption, restored
+    assert _ledger_docs()[0]["status"] == "waiting"
+    assert _fixes_docs()[0]["index_confirmed"] is False
+
+
+def test_A2_missing_intended_cannot_confirm_tv_filing():
+    # C-2 item (ii) / Senior B-2: the seam reports a TV filing and
+    # the request carried no `intended` — confirmation cannot
+    # complete, judged on the seam's report, not the channel.
+    # (Engine-level: the route's record-keyed requirement is A-4.)
+    msg = _message()
+    _setup_real(msg=msg, on_writer_call=_apply_then_restore(msg))
+    body = _payload()
+    del body["intended"]
+    result = _run(engine.fix_one(body))
+    assert result["state"] == "edited_unindexed", result
+    assert "intended" in result["error"]
+    assert "previous caption restored" in result["error"]
+    assert _ledger_docs()[0]["status"] == "waiting"
+
+
+def test_A2_seam_timeout_is_edited_unindexed_with_restore():
+    msg = _message()
+
+    async def slow_seam(client, message, **kw):
+        await asyncio.sleep(30)
+        return {"state": "indexed", "ids": ("tt1234567", None, "tv"),
+                "filed": {"season": 1, "episode": 1}, "error": None}
+
+    _setup_real(msg=msg, on_writer_call=_apply_then_restore(msg))
+    bridge.register(slow_seam)
+    engine.REINDEX_TIMEOUT = 0.2
+    try:
+        resp = _fix_via_route(_payload())
+    finally:
+        engine.REINDEX_TIMEOUT = 120
+    assert resp.content["state"] == "edited_unindexed", resp.content
+    assert "previous caption restored" in resp.content["error"]
+
+
+def test_A2_ledger_refusal_after_confirmation_escalates_not_fixed():
+    _setup_real()
+    orig = store.mark_ledger_fixed
+
+    async def refusing(chat_id, msg_id):
+        row = await store.get_ledger_row(chat_id, msg_id)
+        return row, "parked"
+
+    store.mark_ledger_fixed = refusing
+    try:
+        resp = _fix_via_route(_payload())
+    finally:
+        store.mark_ledger_fixed = orig
+    assert resp.content["state"] == "escalated", resp.content
+    row = _fixes_docs()[0]
+    assert row["index_confirmed"] is True  # indexing WAS confirmed
+    assert "ledger" in row["error"]
+
+
+# --- edited_unindexed auto-restore (§2.2 item 4) ---------------------
+
+def test_A2_metadata_failed_restores_and_reports_edited_unindexed():
+    msg = _message()
+    _setup_real(msg=msg, seam_results=[
+        {"state": "metadata_failed", "ids": None, "filed": None,
+         "error": None}], on_writer_call=_apply_then_restore(msg))
+    writer = engine._bot_api_edit_caption
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "edited_unindexed", resp.content
+    assert "previous caption restored" in resp.content["error"]
+    assert len(writer.calls) == 2
+    assert writer.calls[1][2] == CAPTION
+    assert _ledger_docs()[0]["status"] == "waiting"  # never left waiting
+
+
+def test_A2_restore_flood_wait_terminates_flood_wait():
+    msg = _message()
+    _setup_real(msg=msg, seam_results=[
+        {"state": "metadata_failed", "ids": None, "filed": None,
+         "error": None}],
+        writer_outcomes=[OK_ENVELOPE,
+                         (429, {"ok": False, "error_code": 429,
+                                "description": "Too Many Requests: retry after 7",
+                                "parameters": {"retry_after": 7}})],
+        on_writer_call=_apply_then_restore(msg))
+    result = _run(engine.fix_one(_payload()))
+    assert result["state"] == "flood_wait", result
+    assert "restore" in result["error"]
+    assert "7-second" in result["error"]
+    assert result["retry_after"] == 7
+
+
+def test_A2_restore_failure_escalates_with_both_captions():
+    msg = _message()
+    _setup_real(msg=msg, seam_results=[
+        {"state": "metadata_failed", "ids": None, "filed": None,
+         "error": None}],
+        writer_outcomes=[OK_ENVELOPE,
+                         (400, {"ok": False, "error_code": 400,
+                                "description": "Bad Request: chat not found"})],
+        on_writer_call=_apply_then_restore(msg))
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "escalated", resp.content
+    error = resp.content["error"]
+    assert CAPTION in error and "Fixture Show" in error
+    assert "-100111" in error and "chat not found" in error
+    assert _ledger_docs()[0]["status"] == "escalated"
+
+
+def test_A2_restore_landing_wrong_caption_escalates():
+    msg = _message()
+
+    def wrong_restore(n, chat_id, msg_id, caption_html):
+        if n == 1:
+            _set_live_caption(msg, NEW_CAPTION_TEXT, IMDB_URL)
+        elif n == 2:
+            _set_live_caption(msg, "Some Third Caption tt1234567")
+
+    _setup_real(msg=msg, seam_results=[
+        {"state": "metadata_failed", "ids": None, "filed": None,
+         "error": None}], on_writer_call=wrong_restore)
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "escalated", resp.content
+    assert _ledger_docs()[0]["status"] == "escalated"
+
+
+# --- Step 3 real branches: skip copy (DISP-2) + ghost ----------------
+
+def _setup_skip_copy(skip_msg, **kw):
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings()
+    _seed_ledger()
+    _ledger_docs()[0]["skip_locator"] = {"chat_id": -100777, "msg_id": 9}
+    ub = ExplodingClient({})
+    bt = ExplodingClient({(-100777, 9): skip_msg, "default": None})
+    api.STUBS["bot"].Userbot = ub
+    api.STUBS["bot"].StreamBot = bt
+    writer = FakeWriter()
+    engine._bot_api_edit_caption = writer
+    bridge.register(FakeSeam())
+    return writer
+
+
+def test_A2_skip_copy_readable_edit_failed_releases_reservation():
+    # DISP-2's pinned terminal: no write attempted, reservation
+    # RELEASED via §2.3a (its sole call site — this branch), ledger
+    # stays waiting, drift waiver recorded in `error` (§8 step 7).
+    writer = _setup_skip_copy(_message())
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "edit_failed", resp.content
+    error = resp.content["error"]
+    assert "skip copy readable" in error
+    assert "Phase 6" in error
+    assert "drift check is waived" in error
+    row = _fixes_docs()[0]
+    assert row["budget_counted"] is False  # released
+    assert _budget_used() == 0
+    assert writer.calls == []  # no write of any kind
+    assert _ledger_docs()[0]["status"] == "waiting"
+
+
+def test_A2_skip_copy_subtitle_exclusion_recheck():
+    # Obligation 1 (Security Note 2, E-1 review): §8 step 7's
+    # exclusion re-check runs against the SKIP COPY in the real
+    # branch — a subtitle skip copy is refused_subtitle, never
+    # classified toward a repost.
+    writer = _setup_skip_copy(_message(
+        file_name="Fixture Show S01E01.srt", as_document=True))
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_subtitle", resp.content
+    assert writer.calls == []
+    assert _fixes_docs()[0]["budget_counted"] is False
+    assert _ledger_docs()[0]["status"] == "waiting"
+
+
+def test_A2_skip_copy_personal_exclusion_recheck():
+    writer = _setup_skip_copy(_message())
+    MEDIA_IDS[(777, 9)] = ("tt1234567", -5, "movie")  # stripped skip chat
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_personal", resp.content
+    assert writer.calls == []
+    assert _fixes_docs()[0]["budget_counted"] is False
+
+
+def test_A2_skip_copy_caption_id_check_still_runs():
+    writer = _setup_skip_copy(_message())
+    resp = _fix_via_route(_payload(
+        new_caption='Fixture Show\n<a href="https://www.imdb.com/title/tt9999999">IMDb</a>'))
+    assert resp.content["state"] == "refused_caption_id_mismatch", resp.content
+    assert writer.calls == []
+
+
+def test_A2_real_ghost_escalates_ledger_and_keeps_reservation():
+    # §8 step 3, real form: the ghost's ledger row is escalated
+    # with the probe summary as evidence (test mode never does
+    # this — §9 invariant, asserted by the Phase 4 tests). The
+    # reservation is NOT released: §2.3a's sole call site is the
+    # readable-skip-copy branch (see the report's flagged tension
+    # with §8 step 3's "no budget is consumed").
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings()
+    _seed_ledger()
+    _ledger_docs()[0]["skip_locator"] = {"chat_id": -100777, "msg_id": 9}
+    _clients({}, {})
+    writer = FakeWriter()
+    engine._bot_api_edit_caption = writer
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_missing_post", resp.content
+    assert resp.content["error"] == "userbot: missing; bot: missing; skip: missing"
+    ledger = _ledger_docs()[0]
+    assert ledger["status"] == "escalated"
+    assert ledger["escalation_reason"] == resp.content["error"]
+    assert _fixes_docs()[0]["budget_counted"] is True
+    assert writer.calls == []
+
+
+# --- Budget (§2.2 item 1: check + reserve atomic under the lock) -----
+
+def test_A2_budget_exhausted_single_item_refuses_without_row():
+    _setup_real(librarian_edit_budget_per_day=0)
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_precondition", resp.content
+    assert "budget" in resp.content["error"]
+    assert _fixes_docs() == []
+
+
+def test_A2_budget_exhaustion_mid_batch_aborts_from_exhaustion_point():
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings(librarian_edit_budget_per_day=1)
+    _seed_ledger()
+    _seed_ledger(msg_id=2)
+    msg = _message()
+    _clients({(CHAT, 1): msg, (CHAT, 2): msg},
+             {(CHAT, 1): msg, (CHAT, 2): msg})
+    engine._bot_api_edit_caption = FakeWriter()
+    bridge.register(FakeSeam())
+    items = [_payload(request_id="bud-1", msg_id=1),
+             _payload(request_id="bud-2", msg_id=2)]
+    resp = api._call("POST", "/api/librarian/fix-batch",
+                     api._authed_req(body={"batch_id": "bud-batch",
+                                           "items": items}))
+    states = [r["state"] for r in resp.content["results"]]
+    assert states == ["fixed", "aborted"], states
+    rows = {r["request_id"]: r for r in _fixes_docs()}
+    assert rows["bud-1"]["budget_counted"] is True
+    assert rows["bud-2"]["budget_counted"] is False
+    assert "budget" in rows["bud-2"]["error"]
+    assert _budget_used() == 1
+
+
+def test_A2_budget_boundary_race_exactly_one_reservation():
+    # Security S5-3: concurrent items, ONE remaining slot — the
+    # check + persist is one unit inside _WRITE_LOCK, so exactly
+    # one item reserves; the rest are step-1-class refusals.
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings(librarian_edit_budget_per_day=1)
+    n = 5
+    for msg_id in range(1, n + 1):
+        _seed_ledger(msg_id=msg_id)
+    msg = _message()
+    script = {(CHAT, i): msg for i in range(1, n + 1)}
+    _clients(script, script)
+    engine._bot_api_edit_caption = FakeWriter()
+    bridge.register(FakeSeam())
+
+    async def go():
+        return await asyncio.gather(*[
+            engine.fix_one(_payload(request_id=f"race-{i}", msg_id=i))
+            for i in range(1, n + 1)])
+
+    results = _run(go())
+    states = sorted(r["state"] for r in results)
+    assert states == ["fixed"] + ["refused_precondition"] * 4, states
+    rows = _fixes_docs()
+    assert len(rows) == 1 and rows[0]["budget_counted"] is True
+    assert _budget_used() == 1
+
+
+# --- A-ACC-7: inherited refusals hold on the real path ---------------
+
+def test_A2_real_path_skip_channel_never_a_write_target():
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings(skip_channel="-100111")
+    _seed_ledger()
+    msg = _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    writer = FakeWriter()
+    engine._bot_api_edit_caption = writer
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_precondition"
+    assert "never fix targets" in resp.content["error"]
+    assert _fixes_docs() == [] and writer.calls == []
+
+
+def test_A2_real_path_drift_and_exclusions_still_refuse():
+    # The shared steps 1–5 segment (E-1's reorder included) guards
+    # the real path identically; pre-write refusals never reach
+    # the writer.
+    msg, writer, _seam = _setup_real()
+    drifted = _message(caption="Changed Caption tt1234567")
+    _clients({(CHAT, 1): drifted}, {(CHAT, 1): drifted})
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_drift"
+    assert writer.calls == []
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _real_settings()
+    _seed_ledger()
+    sub = _message(caption="Changed Caption tt1234567",
+                   file_name="Fixture Show S01E01.srt", as_document=True)
+    _clients({(CHAT, 1): sub}, {(CHAT, 1): sub})
+    writer2 = FakeWriter()
+    engine._bot_api_edit_caption = writer2
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "refused_subtitle"  # E-1 order, real path
+    assert writer2.calls == []
+
+
+# --- html_from_canonical (§4.2's reconstruction, landed by A-2) ------
+
+def test_A2_html_from_canonical_shapes():
+    h = engine.html_from_canonical
+    # ID link: the bare label line is dropped, the URL line becomes
+    # the labelled anchor (caption_with_id's construction).
+    assert h("Show Name\nIMDB\nhttps://www.imdb.com/title/tt1234567") == (
+        'Show Name\n<a href="https://www.imdb.com/title/tt1234567">IMDB</a>')
+    assert h("Show Name\nTMDB\nhttps://www.themoviedb.org/tv/999") == (
+        'Show Name\n<a href="https://www.themoviedb.org/tv/999">TMDB</a>')
+    # A non-ID URL line becomes an anchor over its own text.
+    assert h("Show Name\nhttps://example.com/page") == (
+        'Show Name\n<a href="https://example.com/page">https://example.com/page</a>')
+    # Plain text is HTML-escaped; no URL -> no anchor.
+    assert h("A <B> & C") == "A &lt;B&gt; &amp; C"
+    assert h("") == ""
+    # Round-trip through the canonical form for the app's own
+    # caption shape (uppercase labels, as caption_with_id emits).
+    canonical = "Show Name\nIMDB\nhttps://www.imdb.com/title/tt1234567"
+    assert engine.canonical_from_html(h(canonical)) == canonical
