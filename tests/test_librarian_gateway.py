@@ -1661,7 +1661,15 @@ def test_cache_ttl_constants_and_expiry():
         await gateway.lookup("Harbour Lights", "tv")
         doc = _cache_docs()[0]
         delta = (doc["expires_at"] - before).total_seconds()
-        assert 59 <= delta <= 61, delta
+        # Phase 4 A2 (QA flake hunt, 2026-11-20): window is 59-65, not
+        # 59-61 — do not "tighten" it back. delta is truly 60 + the
+        # elapsed time from the `before` capture above to the gateway's
+        # internal write timestamp, bounded by the awaited lookup's
+        # duration and load-dependent on the Narzo; 65 caps that
+        # scheduling slack at 5 s. The 59 lower bound still proves the
+        # 60 s TTL constant, and 65 still catches a wrong TTL (the real
+        # TTLs differ by orders of magnitude: 60 vs 86,400 here).
+        assert 59 <= delta <= 65, delta
 
     run(go())
 
