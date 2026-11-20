@@ -847,7 +847,13 @@ def test_C3b_page_undo_unknown_or_locatorless_target():
 
 def test_C3b_page_undo_invalid_key_400():
     """The target must be a §9-shaped ID field: missing, empty,
-    or off-charset keys 400 before any store or engine call."""
+    or off-charset keys 400 before any store or engine call.
+    The exact invalid-key error body is pinned — not just the
+    400 status — so the parent's unknown-action 400
+    ({"error": "unknown action: 'undo'"}) cannot satisfy this
+    test vacuously; only _page_undo's _valid_id_field rejection
+    ({"error": "undo requires the target fix's request_id"})
+    passes."""
     with _c3b_surface(_C3B_UNDO_SETTINGS,
                       target_rows=[_c3b_target_row()]) as (routes, _s, eng):
         for body in ({"action": "undo"},
@@ -856,6 +862,8 @@ def test_C3b_page_undo_invalid_key_400():
                      {"action": "undo", "key": "x" * 65}):
             resp = _c3b_act(routes, body)
             assert resp.status_code == 400, body
+            assert resp.content == {
+                "error": "undo requires the target fix's request_id"}, body
         assert eng.calls == []
 
 
