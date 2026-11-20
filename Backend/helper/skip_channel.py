@@ -20,6 +20,18 @@ def is_skip_channel(message: Message) -> bool:
 
 
 async def route_to_skip_channel(client: Client, message: Message, origin: str = "live-fail") -> None:
+    #----- Librarian capture (DESIGN §5): the hook sits at the funnel's
+    #----- entry, awaited, so the ledger row exists whether or not a
+    #----- skip copy is ever created — and before the original can be
+    #----- deleted below. Exception-isolated: a capture failure is
+    #----- logged, never raised, and never alters copy/delete behaviour.
+    try:
+        from Backend.helper.librarian_store import capture_rejection
+
+        await capture_rejection(message, origin)
+    except Exception as e:
+        LOGGER.error(f"[Librarian] Capture failed for message {message.id}: {e}")
+
     settings = SettingsManager.current()
     skip = settings.skip_channel
     if not skip:
@@ -27,18 +39,27 @@ async def route_to_skip_channel(client: Client, message: Message, origin: str = 
 
     skip_chat = int(skip) if str(skip).lstrip("-").replace("-100", "").isdigit() else skip
 
+    copied = None
     try:
-        await message.copy(skip_chat)
+        copied = await message.copy(skip_chat)
     except FloodWait as e:
         await asleep(e.value)
         try:
-            await message.copy(skip_chat)
+            copied = await message.copy(skip_chat)
         except Exception as e2:
             LOGGER.error(f"[SkipChannel] Copy failed for message {message.id}: {e2}")
             return
     except Exception as e:
         LOGGER.error(f"[SkipChannel] Could not copy message {message.id} to skip channel: {e}")
         return
+
+    if copied is not None:
+        try:
+            from Backend.helper.librarian_store import set_skip_locator
+
+            await set_skip_locator(message.chat.id, message.id, copied.chat.id, copied.id)
+        except Exception as e:
+            LOGGER.error(f"[Librarian] Skip-locator update failed for message {message.id}: {e}")
 
     if settings.delete_on_metadata_fail:
         try:

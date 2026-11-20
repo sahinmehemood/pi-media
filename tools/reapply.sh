@@ -26,6 +26,7 @@ TARGET="${1:?usage: reapply.sh <path-to-official-clone> [git-ref]}"
 REF="${2:-master}"
 
 PLUGIN_FILES=(
+  Backend/helper/librarian_store.py
   Backend/helper/stream_buffer.py
   Backend/helper/buffered_streamer.py
   Backend/helper/stream_source.py
@@ -43,6 +44,7 @@ PLUGIN_FILES=(
   tests/test_wave2_engine.py
   tests/test_wave2_prewarm.py
   tests/test_wave2_update_manager.py
+  tests/test_librarian_store.py
   tools/chief-profile/SOUL.md
   tools/chief-profile/AGENTS.md
   tools/chief-profile/memories/MEMORY.md

@@ -87,6 +87,16 @@ _DEFAULTS: Dict[str, Any] = {
     "prewarm_trigger_pct": 70,
     "prewarm_daily_budget_mb": 2048,
     "prewarm_only_charging": False,
+    #----- Librarian (DESIGN §9; keys land in Phase 1, settings-card UI in Phase 3)
+    "librarian_capture_enabled": False,
+    "librarian_enabled": False,
+    "librarian_mode": "off",
+    "librarian_test_mode": True,
+    "librarian_writes_enabled": False,
+    "librarian_edit_budget_per_day": 10,
+    "librarian_channels": [],
+    "librarian_channel_types": {},
+    "librarian_api_token_hash": "",
 }
 
 
@@ -194,6 +204,46 @@ class Settings:
     @property
     def skip_channel(self) -> str:
         return str(self._d.get("skip_channel") or "").strip()
+
+    #----- Librarian switches (DESIGN §9)
+    @property
+    def librarian_capture_enabled(self) -> bool:
+        return bool(self._d.get("librarian_capture_enabled", False))
+
+    @property
+    def librarian_enabled(self) -> bool:
+        return bool(self._d.get("librarian_enabled", False))
+
+    @property
+    def librarian_mode(self) -> str:
+        return str(self._d.get("librarian_mode") or "off").strip().lower()
+
+    @property
+    def librarian_test_mode(self) -> bool:
+        return bool(self._d.get("librarian_test_mode", True))
+
+    @property
+    def librarian_writes_enabled(self) -> bool:
+        return bool(self._d.get("librarian_writes_enabled", False))
+
+    @property
+    def librarian_edit_budget_per_day(self) -> int:
+        try:
+            return max(0, int(self._d.get("librarian_edit_budget_per_day", 10)))
+        except (TypeError, ValueError):
+            return 10
+
+    @property
+    def librarian_channels(self) -> List[str]:
+        return list(self._d.get("librarian_channels") or [])
+
+    @property
+    def librarian_channel_types(self) -> Dict[str, str]:
+        return dict(self._d.get("librarian_channel_types") or {})
+
+    @property
+    def librarian_api_token_hash(self) -> str:
+        return str(self._d.get("librarian_api_token_hash") or "")
 
     @property
     def dl_channel_id(self):

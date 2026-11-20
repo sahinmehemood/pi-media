@@ -1476,7 +1476,7 @@ index 49c2d40..a274d73 100644
                  LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
              return
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..193e271 100644
+index 2b7712c..ea3bfa9 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,9 @@ from typing import Any, Dict, List
@@ -1499,7 +1499,7 @@ index 2b7712c..193e271 100644
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -63,6 +69,24 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -63,6 +69,34 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -1521,10 +1521,20 @@ index 2b7712c..193e271 100644
 +    "prewarm_trigger_pct": 70,
 +    "prewarm_daily_budget_mb": 2048,
 +    "prewarm_only_charging": False,
++    #----- Librarian (DESIGN §9; keys land in Phase 1, settings-card UI in Phase 3)
++    "librarian_capture_enabled": False,
++    "librarian_enabled": False,
++    "librarian_mode": "off",
++    "librarian_test_mode": True,
++    "librarian_writes_enabled": False,
++    "librarian_edit_budget_per_day": 10,
++    "librarian_channels": [],
++    "librarian_channel_types": {},
++    "librarian_api_token_hash": "",
  }
  
  
-@@ -158,6 +182,7 @@ class Settings:
+@@ -158,6 +192,7 @@ class Settings:
      def announce_new_content(self) -> bool:
          return bool(self._d.get("announce_new_content", False))
  
@@ -1532,10 +1542,50 @@ index 2b7712c..193e271 100644
      @property
      def delete_on_metadata_fail(self) -> bool:
          return bool(self._d.get("delete_on_metadata_fail", False))
-@@ -170,6 +195,31 @@ class Settings:
+@@ -170,6 +205,71 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
++    #----- Librarian switches (DESIGN §9)
++    @property
++    def librarian_capture_enabled(self) -> bool:
++        return bool(self._d.get("librarian_capture_enabled", False))
++
++    @property
++    def librarian_enabled(self) -> bool:
++        return bool(self._d.get("librarian_enabled", False))
++
++    @property
++    def librarian_mode(self) -> str:
++        return str(self._d.get("librarian_mode") or "off").strip().lower()
++
++    @property
++    def librarian_test_mode(self) -> bool:
++        return bool(self._d.get("librarian_test_mode", True))
++
++    @property
++    def librarian_writes_enabled(self) -> bool:
++        return bool(self._d.get("librarian_writes_enabled", False))
++
++    @property
++    def librarian_edit_budget_per_day(self) -> int:
++        try:
++            return max(0, int(self._d.get("librarian_edit_budget_per_day", 10)))
++        except (TypeError, ValueError):
++            return 10
++
++    @property
++    def librarian_channels(self) -> List[str]:
++        return list(self._d.get("librarian_channels") or [])
++
++    @property
++    def librarian_channel_types(self) -> Dict[str, str]:
++        return dict(self._d.get("librarian_channel_types") or {})
++
++    @property
++    def librarian_api_token_hash(self) -> str:
++        return str(self._d.get("librarian_api_token_hash") or "")
++
 +    @property
 +    def dl_channel_id(self):
 +        """DM Link pool channel as an int id, or None when not configured."""
@@ -1564,7 +1614,7 @@ index 2b7712c..193e271 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +355,104 @@ class Settings:
+@@ -305,6 +405,104 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -1669,7 +1719,7 @@ index 2b7712c..193e271 100644
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +528,7 @@ class SettingsManager:
+@@ -380,7 +578,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -1678,7 +1728,7 @@ index 2b7712c..193e271 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +675,23 @@ class SettingsManager:
+@@ -527,4 +725,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  
@@ -1703,18 +1753,61 @@ index 2b7712c..193e271 100644
 +
          return results
 diff --git a/Backend/helper/skip_channel.py b/Backend/helper/skip_channel.py
-index aed6a5c..62beba1 100644
+index aed6a5c..cb80692 100644
 --- a/Backend/helper/skip_channel.py
 +++ b/Backend/helper/skip_channel.py
-@@ -19,7 +19,7 @@ def is_skip_channel(message: Message) -> bool:
+@@ -19,7 +19,19 @@ def is_skip_channel(message: Message) -> bool:
      return bool(username) and ref.lstrip("@").lower() == username
  
  
 -async def route_to_skip_channel(client: Client, message: Message) -> None:
 +async def route_to_skip_channel(client: Client, message: Message, origin: str = "live-fail") -> None:
++    #----- Librarian capture (DESIGN §5): the hook sits at the funnel's
++    #----- entry, awaited, so the ledger row exists whether or not a
++    #----- skip copy is ever created — and before the original can be
++    #----- deleted below. Exception-isolated: a capture failure is
++    #----- logged, never raised, and never alters copy/delete behaviour.
++    try:
++        from Backend.helper.librarian_store import capture_rejection
++
++        await capture_rejection(message, origin)
++    except Exception as e:
++        LOGGER.error(f"[Librarian] Capture failed for message {message.id}: {e}")
++
      settings = SettingsManager.current()
      skip = settings.skip_channel
      if not skip:
+@@ -27,12 +39,13 @@ async def route_to_skip_channel(client: Client, message: Message) -> None:
+ 
+     skip_chat = int(skip) if str(skip).lstrip("-").replace("-100", "").isdigit() else skip
+ 
++    copied = None
+     try:
+-        await message.copy(skip_chat)
++        copied = await message.copy(skip_chat)
+     except FloodWait as e:
+         await asleep(e.value)
+         try:
+-            await message.copy(skip_chat)
++            copied = await message.copy(skip_chat)
+         except Exception as e2:
+             LOGGER.error(f"[SkipChannel] Copy failed for message {message.id}: {e2}")
+             return
+@@ -40,6 +53,14 @@ async def route_to_skip_channel(client: Client, message: Message) -> None:
+         LOGGER.error(f"[SkipChannel] Could not copy message {message.id} to skip channel: {e}")
+         return
+ 
++    if copied is not None:
++        try:
++            from Backend.helper.librarian_store import set_skip_locator
++
++            await set_skip_locator(message.chat.id, message.id, copied.chat.id, copied.id)
++        except Exception as e:
++            LOGGER.error(f"[Librarian] Skip-locator update failed for message {message.id}: {e}")
++
+     if settings.delete_on_metadata_fail:
+         try:
+             from Backend.helper.task_manager import delete_message
 diff --git a/Backend/pyrofork/clients.py b/Backend/pyrofork/clients.py
 index 4ae9cb1..0303daf 100644
 --- a/Backend/pyrofork/clients.py
