@@ -21,8 +21,10 @@ stdlib at top level; Backend modules imported inside functions.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 LOGGER = logging.getLogger("librarian")
@@ -215,6 +217,62 @@ async def _bot_api_edit_caption(chat_id, msg_id, caption_html) -> tuple:
         # __cause__ chain that could render the token-bearing URL.
         failure = scrub_secrets(f"{type(exc).__name__}: {exc}")
     raise BotApiTransportError(failure)
+
+
+# ------------------------------------------------------------------
+# Batch pacing (§8 Concurrency; phase5-plan §2.4) — batch-scoped
+# state carried by a context variable, set by fix_batch for the
+# duration of each item task. A standalone fix_one call, a dry
+# run, and undo (which calls the writer directly, never this
+# helper) see no batch state and are never paced.
+# ------------------------------------------------------------------
+
+class _BatchRun:
+    """One real batch's execution state: the in-flight semaphore
+    (4, or 1 when serial), the early-termination flag, and the
+    per-channel pacing reservations (chat_id -> monotonic time of
+    the last reserved write slot)."""
+
+    def __init__(self, serial):
+        self.semaphore = asyncio.Semaphore(1 if serial else 4)
+        self.stop = asyncio.Event()
+        self.pacing_lock = asyncio.Lock()
+        self.last_write = {}
+
+
+_BATCH_CTX = contextvars.ContextVar("librarian_batch_ctx", default=None)
+
+#: Seconds between two writes to the SAME channel (§8: ≈1/s).
+CHANNEL_WRITE_INTERVAL = 1.0
+
+
+async def _pace_write(batch, chat_id):
+    """Reserve this channel's next write slot and sleep out the
+    shortfall. The reservation is taken under the pacing lock (so
+    concurrent items to one channel can never reserve the same
+    slot) but the sleep happens outside it, so a paced channel
+    never delays a write to a different channel."""
+    async with batch.pacing_lock:
+        now = time.monotonic()
+        last = batch.last_write.get(chat_id)
+        scheduled = now if last is None else max(
+            now, last + CHANNEL_WRITE_INTERVAL)
+        batch.last_write[chat_id] = scheduled
+    delay = scheduled - time.monotonic()
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+async def _write_caption(chat_id, msg_id, caption_html):
+    """The writer call for a fix operation (the step-6 edit and
+    the §8 auto-restore): inside a batch, the per-channel pacing
+    delay is applied first — before the writer call, inside the
+    item's editing window (§2.4). Reads are never routed through
+    here, and neither are dry runs (they never write)."""
+    batch = _BATCH_CTX.get()
+    if batch is not None:
+        await _pace_write(batch, chat_id)
+    return await _bot_api_edit_caption(chat_id, msg_id, caption_html)
 
 
 def _norm_channel_id(value) -> str:
@@ -603,7 +661,7 @@ async def _restore(request_id, payload, ledger, current_locator,
     msg_id = current_locator["msg_id"]
     old_html = html_from_canonical(old_caption_text)
     try:
-        status, body = await _bot_api_edit_caption(chat_id, msg_id, old_html)
+        status, body = await _write_caption(chat_id, msg_id, old_html)
     except BotApiTransportError as exc:
         # Ambiguous restore: re-read before concluding anything.
         if await _caption_is_live(chat_id, msg_id, old_caption_text):
@@ -740,7 +798,7 @@ async def _run_real_fix(request_id, payload, ledger, current_locator,
     msg_id = current_locator["msg_id"]
     await librarian_store.update_fix_state(request_id, "editing")
     try:
-        status, body = await _bot_api_edit_caption(
+        status, body = await _write_caption(
             chat_id, msg_id, payload["new_caption"])
     except BotApiTransportError as exc:
         # Ambiguous (§8): re-read before any further action. If
@@ -1146,34 +1204,79 @@ async def fix_one(payload: dict) -> dict:
                                row["old_caption_text"])
 
 
+_FLOOD_ABORT_REASON = ("batch terminated — an earlier item was "
+                       "rate-limited by Telegram (flood_wait); this "
+                       "item was not attempted")
+
+
+async def _run_batch_item(batch, raw, batch_id):
+    """One item of a real batch, under the batch semaphore. An
+    item that acquires a slot after early termination was set is
+    unattempted: it is recorded ``aborted`` without ever entering
+    fix_one (no probe, no persist-as-prepared, no writer call).
+    The termination flag is set while the flooding item still
+    holds its slot, so no waiter can slip past it into fix_one."""
+    item = dict(raw)
+    item["batch_id"] = batch_id
+    async with batch.semaphore:
+        if batch.stop.is_set():
+            return await _record_aborted(item, _FLOOD_ABORT_REASON)
+        token = _BATCH_CTX.set(batch)
+        try:
+            result = await fix_one(item)
+        finally:
+            _BATCH_CTX.reset(token)
+        if result.get("state") == "flood_wait":
+            batch.stop.set()
+        return result
+
+
 async def fix_batch(payload: dict) -> dict:
     """{batch_id, serial, items} -> {batch_id, serial, results}.
-    Serial execution in request order, whatever the flag says
-    (T-10): §8's bounded-concurrency machinery is Workstream A-3,
-    not built here. Early termination (§8 step 2, §8 FloodWait):
-    a flood_wait item terminates the batch — every remaining item
-    is recorded ``aborted`` without being attempted. Budget
-    exhaustion needs no batch-level rule: each remaining item
-    re-evaluates the budget at its own step-2 persist and records
-    itself ``aborted`` (§2.2 item 1's position rule), so a batch
-    crossing the IST midnight still draws on the new day."""
+
+    Dry-run batches are untouched by the Phase 5 machinery (§2.4):
+    serial in request order, no semaphore, no pacing. Real
+    batches run under §8 Concurrency: at most 4 items in flight
+    (1 when ``serial``), items attempted in request order, writes
+    to one channel paced ≈1/second (see ``_write_caption``), and
+    the route still awaits the whole batch to terminal — the
+    response carries every item's result in request order.
+
+    Early termination (§8 step 2, §8 FloodWait) — semantics
+    preserved exactly from the serial executor: a flood_wait item
+    terminates the batch; items already in flight finish their
+    current classification honestly; every unattempted item is
+    recorded ``aborted`` with ``budget_counted=false``. Budget
+    exhaustion needs no batch-level rule: each item re-evaluates
+    the budget at its own step-2 persist and records itself
+    ``aborted`` at the exhaustion point (§2.2 item 1's position
+    rule), so a batch crossing the IST midnight still draws on
+    the new day."""
     await _ensure_engine_init()
-    results = []
     items = payload["items"]
-    for idx, raw in enumerate(items):
-        item = dict(raw)
-        item["batch_id"] = payload["batch_id"]
-        result = await fix_one(item)
-        results.append(result)
-        if result.get("state") == "flood_wait":
-            reason = ("batch terminated — an earlier item was "
-                      "rate-limited by Telegram (flood_wait); this "
-                      "item was not attempted")
-            for rest in items[idx + 1:]:
-                rest = dict(rest)
-                rest["batch_id"] = payload["batch_id"]
-                results.append(await _record_aborted(rest, reason))
-            break
-    return {"batch_id": payload["batch_id"],
-            "serial": bool(payload.get("serial", True)),
-            "results": results}
+    serial = bool(payload.get("serial", True))
+    from Backend.helper.settings_manager import SettingsManager
+
+    if SettingsManager.current().librarian_test_mode:
+        results = []
+        for idx, raw in enumerate(items):
+            item = dict(raw)
+            item["batch_id"] = payload["batch_id"]
+            result = await fix_one(item)
+            results.append(result)
+            if result.get("state") == "flood_wait":
+                for rest in items[idx + 1:]:
+                    rest = dict(rest)
+                    rest["batch_id"] = payload["batch_id"]
+                    results.append(
+                        await _record_aborted(rest, _FLOOD_ABORT_REASON))
+                break
+        return {"batch_id": payload["batch_id"], "serial": serial,
+                "results": results}
+    batch = _BatchRun(serial)
+    tasks = [asyncio.create_task(
+        _run_batch_item(batch, raw, payload["batch_id"]))
+        for raw in items]
+    results = await asyncio.gather(*tasks)
+    return {"batch_id": payload["batch_id"], "serial": serial,
+            "results": list(results)}

@@ -1909,6 +1909,187 @@ def test_A2_real_path_drift_and_exclusions_still_refuse():
     assert resp.content["state"] == "refused_subtitle"  # E-1 order, real path
     assert writer2.calls == []
 
+# ------------------------------------------------------------------
+# A-3 — batch execution: bounded concurrency + per-channel pacing
+# (Phase 5 plan §2.4, A-ACC-5). The writer double below tracks
+# in-flight calls and monotonic call timestamps — the fake-server
+# evidence §10.2 pins — with scripted REAL Bot API envelopes.
+# ------------------------------------------------------------------
+
+import time as _time
+
+
+class TrackingWriter:
+    """Writer double with an artificial hold: records every call's
+    (chat_id, msg_id, monotonic timestamp), the peak number of
+    simultaneous in-flight calls, and per-locator scripted
+    outcomes / delays (defaults: success envelope, ``delay``)."""
+
+    def __init__(self, delay=0.05, outcomes=None, delays=None):
+        self.delay = delay
+        self.outcomes = outcomes or {}
+        self.delays = delays or {}
+        self.calls = []
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def __call__(self, chat_id, msg_id, caption_html):
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        self.calls.append((chat_id, msg_id, _time.monotonic()))
+        try:
+            await asyncio.sleep(self.delays.get((chat_id, msg_id),
+                                                self.delay))
+            outcome = self.outcomes.get((chat_id, msg_id), OK_ENVELOPE)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        finally:
+            self.in_flight -= 1
+
+
+def _setup_batch(channels, items_spec, writer, **settings_kw):
+    """Real-mode batch fixture: one ledger row + one readable post
+    per (chat_id, msg_id) in items_spec, across ``channels``."""
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=[str(c) for c in channels],
+                librarian_channel_types={})
+    base = {"librarian_channels": [str(c) for c in channels]}
+    base.update(settings_kw)
+    _real_settings(**base)
+    msg = _message()
+    script = {}
+    for chat_id, msg_id in items_spec:
+        _seed_ledger(chat_id=chat_id, msg_id=msg_id)
+        script[(chat_id, msg_id)] = msg
+    _clients(script, script)
+    engine._bot_api_edit_caption = writer
+    bridge.register(FakeSeam())
+    return msg
+
+
+def _batch_via_route(batch_id, items, serial):
+    return api._call("POST", "/api/librarian/fix-batch",
+                     api._authed_req(body={"batch_id": batch_id,
+                                           "serial": serial,
+                                           "items": items}))
+
+
+def test_A3_concurrent_batch_never_exceeds_four_in_flight():
+    channels = [-100111 - i for i in range(8)]
+    spec = [(c, 1) for c in channels]
+    writer = TrackingWriter(delay=0.1)
+    _setup_batch(channels, spec, writer)
+    items = [_payload(request_id=f"cc-{i}", chat_id=c, msg_id=1)
+             for i, c in enumerate(channels)]
+    resp = _batch_via_route("cc-batch", items, serial=False)
+    assert resp.status_code == 200, resp.content
+    results = resp.content["results"]
+    # Results come back in request order, every item attempted.
+    assert [r["request_id"] for r in results] == [
+        f"cc-{i}" for i in range(8)]
+    assert [r["state"] for r in results] == ["fixed"] * 8
+    assert len(writer.calls) == 8
+    # The ceiling holds AND the batch really ran concurrently
+    # (a serial executor would peak at 1).
+    assert writer.max_in_flight <= 4, writer.max_in_flight
+    assert writer.max_in_flight >= 2, writer.max_in_flight
+
+
+def test_A3_serial_batch_never_overlaps():
+    channels = [-100211 - i for i in range(4)]
+    spec = [(c, 1) for c in channels]
+    writer = TrackingWriter(delay=0.05)
+    _setup_batch(channels, spec, writer)
+    items = [_payload(request_id=f"sb-{i}", chat_id=c, msg_id=1)
+             for i, c in enumerate(channels)]
+    resp = _batch_via_route("sb-batch", items, serial=True)
+    assert [r["state"] for r in resp.content["results"]] == ["fixed"] * 4
+    assert writer.max_in_flight == 1, writer.max_in_flight
+
+
+def test_A3_pacing_same_channel_spaces_writes_one_second():
+    spec = [(CHAT, 1), (CHAT, 2), (CHAT, 3)]
+    writer = TrackingWriter(delay=0)
+    _setup_batch([CHAT], spec, writer)
+    items = [_payload(request_id=f"pc-{i}", msg_id=m)
+             for i, m in enumerate((1, 2, 3), start=1)]
+    resp = _batch_via_route("pc-batch", items, serial=False)
+    assert [r["state"] for r in resp.content["results"]] == ["fixed"] * 3
+    stamps = [t for _c, _m, t in sorted(writer.calls,
+                                        key=lambda call: call[2])]
+    assert len(stamps) == 3
+    for earlier, later in zip(stamps, stamps[1:]):
+        assert later - earlier >= 0.99, (earlier, later)
+
+
+def test_A3_pacing_does_not_apply_across_channels():
+    channels = [-100311, -100312]
+    spec = [(c, 1) for c in channels]
+    writer = TrackingWriter(delay=0)
+    _setup_batch(channels, spec, writer)
+    items = [_payload(request_id=f"px-{i}", chat_id=c, msg_id=1)
+             for i, c in enumerate(channels)]
+    resp = _batch_via_route("px-batch", items, serial=False)
+    assert [r["state"] for r in resp.content["results"]] == ["fixed"] * 2
+    stamps = sorted(t for _c, _m, t in writer.calls)
+    assert stamps[1] - stamps[0] < 0.5, stamps
+
+
+def test_A3_single_fixes_are_not_paced():
+    # Pacing is batch machinery (§2.4): two standalone fix_one
+    # calls to the same channel carry no pacing delay.
+    _msg, writer, _seam = _setup_real()
+    _seed_ledger(msg_id=2)
+    msg = _message()
+    _clients({(CHAT, 1): msg, (CHAT, 2): msg},
+             {(CHAT, 1): msg, (CHAT, 2): msg})
+    start = _time.monotonic()
+    r1 = _run(engine.fix_one(_payload(request_id="np-1", msg_id=1)))
+    r2 = _run(engine.fix_one(_payload(request_id="np-2", msg_id=2)))
+    elapsed = _time.monotonic() - start
+    assert r1["state"] == "fixed" and r2["state"] == "fixed"
+    assert len(writer.calls) == 2
+    assert elapsed < 0.9, elapsed
+
+
+def test_A3_flood_wait_under_concurrency_inflight_finish_rest_aborted():
+    channels = [-100411 - i for i in range(7)]
+    spec = [(c, 1) for c in channels]
+    flood = (429, {"ok": False, "error_code": 429,
+                   "description": "Too Many Requests: retry after 30",
+                   "parameters": {"retry_after": 30}})
+    # The flooding item's write returns at once; the other
+    # in-flight writes hold for 0.3 s, so items 5-7 are still
+    # unattempted (semaphore waiters) when the flood lands.
+    writer = TrackingWriter(
+        delay=0.3, outcomes={(channels[0], 1): flood},
+        delays={(channels[0], 1): 0})
+    _setup_batch(channels, spec, writer)
+    items = [_payload(request_id=f"cf-{i}", chat_id=c, msg_id=1)
+             for i, c in enumerate(channels)]
+    resp = _batch_via_route("cf-batch", items, serial=False)
+    assert resp.status_code == 200, resp.content
+    results = resp.content["results"]
+    assert [r["request_id"] for r in results] == [
+        f"cf-{i}" for i in range(7)]
+    states = [r["state"] for r in results]
+    # In-flight items finish honestly; unattempted items are
+    # recorded aborted — never attempted, never silently dropped.
+    assert states == ["flood_wait", "fixed", "fixed", "fixed",
+                      "aborted", "aborted", "aborted"], states
+    assert len(writer.calls) == 4, writer.calls
+    rows = {r["request_id"]: r for r in _fixes_docs()}
+    assert len(rows) == 7
+    for rid in ("cf-4", "cf-5", "cf-6"):
+        row = rows[rid]
+        assert row["state"] == "aborted"
+        assert row["budget_counted"] is False
+        assert row["aborted_at"] is not None
+        assert "flood" in row["error"].lower()
+
+
 
 # --- html_from_canonical (§4.2's reconstruction, landed by A-2) ------
 
