@@ -767,11 +767,23 @@ def test_funnel_capture_timeout_proceeds_and_logs():
     original_timeout = funnel.CAPTURE_TIMEOUT_S
 
     async def blocking_capture(message, origin):
-        # Production-shaped stand-in for a wedged capture: the real
-        # capture_rejection awaits its DB work BEFORE its single
-        # update_one write (librarian_store.py:140-250), so a cancel
-        # can only land at an await ahead of that write — modelled
-        # here as one long await before any write could happen.
+        # Production-shaped stand-in for a wedged capture. The real
+        # capture_rejection (librarian_store.py:140-250) performs
+        # only read/index awaits before its ledger writes (the
+        # get_media_ids_by_part read, :187; ensure_indexes, :199),
+        # and every ledger write it makes is an atomic
+        # single-document update_one: the upsert (:240) and, on
+        # DuplicateKeyError, the retry (:245-248) — itself one
+        # atomic $set on an already-complete row. A timeout-cancel
+        # can therefore land at an await ahead of the writes OR
+        # during a write's own update_one await, and D-ACC-5
+        # holds on both legs: (i) a pre-write cancel leaves no
+        # row; (ii) by Mongo's single-document atomicity, a cancel
+        # during any of those writes yields either no row or a
+        # complete row — never a partial document. Modelled here
+        # as one long await before any write could happen (leg i;
+        # leg ii is the atomicity guarantee itself, not a timing
+        # this double simulates).
         await _a.sleep(30)
         raise AssertionError("the wait_for timeout should have fired")
 
