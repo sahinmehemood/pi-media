@@ -1,0 +1,12 @@
+{
+ "data": {
+  "id": 2007,
+  "name": "Lantern Bay",
+  "remoteIds": [
+   {
+    "id": "tt1000007",
+    "sourceName": "IMDb"
+   }
+  ]
+ }
+}

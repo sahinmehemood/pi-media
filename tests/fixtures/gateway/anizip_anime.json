@@ -1,0 +1,44 @@
+{
+ "mappings": {
+  "anidb_id": 111,
+  "anilist_id": 6001,
+  "mal_id": 7001,
+  "thetvdb_id": 8001,
+  "themoviedb_id": 9001,
+  "imdb_id": "tt5000001",
+  "kitsu_id": 5001
+ },
+ "episodes": {
+  "1": {
+   "title": {
+    "en": "First Bloom"
+   },
+   "overview": "A long overview that must be dropped.",
+   "summary": "Also dropped.",
+   "image": "https://img.example/1.jpg",
+   "rating": "8.1",
+   "airDate": "2022-04-03",
+   "seasonNumber": 1,
+   "episodeNumber": 1,
+   "absoluteEpisodeNumber": 1
+  },
+  "2": {
+   "title": {
+    "en": "Petal Fall"
+   },
+   "overview": "Dropped too.",
+   "image": "https://img.example/2.jpg",
+   "rating": "8.3",
+   "airDate": "2022-04-10",
+   "seasonNumber": null,
+   "episodeNumber": null,
+   "absoluteEpisodeNumber": 2
+  }
+ },
+ "images": [
+  {
+   "coverType": "Poster",
+   "url": "https://img.example/poster.jpg"
+  }
+ ]
+}

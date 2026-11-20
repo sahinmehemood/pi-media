@@ -1,0 +1,22 @@
+{
+ "mappings": {
+  "anilist_id": 6002,
+  "mal_id": 7002,
+  "thetvdb_id": 8002,
+  "themoviedb_id": 9002,
+  "kitsu_id": 5002
+ },
+ "episodes": {
+  "1": {
+   "title": {
+    "en": "Source of the River"
+   },
+   "overview": "Dropped.",
+   "airDate": "2023-01-15",
+   "seasonNumber": 1,
+   "episodeNumber": 1,
+   "absoluteEpisodeNumber": 1
+  }
+ },
+ "images": []
+}

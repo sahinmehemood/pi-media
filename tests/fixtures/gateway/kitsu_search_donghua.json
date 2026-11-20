@@ -1,0 +1,20 @@
+{
+ "data": [
+  {
+   "id": "5002",
+   "type": "anime",
+   "attributes": {
+    "canonicalTitle": "River of Clouds",
+    "titles": {
+     "en": "River of Clouds",
+     "en_jp": "Yun He"
+    },
+    "abbreviatedTitles": [],
+    "slug": "river-of-clouds",
+    "subtype": "TV",
+    "startDate": "2023-01-15",
+    "endDate": null
+   }
+  }
+ ]
+}

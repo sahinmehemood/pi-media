@@ -1,0 +1,42 @@
+{
+ "data": [
+  {
+   "id": 2001,
+   "name": "Harbour Lights",
+   "year": "2019",
+   "first_air_time": "2019-04-02",
+   "aliases": [
+    "Harbour Lights"
+   ],
+   "remote_ids": [
+    {
+     "sourceName": "IMDb",
+     "id": "tt1000001"
+    },
+    {
+     "sourceName": "TheMovieDB",
+     "id": "1001"
+    }
+   ]
+  },
+  {
+   "id": "series-2002",
+   "name": "Harbour Lights: Origins",
+   "year": "2021"
+  },
+  {
+   "tvdb_id": 2003,
+   "name": "Harbour Nights",
+   "year": "2018",
+   "translations": {
+    "eng": "Harbour Nights"
+   },
+   "remote_ids": [
+    {
+     "sourceName": "IMDb",
+     "id": "tt1000099"
+    }
+   ]
+  }
+ ]
+}

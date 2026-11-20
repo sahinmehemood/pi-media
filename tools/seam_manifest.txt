@@ -25,3 +25,5 @@ Backend/pyrofork/clients.py
 README.md
 docs/index.html
 docs/setup.html
+Backend/helper/metadata/providers/tvdb.py
+Backend/helper/metadata/providers/kitsu.py

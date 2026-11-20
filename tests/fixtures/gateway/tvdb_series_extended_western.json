@@ -1,0 +1,16 @@
+{
+ "data": {
+  "id": 2001,
+  "name": "Harbour Lights",
+  "remoteIds": [
+   {
+    "sourceName": "IMDb",
+    "id": "tt1000001"
+   },
+   {
+    "sourceName": "TheMovieDB",
+    "id": 1001
+   }
+  ]
+ }
+}

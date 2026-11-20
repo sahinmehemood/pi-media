@@ -1,0 +1,20 @@
+{
+ "id": 1001,
+ "name": "Harbour Lights",
+ "external_ids": {
+  "imdb_id": "tt1000001",
+  "tvdb_id": 2001
+ },
+ "seasons": [
+  {
+   "season_number": 0,
+   "episode_count": 1,
+   "name": "Specials"
+  },
+  {
+   "season_number": 1,
+   "episode_count": 2,
+   "name": "Season 1"
+  }
+ ]
+}

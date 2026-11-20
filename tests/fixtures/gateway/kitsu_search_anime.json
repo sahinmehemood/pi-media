@@ -1,0 +1,23 @@
+{
+ "data": [
+  {
+   "id": "5001",
+   "type": "anime",
+   "attributes": {
+    "canonicalTitle": "Star Blossom Academy",
+    "titles": {
+     "en": "Star Blossom Academy",
+     "en_jp": "Star Blossom Academy",
+     "ja_jp": "Hoshizaki Academy"
+    },
+    "abbreviatedTitles": [
+     "SBA"
+    ],
+    "slug": "star-blossom-academy",
+    "subtype": "TV",
+    "startDate": "2022-04-03",
+    "endDate": null
+   }
+  }
+ ]
+}

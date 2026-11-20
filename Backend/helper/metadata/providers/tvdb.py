@@ -249,6 +249,99 @@ async def search(title: str, year: Optional[int] = None, entity: str = "series")
     return await cached_call(TVDB_CACHE, cache_key, "tvdb_search", _produce)
 
 
+class TvdbTransportError(Exception):
+    """Raised by search_candidates() when TVDB cannot produce a
+    well-formed response (no key, login failure, transport error,
+    non-200, malformed body). The Librarian gateway maps this to leg
+    state ``down`` (DESIGN §7)."""
+
+
+def _normalise_search_id(value) -> Optional[int]:
+    """Normalise a TVDB search-row ID to an int, or None.
+
+    Live rows carry either a numeric ID or a slug-prefixed form such
+    as ``series-333354``; the trailing digit run of a
+    ``<non-digit prefix>-<digits>`` string is the numeric ID.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return int(text)
+        head, sep, tail = text.rpartition("-")
+        if sep and tail.isdigit() and not head.isdigit():
+            return int(tail)
+    return None
+
+
+async def search_candidates(title: str, year: Optional[int] = None,
+                            entity: str = "series") -> list:
+    """Return ALL TVDB search rows for a query (DESIGN §7 seam).
+
+    Unlike search() — which scores the rows and returns the single
+    best — this returns every row the upstream search produced (up
+    to the upstream limit of 10), each as a copy of the raw row plus
+    two keys: ``tvdb_id`` (the ID normalised to an int, or None when
+    unparseable) and ``tvdb_id_raw`` (the original value, verbatim,
+    retained as provenance). No scoring, no threshold, no discarding;
+    an empty list is a valid return. Raises TvdbTransportError when
+    TVDB cannot produce a well-formed response, so callers can tell
+    an outage apart from a well-formed zero-result response — _get()
+    cannot, since it collapses both to None.
+    """
+    if not tvdb_api_key():
+        raise TvdbTransportError("TVDB API key not configured")
+    token = await _ensure_token()
+    if not token:
+        raise TvdbTransportError("TVDB login failed")
+    client = await _get_client()
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    params = {"query": title.strip(), "type": entity, "limit": 10}
+    try:
+        async with API_SEMAPHORE:
+            resp = await client.get(f"{BASE}/search", params=params, headers=headers)
+        if resp.status_code == 401:
+            # Force re-login once, mirroring _get().
+            global _token, _token_expires
+            _token, _token_expires = None, 0.0
+            token = await _ensure_token()
+            if not token:
+                raise TvdbTransportError("TVDB re-login failed")
+            headers["Authorization"] = f"Bearer {token}"
+            async with API_SEMAPHORE:
+                resp = await client.get(f"{BASE}/search", params=params, headers=headers)
+        if resp.status_code != 200:
+            raise TvdbTransportError(f"TVDB search HTTP {resp.status_code}")
+        body = resp.json()
+    except TvdbTransportError:
+        raise
+    except Exception as e:
+        raise TvdbTransportError("TVDB search failed") from e
+    if not isinstance(body, dict):
+        raise TvdbTransportError("TVDB search returned a malformed body")
+    rows = body.get("data")
+    if not isinstance(rows, list):
+        raise TvdbTransportError("TVDB search returned no data list")
+    if rows and all(not isinstance(row, dict) for row in rows):
+        # Every row malformed is a schema failure (leg down), not a
+        # well-formed empty result; a PARTIAL mix is tolerated below
+        # by skipping the non-dict rows.
+        raise TvdbTransportError("TVDB search returned a malformed payload")
+    out = []
+    for row in rows[:10]:
+        if not isinstance(row, dict):
+            continue
+        copied = dict(row)
+        raw_id = row.get("tvdb_id") or row.get("id")
+        copied["tvdb_id_raw"] = raw_id
+        copied["tvdb_id"] = _normalise_search_id(raw_id)
+        out.append(copied)
+    return out
+
+
 async def series_extended(tvdb_id: int) -> Optional[dict]:
     cache_key = f"tvdb_series::{tvdb_id}"
 

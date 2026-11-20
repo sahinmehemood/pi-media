@@ -1,0 +1,15 @@
+{
+ "data": [
+  {
+   "id": 8001,
+   "name": "Star Blossom Academy",
+   "year": "2022",
+   "remote_ids": [
+    {
+     "sourceName": "IMDb",
+     "id": "tt5000001"
+    }
+   ]
+  }
+ ]
+}

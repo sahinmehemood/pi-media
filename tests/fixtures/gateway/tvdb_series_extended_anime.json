@@ -1,0 +1,20 @@
+{
+ "data": {
+  "id": 8001,
+  "name": "Star Blossom Academy",
+  "remoteIds": [
+   {
+    "sourceName": "IMDb",
+    "id": "tt5000001"
+   },
+   {
+    "sourceName": "TheMovieDB",
+    "id": 9001
+   },
+   {
+    "sourceName": "AniList",
+    "id": 6001
+   }
+  ]
+ }
+}

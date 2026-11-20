@@ -1,0 +1,41 @@
+{
+ "episodes": {
+  "1": {
+   "absoluteEpisodeNumber": 1,
+   "airDate": "2023-04-02",
+   "episodeNumber": 1,
+   "seasonNumber": 1,
+   "title": {
+    "en": "Kept Opener"
+   }
+  },
+  "2": {
+   "absoluteEpisodeNumber": null,
+   "airDate": "2023-04-09",
+   "episodeNumber": null,
+   "seasonNumber": 1,
+   "title": {
+    "en": "Unplaceable Middle"
+   }
+  },
+  "3": {
+   "absoluteEpisodeNumber": 3,
+   "airDate": "2023-04-16",
+   "episodeNumber": null,
+   "seasonNumber": null,
+   "title": {
+    "en": "Absolute Only Closer"
+   }
+  }
+ },
+ "images": [],
+ "mappings": {
+  "anidb_id": 114,
+  "anilist_id": 6004,
+  "imdb_id": "tt5000004",
+  "kitsu_id": 5004,
+  "mal_id": 7004,
+  "themoviedb_id": 9004,
+  "thetvdb_id": 8004
+ }
+}

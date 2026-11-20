@@ -1,0 +1,17 @@
+{
+ "season_number": 1,
+ "episodes": [
+  {
+   "episode_number": 1,
+   "season_number": 1,
+   "name": "Pilot Light",
+   "air_date": "2019-04-02"
+  },
+  {
+   "episode_number": 2,
+   "season_number": 1,
+   "name": "Fog Line",
+   "air_date": "2019-04-09"
+  }
+ ]
+}

@@ -1,0 +1,15 @@
+{
+ "id": 9002,
+ "name": "River of Clouds",
+ "external_ids": {
+  "imdb_id": null,
+  "tvdb_id": 8002
+ },
+ "seasons": [
+  {
+   "season_number": 1,
+   "episode_count": 1,
+   "name": "Season 1"
+  }
+ ]
+}

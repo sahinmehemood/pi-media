@@ -1,0 +1,19 @@
+{
+ "data": [
+  {
+   "id": 4001,
+   "name": "The Last Ferry",
+   "year": "2021",
+   "remote_ids": [
+    {
+     "sourceName": "IMDb",
+     "id": "tt3000001"
+    },
+    {
+     "sourceName": "TheMovieDB",
+     "id": "3001"
+    }
+   ]
+  }
+ ]
+}

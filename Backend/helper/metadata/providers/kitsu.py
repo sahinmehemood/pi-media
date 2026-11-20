@@ -165,6 +165,30 @@ async def get_anizip_mappings(kitsu_id: int) -> Optional[dict]:
     return await cached_call(KITSU_CACHE, cache_key, "anizip", _produce)
 
 
+class KitsuTransportError(Exception):
+    """Raised by search_candidates() when Kitsu cannot produce a
+    well-formed response. The Librarian gateway maps this to leg
+    state ``down`` (DESIGN §7)."""
+
+
+async def search_candidates(query: str, subtype: Optional[str] = None) -> list:
+    """Public candidate-list wrapper over _kitsu_search() (DESIGN §7 seam).
+
+    Returns the raw JSON:API row list exactly as _kitsu_search()
+    produced it. _kitsu_search() returns None on a non-200 response
+    or a transport exception and a list (possibly empty) on success,
+    so None — or any non-list — is raised here as KitsuTransportError
+    to keep an outage distinguishable from a well-formed zero-result
+    response for the gateway's leg classification.
+    """
+    rows = await _kitsu_search(query, subtype=subtype)
+    if rows is None:
+        raise KitsuTransportError("Kitsu search failed")
+    if not isinstance(rows, list):
+        raise KitsuTransportError("Kitsu search returned a malformed payload")
+    return rows
+
+
 def _anizip_image(images, cover_type: str) -> str:
     for img in images or []:
         if str(img.get("coverType", "")).lower() == cover_type.lower() and img.get("url"):

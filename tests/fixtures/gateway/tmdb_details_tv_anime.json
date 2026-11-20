@@ -1,0 +1,15 @@
+{
+ "id": 9001,
+ "name": "Star Blossom Academy",
+ "external_ids": {
+  "imdb_id": "tt5000001",
+  "tvdb_id": 8001
+ },
+ "seasons": [
+  {
+   "season_number": 1,
+   "episode_count": 2,
+   "name": "Season 1"
+  }
+ ]
+}

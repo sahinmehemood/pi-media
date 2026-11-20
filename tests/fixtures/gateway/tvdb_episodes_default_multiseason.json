@@ -1,0 +1,34 @@
+{
+ "episodes": [
+  {
+   "aired": "2020-01-05",
+   "name": "First Light on the Bay",
+   "number": 1,
+   "seasonNumber": 1
+  },
+  {
+   "aired": "2020-01-12",
+   "name": "Low Tide",
+   "number": 2,
+   "seasonNumber": 1
+  },
+  {
+   "aired": "2020-01-19",
+   "name": "The Long Pier",
+   "number": 3,
+   "seasonNumber": 1
+  },
+  {
+   "aired": "2021-02-07",
+   "name": "New Season, Same Bay",
+   "number": 1,
+   "seasonNumber": 2
+  },
+  {
+   "aired": "2021-02-14",
+   "name": "Storm Glass",
+   "number": 2,
+   "seasonNumber": 2
+  }
+ ]
+}

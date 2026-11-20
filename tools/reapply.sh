@@ -27,6 +27,50 @@ REF="${2:-master}"
 
 PLUGIN_FILES=(
   Backend/helper/librarian_store.py
+  Backend/helper/librarian_gateway.py
+  Backend/helper/metadata/providers/anilist.py
+  tests/test_librarian_gateway.py
+  tests/fixtures/gateway/anilist_429.json
+  tests/fixtures/gateway/anilist_media_by_id.json
+  tests/fixtures/gateway/anilist_search_anime.json
+  tests/fixtures/gateway/anilist_search_donghua.json
+  tests/fixtures/gateway/anilist_search_movie.json
+  tests/fixtures/gateway/anizip_anime.json
+  tests/fixtures/gateway/anizip_donghua.json
+  tests/fixtures/gateway/anizip_large.json
+  tests/fixtures/gateway/anizip_movie.json
+  tests/fixtures/gateway/anizip_skip.json
+  tests/fixtures/gateway/cinemeta_detail_western.json
+  tests/fixtures/gateway/cinemeta_search_movie_movie.json
+  tests/fixtures/gateway/cinemeta_search_series_anime.json
+  tests/fixtures/gateway/cinemeta_search_series_western.json
+  tests/fixtures/gateway/kitsu_search_anime.json
+  tests/fixtures/gateway/kitsu_search_donghua.json
+  tests/fixtures/gateway/kitsu_search_movie.json
+  tests/fixtures/gateway/tmdb_details_movie_movie.json
+  tests/fixtures/gateway/tmdb_details_tv_anime.json
+  tests/fixtures/gateway/tmdb_details_tv_donghua.json
+  tests/fixtures/gateway/tmdb_details_tv_western.json
+  tests/fixtures/gateway/tmdb_search_movie_movie.json
+  tests/fixtures/gateway/tmdb_search_tv_anime.json
+  tests/fixtures/gateway/tmdb_search_tv_donghua.json
+  tests/fixtures/gateway/tmdb_search_tv_western.json
+  tests/fixtures/gateway/tmdb_season0_western.json
+  tests/fixtures/gateway/tmdb_season_anime.json
+  tests/fixtures/gateway/tmdb_season_western.json
+  tests/fixtures/gateway/tvdb_episodes_absolute_anime.json
+  tests/fixtures/gateway/tvdb_episodes_absolute_multiseason.json
+  tests/fixtures/gateway/tvdb_episodes_absolute_western.json
+  tests/fixtures/gateway/tvdb_episodes_default_anime.json
+  tests/fixtures/gateway/tvdb_episodes_default_multiseason.json
+  tests/fixtures/gateway/tvdb_episodes_default_western.json
+  tests/fixtures/gateway/tvdb_search_movie_movie.json
+  tests/fixtures/gateway/tvdb_search_series_anime.json
+  tests/fixtures/gateway/tvdb_search_series_donghua.json
+  tests/fixtures/gateway/tvdb_search_series_western.json
+  tests/fixtures/gateway/tvdb_series_extended_anime.json
+  tests/fixtures/gateway/tvdb_series_extended_multiseason.json
+  tests/fixtures/gateway/tvdb_series_extended_western.json
   Backend/helper/stream_buffer.py
   Backend/helper/buffered_streamer.py
   Backend/helper/stream_source.py

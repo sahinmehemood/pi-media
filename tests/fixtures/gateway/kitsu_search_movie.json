@@ -1,0 +1,20 @@
+{
+ "data": [
+  {
+   "id": "5003",
+   "type": "anime",
+   "attributes": {
+    "canonicalTitle": "The Last Ferry (Anime Film)",
+    "titles": {
+     "en": "The Last Ferry (Anime Film)",
+     "en_jp": "The Last Ferry"
+    },
+    "abbreviatedTitles": [],
+    "slug": "the-last-ferry",
+    "subtype": "movie",
+    "startDate": "2021-06-11",
+    "endDate": "2021-06-11"
+   }
+  }
+ ]
+}
