@@ -880,10 +880,9 @@ def test_A3_validation_400_before_store_access():
         assert resp.status_code == 400
         resp = _fix_via_route(_payload(intended={"season": 1}))
         assert resp.status_code == 400
-        body = _payload()
-        del body["intended"]
-        resp = _fix_via_route(body)  # tv channel: intended required
-        assert resp.status_code == 400
+        # (Phase 5 A-4: the type-map `intended` rule that used to
+        # 400 the next case is retired — enforcement moved to the
+        # referenced record; see the test_A4_* cases below.)
         resp = _fix_via_route(_payload(placement={"absolute": 3}))
         assert resp.status_code == 400  # placement without record pair
         resp = _fix_via_route(_payload(chat_id=True))
@@ -1909,6 +1908,7 @@ def test_A2_real_path_drift_and_exclusions_still_refuse():
     assert resp.content["state"] == "refused_subtitle"  # E-1 order, real path
     assert writer2.calls == []
 
+
 # ------------------------------------------------------------------
 # A-3 — batch execution: bounded concurrency + per-channel pacing
 # (Phase 5 plan §2.4, A-ACC-5). The writer double below tracks
@@ -2089,6 +2089,153 @@ def test_A3_flood_wait_under_concurrency_inflight_finish_rest_aborted():
         assert row["aborted_at"] is not None
         assert "flood" in row["error"].lower()
 
+
+# ------------------------------------------------------------------
+# A-4 — the route completion (Phase 5 plan §2.5, C-2; Tech Lead Q2
+# ruling): `intended` enforcement keyed to the REFERENCED RECORD's
+# stored media_type (the retired channel-type map is no longer
+# consulted), and the _fix_result_body projection of the engine's
+# structured retry_after (persisted-row branch only, mirroring
+# would_be_action; _fix_item itself is untouched — history/page
+# rows never carry retry_after).
+# ------------------------------------------------------------------
+
+async def _seed_record(media_type="tv", status="verified"):
+    return await store.upsert_record({
+        "canonical_key": f"a4-{media_type}-{status}", "ids": {"tmdb": 999},
+        "titles": ["Fixture Show"], "media_type": media_type,
+        "numbering": {"source": "tmdb", "order": "aired",
+                      "offset": None, "note": ""},
+        "status": status, "related_entries": []})
+
+
+def _record_payload(record, **kw):
+    body = _payload(series_record_id=str(record["_id"]),
+                    series_record_updated_at=record["updated_at"].isoformat(),
+                    **kw)
+    return body
+
+
+def test_A4_intended_required_by_referenced_tv_record_not_type_map():
+    _reset()
+    # The stored type map is EMPTY (its live, retired state): the
+    # old route check could not fire here at all.
+    api._enable(librarian_channels=["-100111"], librarian_channel_types={})
+    _settings(librarian_channel_types={})
+    _seed_ledger()
+    msg = _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    record = _run(_seed_record("tv"))
+    body = _record_payload(record)
+    del body["intended"]
+    resp = _fix_via_route(body)
+    assert resp.status_code == 400, resp.content
+    assert "intended" in resp.content["error"]
+    assert _fixes_docs() == []  # refused before any engine call
+
+
+def test_A4_intended_not_required_for_movie_record():
+    _reset()
+    api._enable(librarian_channels=["-100111"], librarian_channel_types={})
+    _settings(librarian_channel_types={})
+    _seed_ledger()
+    msg = _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    record = _run(_seed_record("movie"))
+    body = _record_payload(record)
+    del body["intended"]
+    resp = _fix_via_route(body)
+    assert resp.status_code == 200, resp.content
+    assert resp.content["state"] == "dry_run_complete"
+
+
+def test_A4_type_map_alone_no_longer_requires_intended():
+    # C-2: without a referenced record there is no route-side
+    # intended requirement — the engine's step-8 pin (seam reports
+    # a TV filing, no intended -> edited_unindexed) is the guard.
+    # The channel's stored type being "tv" changes nothing.
+    _reset()
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _settings()  # base settings carry the tv type map
+    _seed_ledger()
+    msg = _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    body = _payload()
+    del body["intended"]
+    resp = _fix_via_route(body)
+    assert resp.status_code == 200, resp.content
+    assert resp.content["state"] == "dry_run_complete"
+
+
+def test_A4_batch_intended_check_is_atomic():
+    _reset()
+    api._enable(librarian_channels=["-100111"], librarian_channel_types={})
+    _settings(librarian_channel_types={})
+    _seed_ledger()
+    _seed_ledger(msg_id=2)
+    msg = _message()
+    _clients({(CHAT, 1): msg, (CHAT, 2): msg},
+             {(CHAT, 1): msg, (CHAT, 2): msg})
+    record = _run(_seed_record("tv"))
+    good = _payload(request_id="a4b-1", msg_id=1)
+    bad = _record_payload(record, request_id="a4b-2", msg_id=2)
+    del bad["intended"]
+    resp = api._call("POST", "/api/librarian/fix-batch",
+                     api._authed_req(body={"batch_id": "a4-batch",
+                                           "items": [good, bad]}))
+    assert resp.status_code == 400, resp.content
+    assert "intended" in resp.content["error"]
+    assert _fixes_docs() == []  # the valid item was not persisted either
+
+
+def test_A4_fix_route_projects_retry_after_structured_and_plain():
+    # Tech Lead Q2 ruling (a): the real 429 envelope's seconds
+    # reach the bot BOTH as the structured retry_after field and
+    # as plain words in error (plan §2.2 item 2; gate G-7 reads
+    # the structured seconds through the real CLI).
+    _msg, _writer, _seam = _setup_real(writer_outcomes=[(
+        429, {"ok": False, "error_code": 429,
+              "description": "Too Many Requests: retry after 30",
+              "parameters": {"retry_after": 30}})])
+    resp = _fix_via_route(_payload())
+    assert resp.status_code == 200, resp.content
+    assert resp.content["state"] == "flood_wait"
+    assert resp.content["retry_after"] == 30, resp.content
+    assert "30-second" in resp.content["error"]
+
+
+def test_A4_fix_batch_route_projects_retry_after():
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"], librarian_channel_types={})
+    _real_settings()
+    _seed_ledger()
+    msg = _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    engine._bot_api_edit_caption = FakeWriter([(
+        429, {"ok": False, "error_code": 429,
+              "description": "Too Many Requests: retry after 17",
+              "parameters": {"retry_after": 17}})])
+    bridge.register(FakeSeam())
+    resp = api._call("POST", "/api/librarian/fix-batch",
+                     api._authed_req(body={"batch_id": "a4-fw",
+                                           "items": [_payload()]}))
+    assert resp.status_code == 200, resp.content
+    result = resp.content["results"][0]
+    assert result["state"] == "flood_wait"
+    assert result["retry_after"] == 17, result
+    assert "17-second" in result["error"]
+
+
+def test_A4_fix_route_no_retry_after_field_when_telegram_gave_none():
+    _msg, _writer, _seam = _setup_real(writer_outcomes=[(
+        429, {"ok": False, "error_code": 429,
+              "description": "Too Many Requests"})])
+    resp = _fix_via_route(_payload())
+    assert resp.status_code == 200, resp.content
+    assert resp.content["state"] == "flood_wait"
+    assert "retry_after" not in resp.content, resp.content
 
 
 # ------------------------------------------------------------------
