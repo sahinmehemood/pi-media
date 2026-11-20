@@ -1862,6 +1862,73 @@ index 1de0014..a95f3dc 100644
          return {"key": "base_url", "label": "Base URL", "status": "error", "message": str(e)[:140], "url": base}
  
  
+diff --git a/Backend/helper/metadata/providers/cinemeta.py b/Backend/helper/metadata/providers/cinemeta.py
+index 3fb0ae3..d4879f2 100644
+--- a/Backend/helper/metadata/providers/cinemeta.py
++++ b/Backend/helper/metadata/providers/cinemeta.py
+@@ -102,6 +102,62 @@ async def search_title_multi(query: str, type: str, limit: int = 8) -> List[Dict
+     return results
+ 
+ 
++class CinemetaTransportError(Exception):
++    """Raised by search_candidates() when Cinemeta cannot produce a
++    well-formed response (transport error, timeout, non-200,
++    malformed body). The Librarian gateway maps this to leg state
++    ``down`` (DESIGN §7, §18-D14)."""
++
++
++async def search_candidates(query: str, type: str, limit: int = 8) -> List[Dict[str, Any]]:
++    """Return ALL Cinemeta search rows for a query (DESIGN §7 seam,
++    §18-D14).
++
++    Returns the same row shape as search_title_multi() —
++    ``{id, type, title, year, poster}`` — built by the same
++    conversion, with no scoring and no threshold; an empty list is
++    a valid return (a well-formed zero-result response).
++    search_title_multi() cannot serve the gateway: it converts a
++    failed fetch to ``[]``, collapsing an outage into a no-match.
++    This seam calls _fetch_json() directly — _fetch_json() returns
++    None on any non-200 or exception and the decoded body on
++    success — and raises CinemetaTransportError when the fetch
++    produced no well-formed body, so callers can tell an outage
++    apart from a genuine zero-result response.
++    """
++    cleaned = _clean_search_query(query)
++    normalized = ".".join(cleaned.strip().lower().split())
++    url = f"{BASE_URL}/catalog/{_cinemeta_type(type)}/imdb/search={normalized}.json"
++    data = await _fetch_json(url)
++    if data is None:
++        raise CinemetaTransportError("Cinemeta search failed")
++    if not isinstance(data, dict):
++        raise CinemetaTransportError("Cinemeta search returned a malformed body")
++    metas = data.get("metas")
++    if not isinstance(metas, list):
++        raise CinemetaTransportError("Cinemeta search returned no metas list")
++    if metas and all(not isinstance(meta, dict) for meta in metas):
++        # Every row malformed is a schema failure (leg down), not a
++        # well-formed empty result; a PARTIAL mix is tolerated below
++        # by skipping the non-dict rows.
++        raise CinemetaTransportError("Cinemeta search returned a malformed payload")
++    results: List[Dict[str, Any]] = []
++    for meta in metas[:limit]:
++        if not isinstance(meta, dict):
++            continue
++        imdb_id = meta.get("imdb_id") or meta.get("id", "")
++        if not imdb_id:
++            continue
++        results.append({
++            "id": imdb_id,
++            "type": type,
++            "title": meta.get("name", ""),
++            "year": meta.get("releaseInfo", ""),
++            "poster": meta.get("poster", ""),
++        })
++    return results
++
++
+ async def get_detail(imdb_id: str, media_type: str) -> Optional[Dict[str, Any]]:
+     ctype = _cinemeta_type(media_type)
+     url = f"{BASE_URL}/meta/{ctype}/{imdb_id}.json"
 diff --git a/Backend/helper/metadata/providers/kitsu.py b/Backend/helper/metadata/providers/kitsu.py
 index 699bdbd..d2c202d 100644
 --- a/Backend/helper/metadata/providers/kitsu.py

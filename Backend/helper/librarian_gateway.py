@@ -33,19 +33,20 @@ it in this phase. Provider modules, ``librarian_store`` and
 ``episode_maps`` are imported lazily inside functions (the tree's
 own pattern — importing ``Backend`` at module import time builds
 app state), and providers are called only through their public
-functions plus the two DESIGN §4 seam functions
-(``tvdb.search_candidates`` / ``kitsu.search_candidates``) and one
+functions plus the DESIGN §4 seam functions
+(``tvdb.search_candidates`` / ``kitsu.search_candidates``) and the
+§18-D14 seam (``cinemeta.search_candidates``), and one
 private function DESIGN §7 explicitly sanctions as a same-codebase
 internal consumed as-is: ``tvdb._iter_series_episodes`` (the
 absolute-order episode list absolute numbering is read off).
 
-Known production limitation (Cinemeta leg): Cinemeta's public API
-(``search_title_multi``) collapses a provider outage into ``[]`` —
-its transport helper returns None on any non-200 or exception and
-the search converts that to an empty list — so a real Cinemeta
-outage surfaces as leg state ``empty``, never ``down``, until/unless
-a Cinemeta seam exposing transport errors is approved as a design
-change. No seam is added here; this is a comment, not a behaviour.
+The Cinemeta lookup leg uses the ``search_candidates`` seam, not
+``search_title_multi``: the latter collapses a provider outage
+into ``[]`` — its transport helper returns None on any non-200 or
+exception and the search converts that to an empty list — while
+the seam raises ``CinemetaTransportError`` on a failed fetch, so
+a real Cinemeta outage surfaces as leg state ``down`` and a
+genuine no-match as ``empty`` (DESIGN §18-D14).
 """
 
 from __future__ import annotations
@@ -545,15 +546,15 @@ async def _tvdb_leg(name: str, entity: str) -> list:
 
 
 async def _cinemeta_leg(name: str, types_: list) -> list:
-    # NOTE (known limitation, see module docstring): search_title_multi
-    # collapses a Cinemeta outage into [], so this leg can report
-    # empty for a real outage until/unless a Cinemeta seam is
-    # approved. An exception from the call is classified down; a
-    # well-formed [] is empty.
+    # The search_candidates seam (DESIGN §18-D14) raises
+    # CinemetaTransportError on a failed fetch, so an outage is
+    # classified down by _run_leg; a well-formed [] is empty.
+    # search_title_multi is NOT used here: it collapses an outage
+    # into [], indistinguishable from a genuine no-match.
     cinemeta = _provider("cinemeta")
     candidates: list = []
     for type_ in types_:
-        rows = await _call(cinemeta.search_title_multi, name, type_)
+        rows = await _call(cinemeta.search_candidates, name, type_)
         if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
             raise _LegDown("Cinemeta search returned a malformed payload")
         candidates.extend(_cinemeta_candidate(row) for row in rows)

@@ -28,3 +28,4 @@ docs/setup.html
 Backend/helper/metadata/providers/tvdb.py
 Backend/helper/metadata/providers/kitsu.py
 Backend/helper/backup.py
+Backend/helper/metadata/providers/cinemeta.py

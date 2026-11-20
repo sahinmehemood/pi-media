@@ -20,24 +20,27 @@ against the real module it stands in for:
   ``tvdb_id`` normalised, ``tvdb_id_raw`` retained, raises the
   module's own ``TvdbTransportError``); ``kitsu.search_candidates``
   is the §4.4 seam contract over ``_kitsu_search`` (raises
-  ``KitsuTransportError``); ``cinemeta.search_title_multi`` returns
-  the real row shape ``{id, type, title, year, poster}``;
+  ``KitsuTransportError``); ``cinemeta.search_candidates`` is the
+  §18-D14 seam contract over ``_fetch_json`` (same row shape as
+  ``search_title_multi`` — ``{id, type, title, year, poster}`` —
+  raises the module's own ``CinemetaTransportError`` when the fetch
+  produced no well-formed body); ``cinemeta.search_title_multi``
+  also returns that row shape and, in production, can neither raise
+  nor return a non-list (its ``_fetch_json`` swallows every
+  non-200 / exception to None and the search converts that to
+  ``[]``), so the fake's ``search_title_multi`` has no raise mode —
+  an outage is scripted only on the seam, whose production failure
+  shape IS the raise; ``cached_detail`` returns a dict or None;
   ``anilist.search_media``/``media_by_id`` mirror the new client's
   surface, raising ``AnilistTransportError`` with ``.status`` /
   ``.retry_after``. Every fake is scriptable per test
-  (mode in {ok, empty, raise, malformed, slow, huge} per provider)
-  EXCEPT Cinemeta: the real cinemeta module can neither raise nor
-  return a non-list (its ``_fetch_json`` swallows every non-200 /
-  exception to None and ``search_title_multi`` converts that to
-  ``[]``; ``cached_detail`` returns a dict or None), so the Cinemeta
-  fake exposes only production shapes (list, possibly ``[]``;
-  dict-or-None detail) and has no raise/malformed modes — see
-  ``test_cinemeta_outage_surfaces_as_empty_known_deviation``.
-- The REAL ``tvdb.search_candidates`` and ``kitsu.search_candidates``
-  are additionally loaded by file path against a fake ``httpx``
-  transport, so the seam code itself (status-aware request, ID
-  normalisation, raise-on-failure) is under test, not just the
-  gateway-side fakes.
+  (mode in {ok, empty, raise, malformed, slow, huge} per provider),
+  with the per-function production-shape limits above.
+- The REAL ``tvdb.search_candidates``, ``kitsu.search_candidates``
+  and ``cinemeta.search_candidates`` are additionally loaded by
+  file path against a fake ``httpx`` transport, so the seam code
+  itself (status-aware request, ID normalisation,
+  raise-on-failure) is under test, not just the gateway-side fakes.
 - The REAL AniList client is loaded by file path against the same
   fake ``httpx`` transport for its unit tests.
 - ``Backend.helper.metadata.common.year_from_str`` — copied from
@@ -163,6 +166,29 @@ def _year_from_str(year_val) -> int:
         return 0
     m = re.search(r"(\d{4})", str(year_val))
     return int(m.group(1)) if m else 0
+
+
+def _build_query_variants(title: str, year=None) -> list:
+    # Copied from Backend/helper/metadata/common.py.
+    variants = [title]
+    if year:
+        variants.append(f"{title} {year}")
+    stripped = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", title)).strip()
+    if stripped and stripped.lower() != title.lower():
+        variants.append(stripped)
+        if year:
+            variants.append(f"{stripped} {year}")
+    no_article = re.sub(r"^\b(the|a|an)\b\s+", "", title, flags=re.IGNORECASE).strip()
+    if no_article and no_article.lower() != title.lower():
+        variants.append(no_article)
+    seen: set = set()
+    ordered = []
+    for v in variants:
+        key = v.lower()
+        if v and key not in seen:
+            seen.add(key)
+            ordered.append(v)
+    return ordered
 
 
 async def _cached_call(store, key, ns, producer):
@@ -585,13 +611,19 @@ _CINEMETA_SEARCH = {
 def _make_cinemeta_fake():
     mod = types.ModuleType("Backend.helper.metadata.providers.cinemeta")
 
-    # Production-shaped ONLY (D1): the real cinemeta module never
-    # raises and never returns a non-list — _fetch_json() swallows
-    # every non-200/exception to None and search_title_multi()
-    # converts that to []; cached_detail() returns a dict or None.
-    # This fake therefore has no "raise"/"malformed" modes: an
-    # outage is scripted as mode "empty" ([]), which is the shape a
-    # real Cinemeta outage takes by the time the gateway sees it.
+    class CinemetaTransportError(Exception):
+        pass
+
+    # Production-shaped ONLY (D1): the real search_title_multi()
+    # never raises and never returns a non-list — _fetch_json()
+    # swallows every non-200/exception to None and the search
+    # converts that to []; it therefore has no "raise" mode here.
+    # The §18-D14 seam search_candidates() calls _fetch_json()
+    # directly and raises CinemetaTransportError when the fetch
+    # produced no well-formed body, so an outage is scripted on the
+    # seam as mode "raise" (that exact exception type) and a
+    # genuine no-match as mode "empty" ([]); neither function ever
+    # returns a non-list. cached_detail() returns a dict or None.
     async def search_title_multi(query, type, limit=8):
         await _track("cinemeta", "search_title_multi")
         try:
@@ -599,6 +631,20 @@ def _make_cinemeta_fake():
                 return []
             fixture = _CINEMETA_SEARCH.get((type, query))
             return copy.deepcopy(_fixture(fixture)) if fixture else []
+        finally:
+            _untrack()
+
+    async def search_candidates(query, type, limit=8):
+        await _track("cinemeta", "search_candidates")
+        try:
+            mode = SCRIPT.mode("cinemeta")
+            if mode == "raise":
+                raise CinemetaTransportError("cinemeta down")
+            if mode == "empty":
+                return []
+            fixture = _CINEMETA_SEARCH.get((type, query))
+            rows = copy.deepcopy(_fixture(fixture)) if fixture else []
+            return rows[:limit]
         finally:
             _untrack()
 
@@ -611,7 +657,9 @@ def _make_cinemeta_fake():
         finally:
             _untrack()
 
+    mod.CinemetaTransportError = CinemetaTransportError
     mod.search_title_multi = search_title_multi
+    mod.search_candidates = search_candidates
     mod.cached_detail = cached_detail
     return mod
 
@@ -793,6 +841,9 @@ def _install_stubs():
     common.TVDB_THRESHOLD = 0.6
     common.KITSU_CACHE = {}
     common.KITSU_THRESHOLD = 0.6
+    common.CINEMETA_THRESHOLD = 0.60
+    common.IMDB_CACHE = {}
+    common.build_query_variants = _build_query_variants
     common.format_imdb_images = lambda imdb_id: {"poster": "", "backdrop": "", "logo": ""}
     common.logo_from_imdb = lambda imdb_id: ""
     common.normalize_rating = lambda value: float(value or 0)
@@ -848,6 +899,7 @@ gateway = load_module("Backend.helper.librarian_gateway", "Backend/helper/librar
 anilist_client = load_module("anilist_under_test", "Backend/helper/metadata/providers/anilist.py")
 tvdb_real = load_module("tvdb_under_test", "Backend/helper/metadata/providers/tvdb.py")
 kitsu_real = load_module("kitsu_under_test", "Backend/helper/metadata/providers/kitsu.py")
+cinemeta_real = load_module("cinemeta_under_test", "Backend/helper/metadata/providers/cinemeta.py")
 
 _ORIG_TTLS = dict(gateway.CACHE_TTL_S)
 _ORIG_TIMEOUT = gateway.LEG_TIMEOUT_S
@@ -1000,6 +1052,113 @@ def test_kitsu_seam_wrapper_returns_raw_list_and_raises():
             raise AssertionError("expected KitsuTransportError on HTTP 503")
         except kitsu_real.KitsuTransportError:
             pass
+
+    run(go())
+
+
+_CINEMETA_RAW_METAS = [
+    {"id": "tt1000001", "imdb_id": "tt1000001", "name": "Harbour Lights",
+     "releaseInfo": "2019–2021", "poster": "https://example.invalid/p.jpg"},
+    {"id": "tt1000009", "name": "Harbour Lights: Origins",
+     "releaseInfo": "2022", "poster": ""},
+]
+
+
+def test_cinemeta_seam_returns_converted_rows_and_empty_is_valid():
+    _reset()
+
+    async def go():
+        FakeAsyncClient.transport = lambda m, u, p: FakeResponse(
+            200, {"metas": copy.deepcopy(_CINEMETA_RAW_METAS)})
+        rows = await cinemeta_real.search_candidates("Harbour Lights", "tv")
+        # Same converted row shape search_title_multi() produces.
+        assert rows == [
+            {"id": "tt1000001", "type": "tv", "title": "Harbour Lights",
+             "year": "2019–2021", "poster": "https://example.invalid/p.jpg"},
+            {"id": "tt1000009", "type": "tv",
+             "title": "Harbour Lights: Origins", "year": "2022",
+             "poster": ""},
+        ], rows
+        # The existing function is unchanged over the same payload.
+        assert await cinemeta_real.search_title_multi(
+            "Harbour Lights", "tv") == rows
+        # A well-formed zero-result response is a valid empty list,
+        # NOT an outage.
+        FakeAsyncClient.transport = lambda m, u, p: FakeResponse(
+            200, {"metas": []})
+        assert await cinemeta_real.search_candidates("Nothing", "tv") == []
+
+    run(go())
+
+
+def test_cinemeta_seam_raises_on_outage_shapes():
+    _reset()
+
+    async def go():
+        # Production outage shapes: _fetch_json() returns None on a
+        # non-200 response and on any transport exception alike;
+        # search_title_multi() collapses both to [] (asserted here
+        # to pin that the existing behaviour is untouched), while
+        # the seam raises CinemetaTransportError for both.
+        FakeAsyncClient.transport = lambda m, u, p: FakeResponse(500, {})
+        assert await cinemeta_real.search_title_multi(
+            "Harbour Lights", "tv") == []
+        try:
+            await cinemeta_real.search_candidates("Harbour Lights", "tv")
+            raise AssertionError("expected CinemetaTransportError on HTTP 500")
+        except cinemeta_real.CinemetaTransportError as e:
+            # The raise must not embed the query (hardening parity
+            # with the Kitsu seam's static messages).
+            assert "Harbour Lights" not in str(e), str(e)
+
+        def boom(method, url, payload):
+            raise RuntimeError("connection reset")
+
+        FakeAsyncClient.transport = boom
+        try:
+            await cinemeta_real.search_candidates("Harbour Lights", "tv")
+            raise AssertionError(
+                "expected CinemetaTransportError on transport exception")
+        except cinemeta_real.CinemetaTransportError:
+            pass
+
+    run(go())
+
+
+def test_cinemeta_seam_malformed_bodies_raise_partial_rows_skipped():
+    _reset()
+
+    async def go():
+        # Body is not a dict at all.
+        FakeAsyncClient.transport = lambda m, u, p: FakeResponse(
+            200, ["not", "a", "dict"])
+        try:
+            await cinemeta_real.search_candidates("Harbour Lights", "tv")
+            raise AssertionError("expected CinemetaTransportError on non-dict body")
+        except cinemeta_real.CinemetaTransportError:
+            pass
+        # No metas list in the body.
+        FakeAsyncClient.transport = lambda m, u, p: FakeResponse(
+            200, {"metas": {"not": "a list"}})
+        try:
+            await cinemeta_real.search_candidates("Harbour Lights", "tv")
+            raise AssertionError("expected CinemetaTransportError on non-list metas")
+        except cinemeta_real.CinemetaTransportError:
+            pass
+        # Every row malformed is a schema failure, not an empty.
+        FakeAsyncClient.transport = lambda m, u, p: FakeResponse(
+            200, {"metas": ["junk", 42, None]})
+        try:
+            await cinemeta_real.search_candidates("Harbour Lights", "tv")
+            raise AssertionError(
+                "expected CinemetaTransportError when every row is non-dict")
+        except cinemeta_real.CinemetaTransportError:
+            pass
+        # A PARTIAL mix is tolerated: non-dict rows are skipped.
+        FakeAsyncClient.transport = lambda m, u, p: FakeResponse(
+            200, {"metas": ["junk", copy.deepcopy(_CINEMETA_RAW_METAS[0])]})
+        rows = await cinemeta_real.search_candidates("Harbour Lights", "tv")
+        assert len(rows) == 1 and rows[0]["id"] == "tt1000001", rows
 
     run(go())
 
@@ -1280,62 +1439,104 @@ def test_leg_states_down_empty_malformed():
     _reset()
 
     async def go():
-        # Cinemeta is deliberately NOT in this loop (D1): the real
-        # cinemeta module can neither raise nor return a non-list,
-        # so a Cinemeta `down` state is unattainable in production —
-        # a real outage surfaces as `empty`. Cinemeta is asserted
-        # only on that attainable shape below and in
-        # test_cinemeta_outage_surfaces_as_empty_known_deviation.
-        for provider in ("tmdb", "tvdb", "kitsu", "anilist"):
+        # Raise/empty classification for every lookup leg, Cinemeta
+        # included: since the §18-D14 seam, the gateway's Cinemeta
+        # leg consumes search_candidates(), whose production failure
+        # shape is a CinemetaTransportError raise — so a Cinemeta
+        # `down` state IS attainable, exactly like the TVDB/Kitsu
+        # seam legs. (search_title_multi() still collapses an outage
+        # to [], but the gateway no longer calls it.)
+        for provider in ("tmdb", "tvdb", "kitsu", "anilist", "cinemeta"):
             SCRIPT.reset()
             fake_db.dbs["tracking"] = FakeTracking()
             SCRIPT.modes[provider] = "raise"
             result = await gateway.lookup("Star Blossom Academy", "anime")
             assert result["legs"][provider]["state"] == "down", (provider, result["legs"])
             assert provider in result["providers_down"]
-            SCRIPT.modes[provider] = "malformed"
-            result = await gateway.lookup("Star Blossom Academy", "anime")
-            assert result["legs"][provider]["state"] == "down", (provider, result["legs"])
             SCRIPT.modes[provider] = "empty"
             result = await gateway.lookup("Star Blossom Academy", "anime")
             assert result["legs"][provider]["state"] == "empty", (provider, result["legs"])
             assert provider not in result["providers_down"]
             SCRIPT.modes.pop(provider, None)
-        # Cinemeta, production-attainable behaviour only: a
-        # well-formed [] is leg `empty` and never a provider down.
-        SCRIPT.reset()
-        fake_db.dbs["tracking"] = FakeTracking()
-        SCRIPT.modes["cinemeta"] = "empty"
-        result = await gateway.lookup("Star Blossom Academy", "anime")
-        assert result["legs"]["cinemeta"]["state"] == "empty", result["legs"]
-        assert "cinemeta" not in result["providers_down"]
+        # Malformed (non-list) payloads classify down for the legs
+        # whose gateway fakes script that gateway-defence shape.
+        # The Cinemeta seam never returns a non-list in production
+        # (it raises instead), so it has no malformed mode (D1).
+        for provider in ("tmdb", "tvdb", "kitsu", "anilist"):
+            SCRIPT.reset()
+            fake_db.dbs["tracking"] = FakeTracking()
+            SCRIPT.modes[provider] = "malformed"
+            result = await gateway.lookup("Star Blossom Academy", "anime")
+            assert result["legs"][provider]["state"] == "down", (provider, result["legs"])
+            SCRIPT.modes.pop(provider, None)
 
     run(go())
 
 
-def test_cinemeta_outage_surfaces_as_empty_known_deviation():
+def test_cinemeta_outage_is_down_and_not_cached():
     _reset()
-    # KNOWN DEVIATION (coordinator ruling OQ-2): Cinemeta's public
-    # API collapses a provider outage to [] — _fetch_json() returns
-    # None on any non-200/exception and search_title_multi()
-    # converts that to an empty list — so the gateway CANNOT report
-    # a Cinemeta outage as leg `down`; it surfaces as `empty` and
-    # Cinemeta never appears in providers_down. A real `down` state
-    # for this leg requires a Cinemeta seam exposing transport
-    # errors, which OQ-2 ruled will NOT be built in this phase.
-    # This test pins the deviation so it stays unmissable: if a
-    # seam is ever approved, this test (and the gateway docstring)
-    # must be revisited, not silently left asserting `empty`.
-    SCRIPT.modes["cinemeta"] = "empty"  # the production outage shape
+    # Regression (DESIGN §18-D14, replacing the Phase 2 known
+    # deviation pinned by the old
+    # test_cinemeta_outage_surfaces_as_empty_known_deviation):
+    # scripted the production way the seam surfaces an outage —
+    # search_candidates() raising CinemetaTransportError, the shape
+    # the real seam produces when _fetch_json() returns None on a
+    # non-200/exception — the gateway leg is `down`, Cinemeta is in
+    # providers_down, and the result is NOT cached as a miss.
+    SCRIPT.modes["cinemeta"] = "raise"
+
+    async def go():
+        result = await gateway.lookup("Star Blossom Academy", "anime")
+        assert result["legs"]["cinemeta"]["state"] == "down", result["legs"]
+        assert "cinemeta" in result["providers_down"]
+        assert _cache_docs() == [], _cache_docs()
+        # Recovery: the next identical call re-queries, succeeds,
+        # and only then is the result cached.
+        SCRIPT.modes.pop("cinemeta")
+        result = await gateway.lookup("Star Blossom Academy", "anime")
+        assert result["legs"]["cinemeta"]["state"] == "ok", result["legs"]
+        assert result["providers_down"] == []
+        assert len(_cache_docs()) == 1, _cache_docs()
+
+    run(go())
+
+
+def test_cinemeta_genuine_empty_is_empty_and_cached():
+    _reset()
+    # A well-formed zero-result response from the seam ([]) is a
+    # genuine no-match: leg `empty`, never a provider down, and —
+    # with no leg down — the result is cacheable.
+    SCRIPT.modes["cinemeta"] = "empty"
 
     async def go():
         result = await gateway.lookup("Star Blossom Academy", "anime")
         assert result["legs"]["cinemeta"]["state"] == "empty", result["legs"]
         assert "cinemeta" not in result["providers_down"]
-        # Consequence of the deviation: with no leg down, the
-        # outage-shaped result is cacheable like any all-up result.
         assert result["providers_down"] == [], result["legs"]
         assert len(_cache_docs()) == 1, _cache_docs()
+
+    run(go())
+
+
+def test_cinemeta_results_ok_with_pinned_candidate_shape():
+    _reset()
+
+    async def go():
+        result = await gateway.lookup("Harbour Lights", "tv")
+        assert result["legs"]["cinemeta"]["state"] == "ok", result["legs"]
+        assert "cinemeta" not in result["providers_down"]
+        # The seam's rows flow through _cinemeta_candidate into the
+        # pinned cluster shape: the Cinemeta-sourced IMDb ID joins
+        # the TMDB/TVDB cluster by explicit shared ID.
+        main = _cluster_with(result, "imdb", "tt1000001")
+        assert main is not None
+        assert main["ids"] == {"tmdb": 1001, "tvdb": 2001,
+                               "imdb": "tt1000001"}, main
+        assert "Harbour Lights" in main["titles"]
+        assert main["year"] == 2019
+        assert main["media_type"] == "tv"
+        assert SCRIPT.count("cinemeta", "search_candidates") >= 1
+        assert SCRIPT.count("cinemeta", "search_title_multi") == 0
 
     run(go())
 
