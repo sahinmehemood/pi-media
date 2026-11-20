@@ -78,7 +78,7 @@ table.lib-t td,table.lib-t th{padding:.35rem .4rem;border-top:1px solid var(--bo
   {% for f in fix_history %}
   <div class="lib-row" style="display:block">
     <b>{{ f.action }}</b> · {{ f.state }}{% if f.dry_run %} · <span class="lib-sub">dry run</span>{% endif %}
-    <span class="lib-sub">{{ f.time_ist or f.created_at }}{% if f.stem %} · {{ f.stem }}{% endif %}</span><br>
+    <span class="lib-sub">{{ f.time_ist or f.created_at }}{% if f.stem %} · {{ f.stem }}{% endif %}</span>{% if f.state == "fixed" and f.dry_run == false and f.action == "edit" %} <button type="button" class="lib-btn" data-a="undo" data-k="{{ f.request_id }}">Undo</button>{% endif %}<br>
     <span class="lib-sub">Before:</span> {{ f.old_caption_text or f.old_caption }}<br>
     <span class="lib-sub">After:</span> {{ f.new_caption_text or f.new_caption }}{% if f.error %}<br>
     <span class="lib-sub">Error: {{ f.error }}</span>{% endif %}
@@ -144,6 +144,7 @@ document.addEventListener('click', async e => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { alert(data.detail || data.error || 'Action failed.'); b.disabled = false; return; }
     if (data.state === 'refused_wrong_status') { alert(data.error || 'That file is no longer in a state that allows this action.'); b.disabled = false; return; }
+    if (action === 'undo' && data.state !== 'undone') { alert(data.error || 'That fix could not be undone.'); b.disabled = false; return; }
     location.reload();
   } catch (err) { alert('Action failed.'); b.disabled = false; }
 });

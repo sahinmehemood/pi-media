@@ -4,9 +4,10 @@ Covers the two C5 template surfaces:
 
 - ``Backend/fastapi/templates/librarian.html`` — the Fix history
   section: seeded rows render action / state / IST time / before &
-  after captions with a "dry run" label on dry-run rows; NO undo
-  action is rendered (undo does not exist until Phase 5/6, plan
-  C-1); captions render under Jinja autoescaping — no ``|safe`` on
+  after captions with a "dry run" label on dry-run rows; an Undo
+  action is rendered only for a fixed, non-dry-run, action=="edit"
+  row (Phase 5 C-3a, §4.1 eligibility, Tech Lead ruling (b));
+  captions render under Jinja autoescaping — no ``|safe`` on
   any caption field (security A-2(iv)).
 - ``Backend/fastapi/templates/settings.html`` — the Librarian
   card's Writer bot block (security A-6 / W-5 point 6 / W-7):
@@ -72,6 +73,7 @@ def _page_ctx(**over):
 
 def _fix_row(**kw):
     row = {
+        "request_id": "req-0001",
         "action": "edit", "state": "dry_run_complete", "dry_run": True,
         "time_ist": "20 Nov 2026, 19:05 IST", "stem": "some show",
         "old_caption": "Old caption tt1111111",
@@ -118,9 +120,15 @@ def test_C5_fix_history_section_static_shape():
     for needle in ("fix_history", "f.action", "f.state", "f.dry_run",
                    "dry run", "f.old_caption", "f.new_caption"):
         assert needle in section, needle
-    # No undo action is rendered — undo does not exist until
-    # Phase 5/6 (plan C-1); a dead button would be a false affordance.
-    assert "undo" not in section.lower()
+    # Phase 5 C-3a: an Undo button is rendered in the section, gated
+    # by the §4.1 / ruling (b) condition — fixed, non-dry-run, edit
+    # only — keyed by the row's request_id, reusing .lib-btn verbatim.
+    assert 'data-a="undo"' in section
+    assert 'data-k="{{ f.request_id }}"' in section
+    assert ">Undo</button>" in section
+    assert 'class="lib-btn"' in section
+    assert ('f.state == "fixed" and f.dry_run == false '
+            'and f.action == "edit"') in section
     # Empty state when no history rows are in context.
     assert "No fixes recorded yet." in section
 
@@ -150,6 +158,90 @@ def test_C5_fix_history_render_rows_and_labels():
     # Absent fix_history -> the section renders its empty state.
     html = _try_render("librarian.html", source, _page_ctx())
     assert "No fixes recorded yet." in html
+
+
+def test_C5_fix_history_undo_render_eligible_row():
+    """Phase 5 C-3a (i): a fixed, non-dry-run, action=="edit" row
+    renders Undo with data-k equal to its request_id."""
+    source = LIB_HTML.read_text(encoding="utf-8")
+    rows = [_fix_row(state="fixed", dry_run=False, action="edit",
+                     request_id="req-undo-1")]
+    html = _try_render("librarian.html", source,
+                       _page_ctx(fix_history=rows))
+    if html is None:
+        return
+    assert ('<button type="button" class="lib-btn" data-a="undo" '
+            'data-k="req-undo-1">Undo</button>') in html
+    assert html.count('data-a="undo"') == 1
+
+
+def test_C5_fix_history_undo_not_rendered_for_non_edit_action():
+    """Phase 5 C-3a (ii) — ruling (b) pin: a fixed, non-dry-run row
+    whose action is not "edit" renders NO Undo."""
+    source = LIB_HTML.read_text(encoding="utf-8")
+    for action in ("repost", "delete", "skip"):
+        rows = [_fix_row(state="fixed", dry_run=False, action=action,
+                         request_id=f"req-{action}-1")]
+        html = _try_render("librarian.html", source,
+                           _page_ctx(fix_history=rows))
+        if html is None:
+            return
+        assert 'data-a="undo"' not in html, action
+        assert ">Undo</button>" not in html, action
+
+
+def test_C5_fix_history_undo_not_rendered_for_dry_run_or_non_fixed():
+    """Phase 5 C-3a (iii): dry-run rows and non-fixed rows render
+    NO Undo, even when the action is "edit"."""
+    source = LIB_HTML.read_text(encoding="utf-8")
+    ineligible = [
+        # Dry-run: state fixed but dry_run True.
+        _fix_row(state="fixed", dry_run=True, action="edit",
+                 request_id="req-dry-1"),
+        # Non-fixed, non-dry-run edit rows.
+        _fix_row(state="dry_run_complete", dry_run=False, action="edit",
+                 request_id="req-dry-complete-1"),
+        _fix_row(state="refused_drift", dry_run=False, action="edit",
+                 request_id="req-refused-1", error="caption changed"),
+        _fix_row(state="failed", dry_run=False, action="edit",
+                 request_id="req-failed-1", error="boom"),
+    ]
+    for row in ineligible:
+        html = _try_render("librarian.html", source,
+                           _page_ctx(fix_history=[row]))
+        if html is None:
+            return
+        assert 'data-a="undo"' not in html, row["request_id"]
+        assert ">Undo</button>" not in html, row["request_id"]
+    # Mixed history: exactly the one eligible row renders Undo,
+    # keyed by its own request_id.
+    eligible = _fix_row(state="fixed", dry_run=False, action="edit",
+                        request_id="req-eligible-1")
+    html = _try_render("librarian.html", source,
+                       _page_ctx(fix_history=ineligible + [eligible]))
+    if html is None:
+        return
+    assert html.count('data-a="undo"') == 1
+    assert 'data-k="req-eligible-1"' in html
+
+
+def test_C5_undo_js_branch_contract():
+    """Phase 5 C-3a JS: inside the existing delegated click handler,
+    the undo branch alerts on ANY returned state != "undone" (and
+    re-enables the button); reload happens only past that branch,
+    i.e. on state == "undone" (§4.4: refusals are not swallowed)."""
+    text = LIB_HTML.read_text(encoding="utf-8")
+    assert "action === 'undo' && data.state !== 'undone'" in text
+    undo_at = text.index("action === 'undo'")
+    reload_at = text.index("location.reload();", undo_at)
+    branch = text[undo_at:reload_at]
+    assert "alert(data.error ||" in branch
+    assert "b.disabled = false" in branch
+    assert "return" in branch
+    # No new endpoint / handler: the single existing delegated
+    # listener and the single action endpoint remain the only ones.
+    assert text.count("addEventListener('click'") == 1
+    assert text.count("/admin/librarian/action") == 1
 
 
 def test_C5_captions_escaped_no_safe():
