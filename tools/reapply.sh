@@ -114,6 +114,7 @@ PLUGIN_FILES=(
   tests/test_librarian_templates.py
   tests/test_librarian_cli_http.py
   tests/test_librarian_reindex.py
+  tests/test_librarian_scan.py
   tools/chief-profile/SOUL.md
   tools/chief-profile/AGENTS.md
   tools/chief-profile/memories/MEMORY.md

@@ -437,6 +437,27 @@ class ScanManager:
             s["counters"]["skipped_meta"] += 1
             return
 
+        #----- Librarian coordination (DESIGN §4 seam 9): a post with a
+        #----- non-terminal librarian_fixes operation belongs to the fix
+        #----- engine — skip it here, before any metadata/funnel work.
+        #----- chat_id is this function's argument, the full-form int
+        #----- (channels arrive as -100… strings, converted at
+        #----- _scan_channel entry); find_active_fix matches the full
+        #----- form only, so never pass a stripped form. A store
+        #----- failure falls through to normal scanning — the check
+        #----- must never block a scan.
+        try:
+            from Backend.helper import librarian_store
+            if await librarian_store.find_active_fix(chat_id, message.id):
+                s["counters"]["skipped_meta"] += 1
+                LOGGER.info(
+                    f"[ScanManager] Skipping msg {message.id} in {chat_id}: "
+                    "a Librarian fix operation is in progress for this post."
+                )
+                return
+        except Exception as e:
+            LOGGER.warning(f"[ScanManager] Librarian op-check failed for msg {message.id}: {e}")
+
         #----- Subtitle files: match to a title and store, don't treat as media
         sub_name = message.document.file_name if message.document else ""
         if sub_name and is_subtitle_file(sub_name):
