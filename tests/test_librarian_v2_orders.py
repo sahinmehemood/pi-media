@@ -58,7 +58,7 @@ def _setup(dry_run=False, budget=500):
          "title": f"E{i}", "air_date": None} for i in (1, 2, 3)], T0)
     expected = {}
 
-    def verify(file_row):
+    def verify(file_row, new_caption):
         return tg.get_caption(file_row["chat_id"], file_row["msg_id"]) == \
             expected.get((file_row["chat_id"], file_row["msg_id"]))
 

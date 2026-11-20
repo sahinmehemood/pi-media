@@ -440,6 +440,27 @@ class Store:
                        (key, str(value)))
 
     # -- totals for the page ---------------------------------------------------------------
+    def list_series(self, kind=None, limit=100):
+        if kind:
+            return self._all("SELECT * FROM series WHERE kind=? ORDER BY"
+                             " canonical_title LIMIT ?", (kind, limit))
+        return self._all("SELECT * FROM series ORDER BY canonical_title"
+                         " LIMIT ?", (limit,))
+
+    def list_unidentified(self, channel_id=None, limit=50, before_id=None):
+        sql = ("SELECT * FROM media_file WHERE series_id IS NULL"
+               " AND match_status IN ('unmatched','unknown')")
+        args = []
+        if channel_id is not None:
+            sql += " AND source_channel_id=?"
+            args.append(channel_id)
+        if before_id is not None:
+            sql += " AND id<?"
+            args.append(before_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        return self._all(sql, args)
+
     def totals(self):
         fixed = self._one("SELECT COUNT(*) AS n FROM caption_revision"
                           " WHERE reverted_at IS NULL")["n"]

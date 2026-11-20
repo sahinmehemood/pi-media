@@ -8,7 +8,7 @@ the harness fakes:
 
     editor(chat_id, msg_id, new_caption)  — the Media Manager bot edit
     reader(chat_id, msg_id) -> caption    — live caption read (identity)
-    verify(file_row) -> bool              — fix landed in the library
+    verify(file_row, new_caption) -> bool — fix landed in the library
     parse_caption(caption) -> bits|None   — the app's own parser
     pace(channel_id)                      — apply pacing (v1 engine values)
 
@@ -240,7 +240,7 @@ class OrderService:
             if retry_after is not None:
                 raise jobs_mod.SnoozeError(retry_after, "flood wait")
             raise
-        if not self.verify(f):
+        if not self.verify(f, item["new_caption"]):
             # Roll back the caption we just wrote; nothing is recorded as
             # fixed, and the failure is a dead letter with the reason.
             try:
