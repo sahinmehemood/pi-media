@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Librarian — TG Stremio{% endblock %}
+{% block content %}
+<style>
+.lib-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.9rem 1rem;margin-bottom:.75rem}
+.lib-card h2{font-size:1rem;font-weight:600;margin-bottom:.6rem;display:flex;align-items:center;gap:.5rem}
+.lib-card h2 i{color:var(--primary)}
+.lib-stats{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;font-size:.92rem}
+.lib-stats b{font-variant-numeric:tabular-nums}
+.lib-sub{color:var(--text-sec);font-size:.82rem}
+.lib-row{display:flex;align-items:center;gap:.6rem;padding:.35rem 0;border-top:1px solid var(--border);font-size:.86rem;flex-wrap:wrap}
+.lib-name{flex:1;min-width:140px;word-break:break-all}
+.lib-btn{padding:.25rem .7rem;border-radius:9999px;border:1px solid var(--border);background:transparent;color:var(--text);font-size:.78rem;cursor:pointer}
+.lib-btn:hover{background:var(--card-high)}
+.lib-grp{font-weight:600;word-break:break-all}
+.lib-pg{display:flex;gap:.5rem;align-items:center;margin:.5rem 0 1rem;font-size:.88rem}
+.lib-pg a{color:var(--primary);text-decoration:none}
+table.lib-t{width:100%;border-collapse:collapse;font-size:.85rem}
+table.lib-t td,table.lib-t th{padding:.35rem .4rem;border-top:1px solid var(--border);text-align:left;vertical-align:top;word-break:break-all}
+</style>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Librarian</h1>
+    <p class="page-sub">Files the matcher could not identify — the same data the Media Manager bot uses.</p>
+  </div>
+</div>
+
+<div class="lib-card">
+  <div class="lib-stats">
+    <span>Waiting <b>{{ counts.waiting }}</b></span>
+    <span>Parked <b>{{ counts.parked }}</b></span>
+    <span>Escalated <b>{{ counts.escalated }}</b></span>
+    <span>Fixed <b>{{ counts.fixed }}</b></span>
+  </div>
+  <p class="lib-sub" style="margin-top:.5rem">Operations today: <b>{{ ops_today_total }}</b> total, <b>{{ ops_today_fixed }}</b> fixed (operations, not ledger rows).</p>
+  {% if not librarian_enabled %}<p class="lib-sub" style="margin-top:.35rem">The Librarian is disabled — this page is read-only. Enable it in Settings.</p>{% endif %}
+</div>
+
+{% if agent_last_seen %}<p style="margin-bottom:.75rem">Media Manager last active: {{ agent_last_seen }}</p>{% endif %}
+
+<h2 style="font-size:1.05rem;font-weight:600;margin:.25rem 0 .6rem">Waiting</h2>
+{% if groups %}
+{% for g in groups %}
+<div class="lib-card">
+  <div style="margin-bottom:.25rem">
+    {% if g.record %}<span class="lib-grp">{{ g.record.canonical_title }}</span> <span class="lib-sub">({{ g.record.status }})</span>{% else %}<span class="lib-grp">{{ g.stem }}</span>{% endif %}
+    <span class="lib-sub">· {{ g.count }} file{{ 's' if g.count != 1 }} · {{ g.channel_name }} · {% if g.episode_tokens %}{{ g.episode_tokens[0] }}{% if g.episode_tokens|length > 1 %}–{{ g.episode_tokens[-1] }}{% endif %} {% endif %}filename tokens — unverified</span>
+  </div>
+  {% for f in g.files %}<div class="lib-row"><span class="lib-name">{{ f.file_name }}</span><span class="lib-sub">{{ f.identity.size }}</span><span class="lib-sub">{{ f.origin }}</span>{% if librarian_enabled %}<button type="button" class="lib-btn" data-a="park" data-k="{{ f.key }}">Park</button><button type="button" class="lib-btn" data-a="escalate" data-k="{{ f.key }}">Escalate</button>{% endif %}</div>
+  {% endfor %}
+</div>
+{% endfor %}
+{% if total_pages and total_pages > 1 %}
+<div class="lib-pg">
+  {% if page > 1 %}<a href="/admin/librarian?page={{ page - 1 }}">← Prev</a>{% endif %}
+  <span>Page {{ page }} of {{ total_pages }}</span>
+  {% if page < total_pages %}<a href="/admin/librarian?page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% else %}
+<div class="lib-card">No files waiting.</div>
+{% endif %}
+
+<h2 style="font-size:1.05rem;font-weight:600;margin:1rem 0 .6rem">Needs Yan</h2>
+{% if escalated %}
+<div class="lib-card">
+  {% for f in escalated %}<div class="lib-row"><span class="lib-name">{{ f.file_name }}</span><span class="lib-sub">{{ f.channel_name }}</span><span style="flex:1;min-width:140px">{{ f.escalation_reason }}</span>{% if librarian_enabled %}<button type="button" class="lib-btn" data-a="unpark" data-k="{{ f.key }}">Unpark</button>{% endif %}</div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="lib-card">Nothing needs Yan right now.</div>
+{% endif %}
+
+<h2 style="font-size:1.05rem;font-weight:600;margin:1rem 0 .6rem">Series records &amp; aliases</h2>
+<div class="lib-card">
+  {% if records %}
+  {% for r in records %}
+  <div class="lib-row">
+    <span class="lib-name"><b>{{ r.canonical_title if r.canonical_title else (r.titles[0] if r.titles else r.canonical_key) }}</b> <span class="lib-sub">{{ r.canonical_key }} · {{ r.media_type }} · {{ r.status }}</span></span>
+    <span class="lib-sub">{% for k, v in r.ids.items() %}{{ k }}:{{ v }} {% endfor %}</span>
+    <span class="lib-sub">{{ r.numbering.source }} / {{ r.numbering.order }}{% if r.numbering.offset is not none %} · offset {{ r.numbering.offset }}{% endif %}{% if r.numbering.note %} · {{ r.numbering.note }}{% endif %}</span>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="lib-sub">No series records yet.</p>
+  {% endif %}
+  {% if aliases %}
+  <table class="lib-t" style="margin-top:.6rem">
+    <tr><th>Channel</th><th>Stem</th><th>Record</th></tr>
+    {% for a in aliases %}<tr><td>{{ a.channel }}</td><td>{{ a.stem }}</td><td>{{ a.canonical_key or '' }}</td></tr>{% endfor %}
+  </table>
+  {% else %}
+  <p class="lib-sub" style="margin-top:.6rem">No aliases yet.</p>
+  {% endif %}
+</div>
+
+<h2 style="font-size:1.05rem;font-weight:600;margin:1rem 0 .6rem">Channels</h2>
+<div class="lib-card">
+  {% if channels %}
+  {% for c in channels %}
+  <div class="lib-row"><span class="lib-name">{{ c.channel_name }}</span><span class="lib-sub">{{ c.channel_id }}</span><span>{{ c.type or 'unknown' }}</span></div>
+  {% endfor %}
+  {% else %}
+  <p class="lib-sub">No channels are allowlisted yet.</p>
+  {% endif %}
+  <p class="lib-sub" style="margin-top:.6rem">The type shown is the stored ground truth the gateway and bot consume. Edit the allowlist and types in <a href="/admin/settings" style="color:var(--primary)">Settings → Librarian</a>.</p>
+</div>
+
+{% if librarian_enabled %}
+<script>
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-a][data-k]');
+  if (!b) return;
+  const action = b.dataset.a, key = b.dataset.k;
+  let reason = '';
+  if (action === 'park' || action === 'escalate') {
+    reason = prompt(action === 'park' ? 'Reason for parking this file:' : 'Reason for escalating this file to Yan:') || '';
+    if (!reason.trim()) return;
+  }
+  b.disabled = true;
+  try {
+    const res = await fetch('/admin/librarian/action', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, key, reason })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(data.detail || data.error || 'Action failed.'); b.disabled = false; return; }
+    if (data.state === 'refused_wrong_status') { alert(data.error || 'That file is no longer in a state that allows this action.'); b.disabled = false; return; }
+    location.reload();
+  } catch (err) { alert('Action failed.'); b.disabled = false; }
+});
+</script>
+{% endif %}
+{% endblock %}

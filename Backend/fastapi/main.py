@@ -127,6 +127,7 @@ from Backend.fastapi.routes.stream_routes import router as stream_router
 from Backend.fastapi.routes.cf_routes import router as cf_router
 from Backend.fastapi.routes.stremio_routes import router as stremio_router
 from Backend.fastapi.routes.webdav_routes import router as webdav_router
+from Backend.fastapi.librarian_routes import router as librarian_router
 from Backend.fastapi.routes.template_routes import (
     admin_access_page,
     admin_dashboard_page,
@@ -183,6 +184,7 @@ app.include_router(stream_router)
 app.include_router(cf_router)
 app.include_router(stremio_router)
 app.include_router(webdav_router)
+app.include_router(librarian_router)
 
 
 #----- Public routes (no authentication)

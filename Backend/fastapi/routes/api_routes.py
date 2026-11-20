@@ -1782,6 +1782,8 @@ async def get_settings_api() -> dict:
     data["admin_password"] = ""
     data["session_secret_set"] = bool(data.get("session_secret"))
     data["session_secret"] = ""
+    data["librarian_api_token_hash_set"] = bool(data.get("librarian_api_token_hash"))
+    data["librarian_api_token_hash"] = ""
 
     try:
         data["database_list"] = db.get_database_list()
@@ -1846,6 +1848,20 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["admin_password"]
     if "session_secret" in payload and not str(payload["session_secret"]).strip():
         del payload["session_secret"]
+
+    #----- Librarian pairing hash is never a settings-payload field
+    #----- (DESIGN §9): an empty value means "leave unchanged" (the
+    #----- admin_password precedent); a non-empty value rejects the
+    #----- whole save. librarian_agent_last_seen is runtime state
+    #----- (§9 last-seen), never configuration.
+    if "librarian_api_token_hash" in payload:
+        if not str(payload["librarian_api_token_hash"] or "").strip():
+            del payload["librarian_api_token_hash"]
+        else:
+            raise HTTPException(status_code=400,
+                detail="librarian_api_token_hash is not settable via settings — use the token generate/rotate action.")
+    if "librarian_agent_last_seen" in payload:
+        del payload["librarian_agent_last_seen"]
 
     #----- Type coercion and validation
     bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
@@ -2064,6 +2080,47 @@ async def update_settings_api(payload: dict) -> dict:
                         detail=f"Channel {', '.join(sorted(clash))} can't be in both {a} and {b} channels — each channel may only belong to one field."
                     )
 
+    #----- Librarian (DESIGN §9): validate only the librarian_* keys,
+    #----- following this function's established patterns. The hash /
+    #----- last-seen payload rules are handled at the top of the
+    #----- function with the empty-secret handling.
+    for _key in ("librarian_enabled", "librarian_capture_enabled",
+                 "librarian_test_mode", "librarian_writes_enabled"):
+        if _key in payload:
+            payload[_key] = bool(payload[_key])
+    if "librarian_mode" in payload:
+        payload["librarian_mode"] = str(payload["librarian_mode"] or "").strip().lower()
+        if payload["librarian_mode"] not in ("off", "ask", "auto"):
+            raise HTTPException(status_code=400, detail="'librarian_mode' must be off, ask or auto.")
+    if "librarian_edit_budget_per_day" in payload:
+        _v = payload["librarian_edit_budget_per_day"]
+        if isinstance(_v, bool) or not isinstance(_v, int):
+            raise HTTPException(status_code=400, detail="'librarian_edit_budget_per_day' must be an integer.")
+        payload["librarian_edit_budget_per_day"] = max(0, int(_v))
+    if "librarian_channels" in payload:
+        if not isinstance(payload["librarian_channels"], list):
+            raise HTTPException(status_code=400, detail="'librarian_channels' must be a list.")
+        _cleaned = []
+        for _channel in payload["librarian_channels"]:
+            _c = _validate_channel_id(str(_channel).strip(), "librarian channel")
+            if _c:
+                _cleaned.append(_c)
+        payload["librarian_channels"] = _cleaned
+    if "librarian_channel_types" in payload:
+        if not isinstance(payload["librarian_channel_types"], dict):
+            raise HTTPException(status_code=400, detail="'librarian_channel_types' must be an object.")
+        _types_vocab = ("movie", "tv", "anime", "donghua", "cartoon",
+                        "drama", "ova", "special", "unknown")
+        _cleaned_types = {}
+        for _channel, _type in payload["librarian_channel_types"].items():
+            _c = _validate_channel_id(str(_channel).strip(), "librarian channel")
+            if not _c:
+                continue
+            if _type not in _types_vocab:
+                raise HTTPException(status_code=400, detail=f"Invalid librarian channel type: '{_type}'.")
+            _cleaned_types[_c] = _type
+        payload["librarian_channel_types"] = _cleaned_types
+
     #----- Hermes Bot: when the token changes, verify it with Telegram
     #----- (getMe) and cache the resolved identity for the Bot Admin
     #----- Manager. An unverifiable token rejects the whole save.
@@ -2103,6 +2160,17 @@ def _scan_client():
     if multi_clients:
         return multi_clients.get(0) or next(iter(multi_clients.values()))
     return None
+
+
+def get_scan_manager():
+    """The ScanManager singleton (DESIGN §4 seam 7 accessor for the
+    Librarian plugin router)."""
+    return scan_manager
+
+
+def get_scan_client():
+    """The client resolver the app's own scan triggers use."""
+    return _scan_client()
 
 
 #----- Configured AUTH channels with friendly names for the picker

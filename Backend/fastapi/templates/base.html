@@ -11,6 +11,7 @@
     ('/admin/tools', 'Tools', 'fa-screwdriver-wrench', '/admin/tools'),
     ('/admin/dl-index', 'DL Index', 'fa-link', '/admin/dl-index'),
     ('/admin/settings', 'Settings', 'fa-gear', '/admin/settings'),
+    ('/admin/librarian', 'Librarian', 'fa-book-open', '/admin/librarian'),
 ] -%}
 {%- set dock_count = 4 -%}
 {%- macro is_active(prefix) -%}{{ 'true' if (prefix == '/' and path == '/') or (prefix != '/' and path.startswith(prefix)) else '' }}{%- endmacro -%}

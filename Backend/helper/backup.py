@@ -12,7 +12,7 @@ from Backend.logger import LOGGER
 
 #----- Never export/restore credentials; everything else (incl. extra DBs and
 #----- bot tokens) is included so a backup can fully migrate a deployment.
-_SETTINGS_EXCLUDE = {"admin_password", "session_secret"}
+_SETTINGS_EXCLUDE = {"admin_password", "session_secret", "librarian_api_token_hash"}
 
 #----- backup section -> tracking collection
 _COLLECTIONS = {

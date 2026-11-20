@@ -28,6 +28,23 @@ REF="${2:-master}"
 PLUGIN_FILES=(
   Backend/helper/librarian_store.py
   Backend/helper/librarian_gateway.py
+  Backend/fastapi/librarian_routes.py
+  Backend/fastapi/templates/librarian.html
+  tools/librarian_cli.py
+  tests/test_librarian_api.py
+  tools/media-manager-profile/SOUL.md
+  tools/media-manager-profile/AGENTS.md
+  tools/media-manager-profile/MEMORY.md
+  tools/media-manager-profile/INSTALL.md
+  tools/media-manager-profile/skills/librarian-toolbox/SKILL.md
+  tools/media-manager-profile/skills/provider-research/SKILL.md
+  tools/media-manager-profile/skills/episode-verification/SKILL.md
+  tools/media-manager-profile/skills/anime-donghua-numbering/SKILL.md
+  tools/media-manager-profile/skills/caption-writing/SKILL.md
+  tools/media-manager-profile/skills/series-records/SKILL.md
+  tools/media-manager-profile/skills/failure-recovery/SKILL.md
+  tools/media-manager-profile/skills/scope-and-reporting/SKILL.md
+  tools/media-manager-profile/skills/recognition-and-context/SKILL.md
   Backend/helper/metadata/providers/anilist.py
   tests/test_librarian_gateway.py
   tests/fixtures/gateway/anilist_429.json
