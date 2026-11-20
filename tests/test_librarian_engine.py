@@ -1366,6 +1366,33 @@ def test_A2_real_fix_series_ids_come_from_the_record():
     assert seam.calls[0]["series_ids"] == {"tmdb": 999, "tvdb": 555}
 
 
+def test_A2_auto_mode_alias_record_supplies_series_ids_to_seam():
+    # Senior A-2 Note 1 pin: in auto mode the series record arrives
+    # via the (channel, stem) alias, NOT via a payload
+    # series_record_id. The alias-resolved record must still reach
+    # the re-index seam as series_ids — dropping it leaves
+    # series_ids=None, the real seam answers metadata_failed, and a
+    # good fix is needlessly restored.
+    msg, writer, seam = _setup_real(librarian_mode="auto")
+
+    async def seed_record_and_alias():
+        record = await store.upsert_record({
+            "canonical_key": "fixture-show-alias",
+            "ids": {"tmdb": 999, "tvdb": 777},
+            "titles": ["Fixture Show"], "media_type": "tv",
+            "numbering": {"source": "tvdb", "order": "aired",
+                          "offset": None, "note": ""},
+            "status": "verified", "related_entries": []})
+        await store.set_alias(CHAT, "some show", record["_id"])
+        return record
+
+    _run(seed_record_and_alias())
+    resp = _fix_via_route(_payload())
+    assert resp.content["state"] == "fixed", resp.content
+    assert len(seam.calls) == 1
+    assert seam.calls[0]["series_ids"] == {"tmdb": 999, "tvdb": 777}
+
+
 # --- Step 6 classifier branches (§2.2 item 2) ------------------------
 
 def test_A2_flood_wait_terminates_with_seconds_and_standing_reservation():

@@ -1290,6 +1290,7 @@ async def fix_one(payload: dict) -> dict:
                 request_id, "refused_precondition",
                 "auto mode requires a verified series record and an "
                 "exact (channel, stem) alias for this file")
+        series_record = record
     if payload.get("series_record_id"):
         from bson import ObjectId
 
