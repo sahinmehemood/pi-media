@@ -154,7 +154,7 @@ index 9ae7925..cb3841d 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..a0058cb 100644
+index e6d9542..66b6c74 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
 @@ -612,6 +612,16 @@ async def get_dead_links_api() -> dict:
@@ -174,16 +174,21 @@ index e6d9542..a0058cb 100644
          return {"status": "success", "data": data}
      except Exception as e:
          LOGGER.error(f"Stream analytics API error: {e}")
-@@ -1772,6 +1782,8 @@ async def get_settings_api() -> dict:
+@@ -1772,6 +1782,13 @@ async def get_settings_api() -> dict:
      data["admin_password"] = ""
      data["session_secret_set"] = bool(data.get("session_secret"))
      data["session_secret"] = ""
 +    data["librarian_api_token_hash_set"] = bool(data.get("librarian_api_token_hash"))
 +    data["librarian_api_token_hash"] = ""
++    #----- Writer token (Phase 4, security W-5 point 1): a usable
++    #----- credential, blanked like the hash; fingerprint / bot id /
++    #----- username stay — they are the display path (W-4).
++    data["librarian_writer_token_set"] = bool(data.get("librarian_writer_token"))
++    data["librarian_writer_token"] = ""
  
      try:
          data["database_list"] = db.get_database_list()
-@@ -1799,6 +1811,36 @@ async def get_settings_api() -> dict:
+@@ -1799,6 +1816,36 @@ async def get_settings_api() -> dict:
      return {"settings": data}
  
  
@@ -220,7 +225,7 @@ index e6d9542..a0058cb 100644
  async def update_settings_api(payload: dict) -> dict:
  
      #----- Empty password string means leave it unchanged
-@@ -1807,8 +1849,22 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1807,8 +1854,41 @@ async def update_settings_api(payload: dict) -> dict:
      if "session_secret" in payload and not str(payload["session_secret"]).strip():
          del payload["session_secret"]
  
@@ -238,13 +243,32 @@ index e6d9542..a0058cb 100644
 +    if "librarian_agent_last_seen" in payload:
 +        del payload["librarian_agent_last_seen"]
 +
++    #----- Librarian writer keys get the same treatment (Phase 4,
++    #----- security W-2/W-4): they are owned by the dedicated
++    #----- writer-token action, so a payload must neither set the
++    #----- credential nor forge the identity binding the action
++    #----- establishes. Empty means "leave unchanged" (deleted);
++    #----- anything else rejects the whole save, naming the action.
++    for _writer_key in ("librarian_writer_token",
++                        "librarian_writer_token_fingerprint",
++                        "librarian_writer_bot_id",
++                        "librarian_writer_bot_username"):
++        if _writer_key in payload:
++            _writer_value = payload[_writer_key]
++            if _writer_value is None or (isinstance(_writer_value, str)
++                                         and not _writer_value.strip()):
++                del payload[_writer_key]
++            else:
++                raise HTTPException(status_code=400,
++                    detail=f"{_writer_key} is not settable via settings — use the writer-token action.")
++
      #----- Type coercion and validation
 -    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
 +    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}
      for key in bool_keys:
          if key in payload:
              payload[key] = bool(payload[key])
-@@ -1856,6 +1912,50 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1856,6 +1936,50 @@ async def update_settings_api(payload: dict) -> dict:
          except (ValueError, TypeError):
              payload["fanart_shuffle_interval"] = 5
  
@@ -295,7 +319,7 @@ index e6d9542..a0058cb 100644
      if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
          raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
  
-@@ -1926,6 +2026,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1926,6 +2050,7 @@ async def update_settings_api(payload: dict) -> dict:
                  cleaned.append(c)
          payload["manual_channels"] = cleaned
  
@@ -303,7 +327,7 @@ index e6d9542..a0058cb 100644
      if "announcement_channel" in payload and payload["announcement_channel"]:
          payload["announcement_channel"] = _validate_channel_id(
              payload["announcement_channel"], "announcement channel"
-@@ -1936,11 +2037,17 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1936,11 +2061,17 @@ async def update_settings_api(payload: dict) -> dict:
              payload["skip_channel"], "skip channel"
          )
  
@@ -322,7 +346,7 @@ index e6d9542..a0058cb 100644
      if any(field in payload for field in _channel_fields):
          current = SettingsManager.current()
  
-@@ -1956,6 +2063,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1956,6 +2087,7 @@ async def update_settings_api(payload: dict) -> dict:
              "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
              "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
              "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
@@ -330,7 +354,7 @@ index e6d9542..a0058cb 100644
          }
  
          allowed_overlap = frozenset({"AUTH", "ANIME"})
-@@ -1972,12 +2080,57 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1972,12 +2104,57 @@ async def update_settings_api(payload: dict) -> dict:
                          detail=f"Channel {', '.join(sorted(clash))} can't be in both {a} and {b} channels — each channel may only belong to one field."
                      )
  
@@ -389,7 +413,7 @@ index e6d9542..a0058cb 100644
          if key in payload and isinstance(payload[key], str):
              payload[key] = payload[key].strip()
  
-@@ -2009,6 +2162,17 @@ def _scan_client():
+@@ -2009,6 +2186,17 @@ def _scan_client():
      return None
  
  
@@ -407,7 +431,7 @@ index e6d9542..a0058cb 100644
  #----- Configured AUTH channels with friendly names for the picker
  async def get_tools_channels_api() -> dict:
      channels = list(SettingsManager.current().auth_channels)
-@@ -2501,6 +2665,60 @@ async def download_logs_api():
+@@ -2501,6 +2689,60 @@ async def download_logs_api():
      return FileResponse(path, filename="log.txt", media_type="text/plain")
  
  
@@ -468,7 +492,7 @@ index e6d9542..a0058cb 100644
  #----- Run the updater then re-exec the app; runs after the HTTP response is flushed
  async def _perform_restart(delay: float = 1.0) -> None:
      await asyncio.sleep(delay)
-@@ -2569,6 +2787,11 @@ async def _managed_bots() -> list[dict]:
+@@ -2569,6 +2811,11 @@ async def _managed_bots() -> list[dict]:
      return bots
  
  
@@ -480,7 +504,7 @@ index e6d9542..a0058cb 100644
  def _bot_served_channels() -> list[dict]:
      s = SettingsManager.current()
      order: list[str] = []
-@@ -2595,6 +2818,8 @@ def _bot_served_channels() -> list[dict]:
+@@ -2595,6 +2842,8 @@ def _bot_served_channels() -> list[dict]:
          add(s.announcement_channel, "announce")
      if s.skip_channel:
          add(s.skip_channel, "skip")
@@ -489,7 +513,7 @@ index e6d9542..a0058cb 100644
      return [mapping[k] for k in order]
  
  
-@@ -2686,12 +2911,13 @@ async def bot_admin_scan_api() -> dict:
+@@ -2686,12 +2935,13 @@ async def bot_admin_scan_api() -> dict:
          return {"status": "error", "reason": "no_session",
                  "message": "Connect your Telegram session from the Settings page to manage channel admins."}
  
@@ -505,7 +529,7 @@ index e6d9542..a0058cb 100644
      managed_ids = {b["user_id"] for b in bots}
      out: list[dict] = []
  
-@@ -2736,6 +2962,20 @@ async def bot_admin_scan_api() -> dict:
+@@ -2736,6 +2986,20 @@ async def bot_admin_scan_api() -> dict:
      return {"status": "success", "data": {"bots": bots, "channels": out}}
  
  
@@ -526,7 +550,7 @@ index e6d9542..a0058cb 100644
  async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: bool = True) -> dict:
      label = bot.get("name") or (f"@{bot['username']}" if bot.get("username") else str(bot["user_id"]))
      bid = bot["user_id"]
-@@ -2743,6 +2983,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
+@@ -2743,6 +3007,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
      if await _bot_member_status(chat_id, bid) == "admin":
          return {"bot": label, "user_id": bid, "status": "already", "message": "Already an admin."}
  
@@ -535,7 +559,7 @@ index e6d9542..a0058cb 100644
      try:
          await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
          return {"bot": label, "user_id": bid, "status": "added", "message": "Promoted to admin."}
-@@ -2840,9 +3082,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
+@@ -2840,9 +3106,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
      if not isinstance(channel_ids, list) or not channel_ids:
          raise HTTPException(status_code=400, detail="Select at least one channel.")
  
@@ -547,7 +571,7 @@ index e6d9542..a0058cb 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3125,96 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3149,96 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -724,7 +748,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..06a4582 100644
+index c53ee43..d8d520f 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -788,7 +812,22 @@ index c53ee43..06a4582 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -262,11 +316,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -252,6 +306,14 @@ async def tools_page(request: Request, _: bool = Depends(require_auth)):
+ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+     settings = SettingsManager.current().to_dict()
+     settings["admin_password"] = ""
++    #----- Phase 4, security Low 1 scoped fix (C-2): the settings dict
++    #----- enters the Jinja context whole, so usable credentials are
++    #----- blanked here, not left to template discipline — the writer
++    #----- token is a plaintext credential, the pairing hash and the
++    #----- session secret ride along in the same fix.
++    settings["librarian_writer_token"] = ""
++    settings["librarian_api_token_hash"] = ""
++    settings["session_secret"] = ""
+     try:
+         settings["database_list"] = db.get_database_list()
+     except Exception:
+@@ -262,11 +324,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -905,7 +944,7 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 62bda08..e413ce5 100644
+index 62bda08..a96a9b2 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
 @@ -143,26 +143,13 @@
@@ -1149,7 +1188,7 @@ index 62bda08..e413ce5 100644
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1292,6 +1482,160 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
+@@ -1292,6 +1482,183 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
          </div>
      </div>
  
@@ -1305,12 +1344,35 @@ index 62bda08..e413ce5 100644
 +            <p id="librarian-token-warn" style="font-size:0.8rem;color:var(--warn);margin-top:0.5rem"></p>
 +        </div>
 +        <p id="librarian-token-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
++
++        <hr class="divider">
++
++        <label class="s-label">Writer Bot</label>
++        {% set lib_writer_fp = settings.librarian_writer_token_fingerprint if settings.librarian_writer_token_fingerprint is defined else '' %}
++        {% set lib_writer_name = settings.librarian_writer_bot_username if settings.librarian_writer_bot_username is defined else '' %}
++        {% set lib_writer_set = lib_writer_fp or lib_writer_name %}
++        <p style="font-size:0.85rem;color:var(--text-sec);margin-bottom:0.75rem">
++            <span id="librarian-writer-status">{% if lib_writer_set %}Writer bot: @{{ lib_writer_name }} (…{{ lib_writer_fp }}){% else %}Writer bot: Not set{% endif %}</span>
++            <span style="display:block;font-size:0.78rem;margin-top:0.25rem">
++                The Media Manager bot's own BotFather token — the writer identity the
++                fix engine sends edits as. It is set only through the button below,
++                never through this page's settings save, and it is never shown back.
++                Replacing the token here does not revoke the old one — only BotFather /revoke does.
++            </span>
++        </p>
++        <div class="add-row">
++            <input type="password" id="librarian-writer-token" class="s-input"
++                placeholder="Media Manager bot token" autocomplete="off" spellcheck="false">
++            <button type="button" class="add-btn" id="librarian-writer-set" onclick="setLibrarianWriterToken()">Set writer token</button>
++            <button type="button" class="add-btn" id="librarian-writer-clear" onclick="clearLibrarianWriterToken()">Clear</button>
++        </div>
++        <p id="librarian-writer-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
 +    </div>
 +
  </div><!-- /settings-root -->
  
  <style>
-@@ -1569,7 +1913,7 @@ function addItem(listKey) {
+@@ -1569,7 +1936,7 @@ function addItem(listKey) {
      const value = newInput.value.trim();
      if (!value) return;
  
@@ -1319,7 +1381,7 @@ index 62bda08..e413ce5 100644
      if (channelLists.includes(listKey) && !isValidChannelId(value)) {
          alert('Only channel IDs in -100xxxxxxxxxx format are accepted (channels only).');
          return;
-@@ -1667,6 +2011,109 @@ function collectList(listKey) {
+@@ -1667,6 +2034,180 @@ function collectList(listKey) {
          .filter(Boolean);
  }
  
@@ -1420,16 +1482,87 @@ index 62bda08..e413ce5 100644
 +    if (navigator.clipboard) navigator.clipboard.writeText(input.value);
 +}
 +
-+/* The one-time token never survives leaving the page. */
++/* ── Librarian: writer bot token (dedicated action, §4.1.3) ──────────
++   The writer token is set/cleared ONLY through
++   POST/DELETE /admin/librarian/writer-token. It is never part of
++   saveSettings()'s payload (the generic settings save 400s on it by
++   design) and the stored token is never rendered back — the status
++   line shows username + fingerprint only. */
++async function setLibrarianWriterToken() {
++    const input = document.getElementById('librarian-writer-token');
++    const msg = document.getElementById('librarian-writer-msg');
++    const btn = document.getElementById('librarian-writer-set');
++    if (!input || !msg) return;
++    const token = input.value.trim();
++    if (!token) {
++        msg.style.display = '';
++        msg.style.color = 'var(--danger)';
++        msg.textContent = 'Paste the Media Manager bot token first.';
++        return;
++    }
++    if (btn) btn.disabled = true;
++    try {
++        const res = await fetch('/admin/librarian/writer-token', {
++            method: 'POST', headers: { 'Content-Type': 'application/json' },
++            body: JSON.stringify({ token })
++        });
++        const data = await res.json().catch(() => ({}));
++        if (!res.ok) throw new Error(data.detail || data.error || 'Could not set the writer token.');
++        input.value = '';
++        const status = document.getElementById('librarian-writer-status');
++        if (status) status.textContent = 'Writer bot: @' + (data.username || '') + ' (…' + (data.fingerprint || '') + ')';
++        msg.style.display = '';
++        msg.style.color = 'var(--ok)';
++        msg.textContent = 'Writer token set — verified with Telegram as @' + (data.username || '') + '.';
++    } catch (e) {
++        msg.style.display = '';
++        msg.style.color = 'var(--danger)';
++        msg.textContent = e.message || 'Could not set the writer token.';
++    } finally {
++        if (btn) btn.disabled = false;
++    }
++}
++
++async function clearLibrarianWriterToken() {
++    const msg = document.getElementById('librarian-writer-msg');
++    const btn = document.getElementById('librarian-writer-clear');
++    if (btn) btn.disabled = true;
++    try {
++        const res = await fetch('/admin/librarian/writer-token', { method: 'DELETE' });
++        const data = await res.json().catch(() => ({}));
++        if (!res.ok) throw new Error(data.detail || data.error || 'Could not clear the writer token.');
++        const input = document.getElementById('librarian-writer-token');
++        if (input) input.value = '';
++        const status = document.getElementById('librarian-writer-status');
++        if (status) status.textContent = 'Writer bot: Not set';
++        if (msg) {
++            msg.style.display = '';
++            msg.style.color = 'var(--ok)';
++            msg.textContent = 'Writer token cleared.';
++        }
++    } catch (e) {
++        if (msg) {
++            msg.style.display = '';
++            msg.style.color = 'var(--danger)';
++            msg.textContent = e.message || 'Could not clear the writer token.';
++        }
++    } finally {
++        if (btn) btn.disabled = false;
++    }
++}
++
++/* The one-time token and any pasted writer token never survive leaving the page. */
 +window.addEventListener('pagehide', () => {
 +    const input = document.getElementById('librarian-token-once');
 +    if (input) input.value = '';
++    const writer = document.getElementById('librarian-writer-token');
++    if (writer) writer.value = '';
 +});
 +
  /* ── Save ──────────────────────────────────────────────────────────────── */
  
  function toggleWebdavPwdVisibility() {
-@@ -1682,6 +2129,37 @@ function toggleWebdavPwdVisibility() {
+@@ -1682,6 +2223,37 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -1467,7 +1600,7 @@ index 62bda08..e413ce5 100644
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1690,6 +2168,7 @@ async function saveSettings() {
+@@ -1690,6 +2262,7 @@ async function saveSettings() {
          ...collectList('auth_channels'),
          ...collectList('global_search_channels'),
          ...collectList('manual_channels'),
@@ -1475,7 +1608,7 @@ index 62bda08..e413ce5 100644
      ];
      const acEl = document.getElementById('announcement_channel');
      const scEl = document.getElementById('skip_channel');
-@@ -1766,7 +2245,34 @@ async function saveSettings() {
+@@ -1766,7 +2339,34 @@ async function saveSettings() {
          announce_new_content:          document.getElementById('announce_new_content').checked,
          announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
          skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
@@ -1510,7 +1643,7 @@ index 62bda08..e413ce5 100644
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1902,6 +2408,42 @@ function renderSettings(s) {
+@@ -1902,6 +2502,42 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -1553,7 +1686,7 @@ index 62bda08..e413ce5 100644
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1945,6 +2487,16 @@ function renderSettings(s) {
+@@ -1945,6 +2581,16 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -1570,7 +1703,7 @@ index 62bda08..e413ce5 100644
      toggleSkipDeleteField();
  
      rebuildDatabaseList(s.database_list || []);
-@@ -1954,7 +2506,7 @@ function rebuildSimpleList(containerId, values, inputType, titles) {
+@@ -1954,7 +2600,7 @@ function rebuildSimpleList(containerId, values, inputType, titles) {
      const container = document.getElementById(containerId);
      if (!container) return;
      const listKey = containerId.replace('_items', '');
@@ -1579,7 +1712,7 @@ index 62bda08..e413ce5 100644
      titles = titles || {};
  
      container.innerHTML = '';
-@@ -2021,7 +2573,6 @@ const STAT_FIELDS = [
+@@ -2021,7 +2667,6 @@ const STAT_FIELDS = [
      ['streams', 'Streams'], ['db_size', 'DB Size'],
      ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
  ];
@@ -1587,7 +1720,7 @@ index 62bda08..e413ce5 100644
  
  /* Spin the clicked refresh button's icon while an async action runs */
  function spinIcon(btn, on) {
-@@ -2047,32 +2598,6 @@ async function loadDbStats(btn) {
+@@ -2047,32 +2692,6 @@ async function loadDbStats(btn) {
      }
  }
  
@@ -1620,7 +1753,7 @@ index 62bda08..e413ce5 100644
  async function restartApp() {
      if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
  
-@@ -2089,7 +2614,6 @@ async function restartApp() {
+@@ -2089,7 +2708,6 @@ async function restartApp() {
      }
  
      // Web app goes down during restart — poll health until start_time changes, then reload.
@@ -1628,7 +1761,7 @@ index 62bda08..e413ce5 100644
      const overlay = document.getElementById('restart-overlay');
      overlay.hidden = false;
      document.documentElement.classList.add('rs-lock');
-@@ -2137,7 +2661,6 @@ window.addEventListener('DOMContentLoaded', () => {
+@@ -2137,7 +2755,6 @@ window.addEventListener('DOMContentLoaded', () => {
      toggleDuplicateProtection();
      toggleMediaflowFields();
      loadDbStats();
@@ -1809,15 +1942,21 @@ index a642921..aeff4f6 100644
  
      const btn = document.getElementById('ba-apply-btn');
 diff --git a/Backend/helper/backup.py b/Backend/helper/backup.py
-index 72a5007..da7d43a 100644
+index 72a5007..0bf4cc7 100644
 --- a/Backend/helper/backup.py
 +++ b/Backend/helper/backup.py
-@@ -12,7 +12,7 @@ from Backend.logger import LOGGER
+@@ -12,7 +12,13 @@ from Backend.logger import LOGGER
  
  #----- Never export/restore credentials; everything else (incl. extra DBs and
  #----- bot tokens) is included so a backup can fully migrate a deployment.
 -_SETTINGS_EXCLUDE = {"admin_password", "session_secret"}
-+_SETTINGS_EXCLUDE = {"admin_password", "session_secret", "librarian_api_token_hash"}
++_SETTINGS_EXCLUDE = {"admin_password", "session_secret", "librarian_api_token_hash",
++                     # Phase 4 (security W-2/W-4): the writer credential and
++                     # its fingerprint never ride a backup — a restore must
++                     # not resurrect a superseded writer token.
++                     "librarian_writer_token", "librarian_writer_token_fingerprint",
++                     # Runtime state, not configuration (security C-3).
++                     "librarian_agent_last_seen"}
  
  #----- backup section -> tracking collection
  _COLLECTIONS = {
@@ -2175,7 +2314,7 @@ index 49c2d40..a274d73 100644
                  LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
              return
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..ea3bfa9 100644
+index 2b7712c..b96963e 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
 @@ -5,6 +5,9 @@ from typing import Any, Dict, List
@@ -2198,7 +2337,7 @@ index 2b7712c..ea3bfa9 100644
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -63,6 +69,34 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -63,6 +69,41 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -2230,10 +2369,17 @@ index 2b7712c..ea3bfa9 100644
 +    "librarian_channels": [],
 +    "librarian_channel_types": {},
 +    "librarian_api_token_hash": "",
++    #----- Writer token (Phase 4, security W-1): plaintext by design —
++    #----- the engine must wield it (Phase 5); redaction is the entire
++    #----- protection (W-5). Set only via the writer-token action.
++    "librarian_writer_token": "",
++    "librarian_writer_token_fingerprint": "",
++    "librarian_writer_bot_id": 0,
++    "librarian_writer_bot_username": "",
  }
  
  
-@@ -158,6 +192,7 @@ class Settings:
+@@ -158,6 +199,7 @@ class Settings:
      def announce_new_content(self) -> bool:
          return bool(self._d.get("announce_new_content", False))
  
@@ -2241,7 +2387,7 @@ index 2b7712c..ea3bfa9 100644
      @property
      def delete_on_metadata_fail(self) -> bool:
          return bool(self._d.get("delete_on_metadata_fail", False))
-@@ -170,6 +205,71 @@ class Settings:
+@@ -170,6 +212,90 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -2286,6 +2432,25 @@ index 2b7712c..ea3bfa9 100644
 +        return str(self._d.get("librarian_api_token_hash") or "")
 +
 +    @property
++    def librarian_writer_token(self) -> str:
++        return str(self._d.get("librarian_writer_token") or "")
++
++    @property
++    def librarian_writer_token_fingerprint(self) -> str:
++        return str(self._d.get("librarian_writer_token_fingerprint") or "")
++
++    @property
++    def librarian_writer_bot_id(self) -> int:
++        try:
++            return int(self._d.get("librarian_writer_bot_id") or 0)
++        except (TypeError, ValueError):
++            return 0
++
++    @property
++    def librarian_writer_bot_username(self) -> str:
++        return str(self._d.get("librarian_writer_bot_username") or "")
++
++    @property
 +    def dl_channel_id(self):
 +        """DM Link pool channel as an int id, or None when not configured."""
 +        raw = str(self._d.get("dl_channel_id") or "").strip()
@@ -2313,7 +2478,7 @@ index 2b7712c..ea3bfa9 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +405,104 @@ class Settings:
+@@ -305,6 +431,104 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -2418,7 +2583,7 @@ index 2b7712c..ea3bfa9 100644
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +578,7 @@ class SettingsManager:
+@@ -380,7 +604,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -2427,7 +2592,7 @@ index 2b7712c..ea3bfa9 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +725,23 @@ class SettingsManager:
+@@ -527,4 +751,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  

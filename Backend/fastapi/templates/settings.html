@@ -1634,6 +1634,29 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
             <p id="librarian-token-warn" style="font-size:0.8rem;color:var(--warn);margin-top:0.5rem"></p>
         </div>
         <p id="librarian-token-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
+
+        <hr class="divider">
+
+        <label class="s-label">Writer Bot</label>
+        {% set lib_writer_fp = settings.librarian_writer_token_fingerprint if settings.librarian_writer_token_fingerprint is defined else '' %}
+        {% set lib_writer_name = settings.librarian_writer_bot_username if settings.librarian_writer_bot_username is defined else '' %}
+        {% set lib_writer_set = lib_writer_fp or lib_writer_name %}
+        <p style="font-size:0.85rem;color:var(--text-sec);margin-bottom:0.75rem">
+            <span id="librarian-writer-status">{% if lib_writer_set %}Writer bot: @{{ lib_writer_name }} (…{{ lib_writer_fp }}){% else %}Writer bot: Not set{% endif %}</span>
+            <span style="display:block;font-size:0.78rem;margin-top:0.25rem">
+                The Media Manager bot's own BotFather token — the writer identity the
+                fix engine sends edits as. It is set only through the button below,
+                never through this page's settings save, and it is never shown back.
+                Replacing the token here does not revoke the old one — only BotFather /revoke does.
+            </span>
+        </p>
+        <div class="add-row">
+            <input type="password" id="librarian-writer-token" class="s-input"
+                placeholder="Media Manager bot token" autocomplete="off" spellcheck="false">
+            <button type="button" class="add-btn" id="librarian-writer-set" onclick="setLibrarianWriterToken()">Set writer token</button>
+            <button type="button" class="add-btn" id="librarian-writer-clear" onclick="clearLibrarianWriterToken()">Clear</button>
+        </div>
+        <p id="librarian-writer-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
     </div>
 
 </div><!-- /settings-root -->
@@ -2108,10 +2131,81 @@ function copyLibrarianToken() {
     if (navigator.clipboard) navigator.clipboard.writeText(input.value);
 }
 
-/* The one-time token never survives leaving the page. */
+/* ── Librarian: writer bot token (dedicated action, §4.1.3) ──────────
+   The writer token is set/cleared ONLY through
+   POST/DELETE /admin/librarian/writer-token. It is never part of
+   saveSettings()'s payload (the generic settings save 400s on it by
+   design) and the stored token is never rendered back — the status
+   line shows username + fingerprint only. */
+async function setLibrarianWriterToken() {
+    const input = document.getElementById('librarian-writer-token');
+    const msg = document.getElementById('librarian-writer-msg');
+    const btn = document.getElementById('librarian-writer-set');
+    if (!input || !msg) return;
+    const token = input.value.trim();
+    if (!token) {
+        msg.style.display = '';
+        msg.style.color = 'var(--danger)';
+        msg.textContent = 'Paste the Media Manager bot token first.';
+        return;
+    }
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/admin/librarian/writer-token', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.error || 'Could not set the writer token.');
+        input.value = '';
+        const status = document.getElementById('librarian-writer-status');
+        if (status) status.textContent = 'Writer bot: @' + (data.username || '') + ' (…' + (data.fingerprint || '') + ')';
+        msg.style.display = '';
+        msg.style.color = 'var(--ok)';
+        msg.textContent = 'Writer token set — verified with Telegram as @' + (data.username || '') + '.';
+    } catch (e) {
+        msg.style.display = '';
+        msg.style.color = 'var(--danger)';
+        msg.textContent = e.message || 'Could not set the writer token.';
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function clearLibrarianWriterToken() {
+    const msg = document.getElementById('librarian-writer-msg');
+    const btn = document.getElementById('librarian-writer-clear');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/admin/librarian/writer-token', { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.error || 'Could not clear the writer token.');
+        const input = document.getElementById('librarian-writer-token');
+        if (input) input.value = '';
+        const status = document.getElementById('librarian-writer-status');
+        if (status) status.textContent = 'Writer bot: Not set';
+        if (msg) {
+            msg.style.display = '';
+            msg.style.color = 'var(--ok)';
+            msg.textContent = 'Writer token cleared.';
+        }
+    } catch (e) {
+        if (msg) {
+            msg.style.display = '';
+            msg.style.color = 'var(--danger)';
+            msg.textContent = e.message || 'Could not clear the writer token.';
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+/* The one-time token and any pasted writer token never survive leaving the page. */
 window.addEventListener('pagehide', () => {
     const input = document.getElementById('librarian-token-once');
     if (input) input.value = '';
+    const writer = document.getElementById('librarian-writer-token');
+    if (writer) writer.value = '';
 });
 
 /* ── Save ──────────────────────────────────────────────────────────────── */

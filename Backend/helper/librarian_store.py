@@ -488,3 +488,84 @@ async def list_aliases(channel_id=None) -> list:
         .sort([("channel_id", ASCENDING), ("stem", ASCENDING)])
     )
     return await cursor.to_list(None)
+
+
+#----- Phase 4: fix-operation store functions (DESIGN §6, §8) -----
+#----- librarian_fixes rows are append-only in substance (security
+#----- A-2(i)): insert_fix creates the row; update_fix_state is the
+#----- ONLY writer after insert, and its fixed $set key set cannot
+#----- touch captions, expected_ids, locators, or the row's identity
+#----- fields — the audit trail is never rewritten by a later path.
+
+_UNSET = object()  # "leave unchanged" vs "set to None" for error
+
+NONTERMINAL_FIX_STATES = ("prepared", "editing", "reindexing",
+                          "reposting", "deleting_original")
+
+
+async def insert_fix(row: dict) -> dict:
+    """Insert one librarian_fixes row; on a DuplicateKeyError from
+    the unique request_id index (a retry racing the first insert),
+    re-read and return the existing row — the idempotency backstop
+    (security T-7)."""
+    row = dict(row)
+    now = _utcnow()
+    row.setdefault("created_at", now)
+    row.setdefault("updated_at", now)
+    fixes = _tracking()["librarian_fixes"]
+    try:
+        await fixes.insert_one(row)
+    except DuplicateKeyError:
+        existing = await get_fix_by_request_id(row["request_id"])
+        if existing is not None:
+            return existing
+        raise
+    return await get_fix_by_request_id(row["request_id"])
+
+
+async def get_fix_by_request_id(request_id) -> Optional[dict]:
+    return await _tracking()["librarian_fixes"].find_one(
+        {"request_id": request_id}
+    )
+
+
+async def update_fix_state(request_id, state, *, error=_UNSET,
+                           index_confirmed=None) -> None:
+    """The only post-insert writer of fix rows. $sets exactly:
+    `state`, the per-transition `<state>_at` timestamp, `updated_at`,
+    `error` (only when the argument is given — the default sentinel
+    leaves it unchanged; an explicit None clears it, as terminal
+    success writes), and `index_confirmed` (only when given)."""
+    now = _utcnow()
+    fields = {"state": state, "updated_at": now, f"{state}_at": now}
+    if error is not _UNSET:
+        fields["error"] = error
+    if index_confirmed is not None:
+        fields["index_confirmed"] = bool(index_confirmed)
+    await _tracking()["librarian_fixes"].update_one(
+        {"request_id": request_id}, {"$set": fields}
+    )
+
+
+async def find_active_fix(chat_id, msg_id) -> Optional[dict]:
+    """The non-terminal operation on one post, if any (§8
+    Concurrency: one active operation per post)."""
+    cursor = _tracking()["librarian_fixes"].find(
+        {"current_locator.chat_id": int(chat_id),
+         "current_locator.msg_id": int(msg_id)}
+    )
+    for row in await cursor.to_list(None):
+        if row.get("state") in NONTERMINAL_FIX_STATES:
+            return row
+    return None
+
+
+async def list_nonterminal_fixes() -> list:
+    """Every non-terminal fix row — restart reconciliation's input
+    (§8). One find per state, riding the (state, created_at) index."""
+    fixes = _tracking()["librarian_fixes"]
+    out = []
+    for state in NONTERMINAL_FIX_STATES:
+        cursor = fixes.find({"state": state})
+        out.extend(await cursor.to_list(None))
+    return out

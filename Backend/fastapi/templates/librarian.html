@@ -72,6 +72,23 @@ table.lib-t td,table.lib-t th{padding:.35rem .4rem;border-top:1px solid var(--bo
 <div class="lib-card">Nothing needs Yan right now.</div>
 {% endif %}
 
+<h2 style="font-size:1.05rem;font-weight:600;margin:1rem 0 .6rem">Fix history</h2>
+<div class="lib-card">
+  {% if fix_history %}
+  {% for f in fix_history %}
+  <div class="lib-row" style="display:block">
+    <b>{{ f.action }}</b> · {{ f.state }}{% if f.dry_run %} · <span class="lib-sub">dry run</span>{% endif %}
+    <span class="lib-sub">{{ f.time_ist or f.created_at }}{% if f.stem %} · {{ f.stem }}{% endif %}</span><br>
+    <span class="lib-sub">Before:</span> {{ f.old_caption_text or f.old_caption }}<br>
+    <span class="lib-sub">After:</span> {{ f.new_caption_text or f.new_caption }}{% if f.error %}<br>
+    <span class="lib-sub">Error: {{ f.error }}</span>{% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="lib-sub">No fixes recorded yet.</p>
+  {% endif %}
+</div>
+
 <h2 style="font-size:1.05rem;font-weight:600;margin:1rem 0 .6rem">Series records &amp; aliases</h2>
 <div class="lib-card">
   {% if records %}

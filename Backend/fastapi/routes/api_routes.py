@@ -1784,6 +1784,11 @@ async def get_settings_api() -> dict:
     data["session_secret"] = ""
     data["librarian_api_token_hash_set"] = bool(data.get("librarian_api_token_hash"))
     data["librarian_api_token_hash"] = ""
+    #----- Writer token (Phase 4, security W-5 point 1): a usable
+    #----- credential, blanked like the hash; fingerprint / bot id /
+    #----- username stay — they are the display path (W-4).
+    data["librarian_writer_token_set"] = bool(data.get("librarian_writer_token"))
+    data["librarian_writer_token"] = ""
 
     try:
         data["database_list"] = db.get_database_list()
@@ -1862,6 +1867,25 @@ async def update_settings_api(payload: dict) -> dict:
                 detail="librarian_api_token_hash is not settable via settings — use the token generate/rotate action.")
     if "librarian_agent_last_seen" in payload:
         del payload["librarian_agent_last_seen"]
+
+    #----- Librarian writer keys get the same treatment (Phase 4,
+    #----- security W-2/W-4): they are owned by the dedicated
+    #----- writer-token action, so a payload must neither set the
+    #----- credential nor forge the identity binding the action
+    #----- establishes. Empty means "leave unchanged" (deleted);
+    #----- anything else rejects the whole save, naming the action.
+    for _writer_key in ("librarian_writer_token",
+                        "librarian_writer_token_fingerprint",
+                        "librarian_writer_bot_id",
+                        "librarian_writer_bot_username"):
+        if _writer_key in payload:
+            _writer_value = payload[_writer_key]
+            if _writer_value is None or (isinstance(_writer_value, str)
+                                         and not _writer_value.strip()):
+                del payload[_writer_key]
+            else:
+                raise HTTPException(status_code=400,
+                    detail=f"{_writer_key} is not settable via settings — use the writer-token action.")
 
     #----- Type coercion and validation
     bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster", "buffer_enabled", "buffer_adaptive"}

@@ -41,7 +41,16 @@ async def _ensure_indexes():
     await librarian_store.ensure_indexes()
 
 
-router = APIRouter(tags=["librarian"], on_startup=[_ensure_indexes])
+async def _reconcile_fixes():
+    # §8 restart reconciliation (Phase 4, §4.3.6 belt one; the
+    # engine's init guard is belt two): terminalise any operation
+    # row a killed process left non-terminal, before fixes serve.
+    from Backend.helper import librarian_engine
+
+    await librarian_engine.reconcile_on_startup()
+
+
+router = APIRouter(tags=["librarian"], on_startup=[_ensure_indexes, _reconcile_fixes])
 templates = Jinja2Templates(directory="Backend/fastapi/templates")
 
 
@@ -269,7 +278,12 @@ async def librarian_status(request: Request):
     body["budget"] = await _budget(settings)
     body["counts"] = await librarian_store.count_by_status()
     body["userbot"] = "present" if botmod.Userbot is not None else "absent"
-    body["bot"] = "absent"  # Phase 3: no writer-token setting exists (plan OQ-1)
+    # W-6 derivation, purely local: present iff a writer token is
+    # stored AND the bot id bound to it at set time (via getMe) is
+    # stored. Claims nothing about present-day validity at Telegram.
+    body["bot"] = ("present" if (settings.librarian_writer_token
+                                 and settings.librarian_writer_bot_id)
+                   else "absent")
     # Pinned field order: enabled, mode, test_mode, writes_enabled,
     # budget, channels, channel_types, counts, userbot, bot.
     ordered = {
@@ -301,8 +315,166 @@ async def librarian_mode(request: Request):
 
 
 # ------------------------------------------------------------------
-# Not-implemented stubs (§6.7): fix / fix-batch / undo / scan
+# Fix / fix-batch (Phase 4, §4.5): validation, then the test-mode
+# engine. undo / scan keep the Phase 3 stub (§4.5.3).
 # ------------------------------------------------------------------
+
+_ID_FIELD_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_TV_FAMILY_TYPES = ("tv", "anime", "donghua", "cartoon", "drama",
+                    "ova", "special")
+
+
+def _valid_id_field(value):
+    """Security A-3: non-empty string, ≤ 64 chars, [A-Za-z0-9_-]."""
+    return (isinstance(value, str) and bool(value) and len(value) <= 64
+            and _ID_FIELD_RE.match(value) is not None)
+
+
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _valid_numbering(value):
+    """{season: int, episode: int} or {absolute: int} — exactly one
+    of the two shapes (§8 request contract)."""
+    if not isinstance(value, dict):
+        return False
+    if "absolute" in value:
+        return set(value) == {"absolute"} and _is_int(value["absolute"])
+    return (set(value) == {"season", "episode"}
+            and _is_int(value["season"]) and _is_int(value["episode"]))
+
+
+def _validate_fix_item(body):
+    """§4.5.1 shape rules, enforced before any store access (A-3).
+    Returns an error message naming the field, or None."""
+    if not isinstance(body, dict):
+        return "fix item must be a JSON object"
+    if not _valid_id_field(body.get("request_id")):
+        return ("request_id must be a non-empty string of at most 64 "
+                "characters using [A-Za-z0-9_-]")
+    for field in ("chat_id", "msg_id"):
+        if not _is_int(body.get(field)):
+            return f"{field} must be an integer"
+    if not isinstance(body.get("expected_caption"), str):
+        return "expected_caption must be a string"
+    if not isinstance(body.get("new_caption"), str) or not body["new_caption"]:
+        return "new_caption must be a non-empty string"
+    ids = body.get("expected_ids")
+    if not isinstance(ids, dict) or not ids:
+        return "expected_ids must be an object with at least one of tmdb / imdb"
+    if set(ids) - {"tmdb", "imdb"}:
+        return "expected_ids may carry only tmdb / imdb"
+    if "tmdb" in ids and not _is_int(ids["tmdb"]):
+        return "expected_ids.tmdb must be an integer"
+    if "imdb" in ids and not (isinstance(ids["imdb"], str)
+                              and ids["imdb"].startswith("tt")):
+        return "expected_ids.imdb must be a tt… string"
+    if "tmdb" not in ids and "imdb" not in ids:
+        return "expected_ids must carry at least one of tmdb / imdb"
+    record_id = body.get("series_record_id")
+    updated_at = body.get("series_record_updated_at")
+    if (record_id is None) != (updated_at is None):
+        return "series_record_id and series_record_updated_at must be sent together"
+    if record_id is not None:
+        if (not isinstance(record_id, str)
+                or not re.fullmatch(r"[0-9a-fA-F]{24}", record_id)):
+            return "series_record_id must be a 24-hex ObjectId string"
+        try:
+            text = str(updated_at).strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            datetime.fromisoformat(text)
+        except (TypeError, ValueError):
+            return "series_record_updated_at must be an ISO 8601 timestamp"
+    if body.get("placement") is not None:
+        if record_id is None:
+            return ("placement requires series_record_id and "
+                    "series_record_updated_at")
+        if not _valid_numbering(body["placement"]):
+            return "placement must be {season, episode} or {absolute}"
+    intended = body.get("intended")
+    if intended is not None and not _valid_numbering(intended):
+        return "intended must be {season, episode} or {absolute}"
+    # `intended` is required when the channel's stored type is in
+    # the TV family (§4.5.1; the stored type map is the only source,
+    # §9). This reads settings, not the store.
+    from Backend.helper.settings_manager import SettingsManager
+
+    channel_type = (SettingsManager.current().librarian_channel_types
+                    .get(str(body["chat_id"])))
+    if channel_type in _TV_FAMILY_TYPES and intended is None:
+        return f"intended is required for {channel_type} channels"
+    return None
+
+
+def _fix_result_body(result):
+    """Engine result -> response body. A persisted operation goes
+    through the _fix_item projection (plus would_be_action when the
+    engine reports one); a step-1 refusal / per-item not_found is
+    the small {request_id, state, error} shape (§8 step 1)."""
+    if "source_locator" in result:
+        body = _fix_item(result)
+        if result.get("would_be_action") is not None:
+            body["would_be_action"] = result["would_be_action"]
+        return body
+    return {"request_id": result.get("request_id"),
+            "state": result.get("state"),
+            "error": result.get("error")}
+
+
+@router.post("/api/librarian/fix")
+async def librarian_fix(request: Request):
+    err = await _require_token(request)
+    if err is not None:
+        return err
+    body, body_err = await _body_json(request)
+    if body_err is not None:
+        return body_err
+    problem = _validate_fix_item(body)
+    if problem is not None:
+        return _error(400, problem)
+    from Backend.helper import librarian_engine
+
+    result = await librarian_engine.fix_one(body)
+    if result.get("state") == "not_found":
+        return _error(404, result["error"])
+    return _json(200, _fix_result_body(result))
+
+
+@router.post("/api/librarian/fix-batch")
+async def librarian_fix_batch(request: Request):
+    err = await _require_token(request)
+    if err is not None:
+        return err
+    body, body_err = await _body_json(request)
+    if body_err is not None:
+        return body_err
+    if not _valid_id_field(body.get("batch_id")):
+        return _error(400, "batch_id must be a non-empty string of at "
+                           "most 64 characters using [A-Za-z0-9_-]")
+    serial = body.get("serial", True)
+    if not isinstance(serial, bool):
+        return _error(400, "serial must be a boolean")
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        return _error(400, "items must be a non-empty list")
+    # Validation is atomic (§4.5.2): every item is schema-validated
+    # upfront; any failure 400s the whole batch before any persist.
+    for item in items:
+        problem = _validate_fix_item(item)
+        if problem is not None:
+            return _error(400, problem)
+    from Backend.helper import librarian_engine
+
+    result = await librarian_engine.fix_batch(
+        {"batch_id": body["batch_id"], "serial": serial, "items": items})
+    return _json(200, {
+        "batch_id": result["batch_id"],
+        "serial": result["serial"],
+        "results": [_fix_result_body(r) for r in result["results"]],
+    })
+
 
 async def _not_implemented(request):
     err = await _require_token(request)
@@ -312,16 +484,6 @@ async def _not_implemented(request):
     if body_err is not None:
         return body_err
     return _json(200, {"state": "not_implemented"})
-
-
-@router.post("/api/librarian/fix")
-async def librarian_fix(request: Request):
-    return await _not_implemented(request)
-
-
-@router.post("/api/librarian/fix-batch")
-async def librarian_fix_batch(request: Request):
-    return await _not_implemented(request)
 
 
 @router.post("/api/librarian/undo")
@@ -997,6 +1159,100 @@ async def librarian_token_generate(request: Request, _: bool = Depends(require_a
     })
 
 
+#----- Writer-token set/clear (Phase 4, security W-2/W-3/W-7) —
+#----- session-authed like the pairing action above, and the second
+#----- sanctioned SettingsManager.update() call in the plugin. The
+#----- candidate is validated with Telegram (getMe, via the existing
+#----- _resolve_bot_identity) BEFORE anything persists; on success
+#----- one update() persists token + fingerprint + bot id + username
+#----- atomically. The token is never echoed: Yan supplied it; the
+#----- app confirms the identity it resolved to. In Phase 4 the
+#----- token makes no engine call (W-8) — the getMe here is the only
+#----- call it ever makes. Rotation = set with a new token; in-app
+#----- rotation does NOT revoke the old token at Telegram — only
+#----- BotFather /revoke does (W-7).
+
+# The tree's own bot-token shape (Backend/helper/own_bots.py TOKEN_RE),
+# copied as a constant: own_bots imports Backend.db at module load and
+# must not be top-level-imported here.
+_WRITER_TOKEN_RE = re.compile(r"^\d{5,}:[\w-]{30,}$")
+
+
+async def _writer_identity_collides(user_id):
+    """(collides, checked): does user_id equal the streaming bot's id
+    or a started pool bot's id (§18-D10 — the writer must be the
+    distinct Media Manager bot)? `checked` is False when neither
+    identity is available at set time; W-3 then skips the sub-check
+    and the caller logs that fact — never a silent pass."""
+    import Backend.pyrofork.bot as botmod
+
+    ids = set()
+    stream = getattr(botmod, "StreamBot", None)
+    me = getattr(stream, "me", None) if stream is not None else None
+    if me is not None and getattr(me, "id", None):
+        ids.add(int(me.id))
+    for client in (getattr(botmod, "multi_clients", None) or {}).values():
+        cme = getattr(client, "me", None)
+        if cme is not None and getattr(cme, "id", None):
+            ids.add(int(cme.id))
+    return (user_id in ids), bool(ids)
+
+
+@router.post("/admin/librarian/writer-token")
+async def librarian_writer_token_set(request: Request, _: bool = Depends(require_auth)):
+    body, body_err = await _body_json(request)
+    if body_err is not None:
+        return body_err
+    token = body.get("token")
+    if not isinstance(token, str) or not token.strip():
+        return _error(400, "a writer token is required — nothing was saved")
+    token = token.strip()
+    if not _WRITER_TOKEN_RE.match(token):
+        return _error(400, "that does not look like a bot token — nothing was saved")
+    # Lazy import (the get_scan_manager precedent at the scan-status
+    # route): api_routes is a seam module this router never imports
+    # at top level. _resolve_bot_identity logs nothing — its URL
+    # embeds the token (W-5 point 4).
+    from Backend.fastapi.routes.api_routes import _resolve_bot_identity
+
+    identity = await _resolve_bot_identity(token)
+    if identity is None:
+        return _error(400, "could not verify that token with Telegram — nothing was saved")
+    collides, checked = await _writer_identity_collides(identity["user_id"])
+    if collides:
+        return _error(400, "that token belongs to the streaming bot or a pool bot — "
+                           "the writer must be the separate Media Manager bot; nothing was saved")
+    if not checked:
+        LOGGER.warning("librarian: writer token set without the streaming/pool "
+                       "identity check — no client identities were available")
+    from Backend import db
+    from Backend.helper.settings_manager import SettingsManager
+
+    fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+    await SettingsManager.update(db, {
+        "librarian_writer_token": token,
+        "librarian_writer_token_fingerprint": fingerprint,
+        "librarian_writer_bot_id": identity["user_id"],
+        "librarian_writer_bot_username": identity["username"],
+    })
+    return _json(200, {"set": True, "username": identity["username"],
+                       "fingerprint": fingerprint})
+
+
+@router.delete("/admin/librarian/writer-token")
+async def librarian_writer_token_clear(request: Request, _: bool = Depends(require_auth)):
+    from Backend import db
+    from Backend.helper.settings_manager import SettingsManager
+
+    await SettingsManager.update(db, {
+        "librarian_writer_token": "",
+        "librarian_writer_token_fingerprint": "",
+        "librarian_writer_bot_id": 0,
+        "librarian_writer_bot_username": "",
+    })
+    return _json(200, {"set": False})
+
+
 # ------------------------------------------------------------------
 # Page operator actions (§6.8) + the /admin/librarian page (§6.10)
 # ------------------------------------------------------------------
@@ -1115,6 +1371,18 @@ async def librarian_page(request: Request, _: bool = Depends(require_auth)):
             "escalation_reason": row.get("escalation_reason"),
         })
 
+    # Fix history (§11, Phase 4 §4.6): newest 50 fix rows through
+    # the _fix_item projection + IST time, extended with the text
+    # caption forms and stem from the raw row for the template.
+    fix_history = []
+    for r in await librarian_store.list_history(limit=50):
+        item = _fix_item(r)
+        item["time_ist"] = _format_last_seen(r.get("created_at"))
+        item["old_caption_text"] = r.get("old_caption_text")
+        item["new_caption_text"] = r.get("new_caption_text")
+        item["stem"] = r.get("stem")
+        fix_history.append(item)
+
     records = []
     for rec in await librarian_store.list_records(limit=100):
         out = _record_out(rec)
@@ -1154,6 +1422,7 @@ async def librarian_page(request: Request, _: bool = Depends(require_auth)):
         "page": page_no,
         "total_pages": total_pages,
         "escalated": escalated,
+        "fix_history": fix_history,
         "records": records,
         "aliases": aliases,
         "channels": channels,

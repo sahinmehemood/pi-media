@@ -306,6 +306,14 @@ async def tools_page(request: Request, _: bool = Depends(require_auth)):
 async def settings_page(request: Request, _: bool = Depends(require_auth)):
     settings = SettingsManager.current().to_dict()
     settings["admin_password"] = ""
+    #----- Phase 4, security Low 1 scoped fix (C-2): the settings dict
+    #----- enters the Jinja context whole, so usable credentials are
+    #----- blanked here, not left to template discipline — the writer
+    #----- token is a plaintext credential, the pairing hash and the
+    #----- session secret ride along in the same fix.
+    settings["librarian_writer_token"] = ""
+    settings["librarian_api_token_hash"] = ""
+    settings["session_secret"] = ""
     try:
         settings["database_list"] = db.get_database_list()
     except Exception:

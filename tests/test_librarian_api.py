@@ -355,6 +355,11 @@ _SETTINGS_DEFAULTS = {
     "librarian_channels": [],
     "librarian_channel_types": {},
     "librarian_api_token_hash": "",
+    # Phase 4 writer keys (settings_manager.py _DEFAULTS values).
+    "librarian_writer_token": "",
+    "librarian_writer_token_fingerprint": "",
+    "librarian_writer_bot_id": 0,
+    "librarian_writer_bot_username": "",
     "admin_password": "",
     "session_secret": "",
     "channel_titles": {},
@@ -408,6 +413,26 @@ class FakeSettings:
     @property
     def librarian_api_token_hash(self):
         return str(self._d.get("librarian_api_token_hash") or "")
+
+    # Phase 4 writer accessors (formulas copied from settings_manager.py).
+    @property
+    def librarian_writer_token(self):
+        return str(self._d.get("librarian_writer_token") or "")
+
+    @property
+    def librarian_writer_token_fingerprint(self):
+        return str(self._d.get("librarian_writer_token_fingerprint") or "")
+
+    @property
+    def librarian_writer_bot_id(self):
+        try:
+            return int(self._d.get("librarian_writer_bot_id") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def librarian_writer_bot_username(self):
+        return str(self._d.get("librarian_writer_bot_username") or "")
 
     @property
     def channel_titles(self):
@@ -586,6 +611,9 @@ class FakeAPIRouter:
 
     def post(self, path, dependencies=None, **kw):
         return self._add("POST", path, dependencies)
+
+    def delete(self, path, dependencies=None, **kw):
+        return self._add("DELETE", path, dependencies)
 
     def route_map(self):
         return {(m, p): fn for m, p, fn, _ in self.routes}
@@ -1531,8 +1559,10 @@ def test_status_and_mode_shapes():
 def test_stub_routes_not_implemented():
     _reset_api()
     _enable()
-    for path in ("/api/librarian/fix", "/api/librarian/fix-batch",
-                 "/api/librarian/undo", "/api/librarian/scan"):
+    # Phase 4 (§4.5.3): undo / scan keep the stub verbatim; fix and
+    # fix-batch are real from Phase 4 and are covered by
+    # tests/test_librarian_engine.py instead.
+    for path in ("/api/librarian/undo", "/api/librarian/scan"):
         resp = _call("POST", path, _authed_req(body={"request_id": "u-1"}))
         assert resp.status_code == 200, path
         assert resp.content == {"state": "not_implemented"}, path

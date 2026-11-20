@@ -28,6 +28,7 @@ REF="${2:-master}"
 PLUGIN_FILES=(
   Backend/helper/librarian_store.py
   Backend/helper/librarian_gateway.py
+  Backend/helper/librarian_engine.py
   Backend/fastapi/librarian_routes.py
   Backend/fastapi/templates/librarian.html
   tools/librarian_cli.py
@@ -107,6 +108,9 @@ PLUGIN_FILES=(
   tests/test_wave2_update_manager.py
   tests/test_librarian_store.py
   tests/test_librarian_dbname.py
+  tests/test_librarian_writer.py
+  tests/test_librarian_engine.py
+  tests/test_librarian_templates.py
   tools/chief-profile/SOUL.md
   tools/chief-profile/AGENTS.md
   tools/chief-profile/memories/MEMORY.md

@@ -97,6 +97,13 @@ _DEFAULTS: Dict[str, Any] = {
     "librarian_channels": [],
     "librarian_channel_types": {},
     "librarian_api_token_hash": "",
+    #----- Writer token (Phase 4, security W-1): plaintext by design —
+    #----- the engine must wield it (Phase 5); redaction is the entire
+    #----- protection (W-5). Set only via the writer-token action.
+    "librarian_writer_token": "",
+    "librarian_writer_token_fingerprint": "",
+    "librarian_writer_bot_id": 0,
+    "librarian_writer_bot_username": "",
 }
 
 
@@ -244,6 +251,25 @@ class Settings:
     @property
     def librarian_api_token_hash(self) -> str:
         return str(self._d.get("librarian_api_token_hash") or "")
+
+    @property
+    def librarian_writer_token(self) -> str:
+        return str(self._d.get("librarian_writer_token") or "")
+
+    @property
+    def librarian_writer_token_fingerprint(self) -> str:
+        return str(self._d.get("librarian_writer_token_fingerprint") or "")
+
+    @property
+    def librarian_writer_bot_id(self) -> int:
+        try:
+            return int(self._d.get("librarian_writer_bot_id") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def librarian_writer_bot_username(self) -> str:
+        return str(self._d.get("librarian_writer_bot_username") or "")
 
     @property
     def dl_channel_id(self):

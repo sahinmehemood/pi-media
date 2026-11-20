@@ -12,7 +12,13 @@ from Backend.logger import LOGGER
 
 #----- Never export/restore credentials; everything else (incl. extra DBs and
 #----- bot tokens) is included so a backup can fully migrate a deployment.
-_SETTINGS_EXCLUDE = {"admin_password", "session_secret", "librarian_api_token_hash"}
+_SETTINGS_EXCLUDE = {"admin_password", "session_secret", "librarian_api_token_hash",
+                     # Phase 4 (security W-2/W-4): the writer credential and
+                     # its fingerprint never ride a backup — a restore must
+                     # not resurrect a superseded writer token.
+                     "librarian_writer_token", "librarian_writer_token_fingerprint",
+                     # Runtime state, not configuration (security C-3).
+                     "librarian_agent_last_seen"}
 
 #----- backup section -> tracking collection
 _COLLECTIONS = {
