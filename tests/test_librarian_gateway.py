@@ -32,8 +32,8 @@ class FakeCache:
 
 
 def _deps(**over):
-    async def tmdb_candidates(q):
-        return [{"title": "Perfect World", "year": 2021,
+    async def tmdb_candidates(q, kind):
+        return [{"title": "Perfect World", "year": 2021, "source": "tmdb",
                  "tmdb_id": 999, "imdb_id": "tt14986786",
                  "media_type": "tv"}]
 
@@ -114,7 +114,7 @@ def test_lookup_anilist_titles_bridge_dual_names():
 def test_lookup_outage_is_honest_and_uncached():
     deps = _deps()
 
-    async def boom(q):
+    async def boom(q, kind):
         raise RuntimeError("connection reset")
     deps.tmdb_candidates = boom
     out = _run(gw.lookup(deps, "Perfect World", "donghua"))

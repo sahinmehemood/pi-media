@@ -48,7 +48,7 @@ class GwDeps:
                  tvdb_extended, cinemeta_search, cinemeta_detail,
                  kitsu_search, kitsu_mappings, http_post, http_get,
                  cache):
-        self.tmdb_candidates = tmdb_candidates  # async q -> [cand]
+        self.tmdb_candidates = tmdb_candidates  # async (q, kind) -> [cand]
         self.tvdb_search = tvdb_search          # async title -> dict|None
         self.tvdb_episodes = tvdb_episodes      # async (id, order) -> [ep]
         self.tvdb_extended = tvdb_extended      # async id -> dict|None
@@ -81,8 +81,13 @@ def real_deps() -> GwDeps:
         r.raise_for_status()
         return r.json()
 
+    async def candidates(query, kind):
+        if kind == "movie":
+            return await entry.search_movie_candidates(query)
+        return await entry.search_tv_candidates(query)
+
     return GwDeps(
-        tmdb_candidates=entry.search_any_candidates,
+        tmdb_candidates=candidates,
         tvdb_search=tvdb.search,
         tvdb_episodes=tvdb._iter_series_episodes,
         tvdb_extended=tvdb.series_extended,
@@ -182,13 +187,15 @@ def _merge(cands: list, cand: dict):
 
 
 async def lookup(deps: GwDeps, name: str, media_type: str = ""):
+    import asyncio
+
     key = f"lookup:{media_type}:{name.strip().lower()}"
     hit = await _cache_get(deps, key)
     if hit is not None:
         return {**hit, "cached": True}
     kind = (media_type or "").lower()
     animeish = kind in ("anime", "donghua")
-    cands, down = [], []
+    down = []
 
     async def guard(provider, coro):
         try:
@@ -197,46 +204,44 @@ async def lookup(deps: GwDeps, name: str, media_type: str = ""):
             down.append(provider)
             return None
 
-    # TMDB (+Cinemeta) — western & movie identity; also searched for
-    # donghua (joint ownership) and as a general fallback.
+    # All providers are independent — run them concurrently.
+    jobs = {}
     if kind != "anime":
-        rows = await guard("tmdb", deps.tmdb_candidates(name))
-        for r in rows or []:
-            c = _blank_candidate()
-            c["ids"] = {"tmdb": r.get("tmdb_id"), "imdb": r.get("imdb_id")}
-            c["titles"]["canonical"] = r.get("title")
-            c["year"] = r.get("year") or None
-            c["media_type"] = r.get("media_type")
-            c["sources"] = ["tmdb"]
-            _merge(cands, c)
-        hits = await guard("cinemeta", deps.cinemeta_search(
-            name, "movie" if kind == "movie" else "tvSeries"))
-        for h in hits or []:
-            c = _blank_candidate()
-            c["ids"] = {"imdb": h.get("id")}
-            c["titles"]["canonical"] = h.get("title")
-            c["year"] = h.get("year") or None
-            c["sources"] = ["cinemeta"]
-            _merge(cands, c)
-    # AniList — anime/donghua identity + the title bridge.
+        # entry's candidate search already blends TMDB + Cinemeta and
+        # labels each row with its own provider.
+        jobs["tmdb"] = guard("tmdb", deps.tmdb_candidates(
+            name, "movie" if kind == "movie" else "tv"))
     if animeish or not kind:
-        rows = await guard("anilist", anilist_search(deps, name))
-        for m in rows or []:
-            t = m.get("title") or {}
-            c = _blank_candidate()
-            c["ids"] = {"anilist": m.get("id"), "mal": m.get("idMal")}
-            c["titles"] = {
-                "canonical": t.get("userPreferred") or t.get("romaji"),
-                "native": t.get("native"), "english": t.get("english"),
-                "synonyms": list(m.get("synonyms") or [])}
-            if t.get("romaji") and t["romaji"] not in c["titles"]["synonyms"]:
-                c["titles"]["synonyms"].append(t["romaji"])
-            c["year"] = m.get("seasonYear")
-            c["media_type"] = kind or "anime"
-            c["sources"] = ["anilist"]
-            _merge(cands, c)
-    # TVDB — best single record (it carries aliases + remote ids).
-    row = await guard("tvdb", deps.tvdb_search(name))
+        jobs["anilist"] = guard("anilist", anilist_search(deps, name))
+    jobs["tvdb"] = guard("tvdb", deps.tvdb_search(name))
+    if animeish:
+        jobs["jikan"] = guard("jikan", jikan_search(deps, name))
+    results = dict(zip(jobs.keys(), await asyncio.gather(*jobs.values())))
+
+    cands = []
+    for r in results.get("tmdb") or []:
+        c = _blank_candidate()
+        c["ids"] = {"tmdb": r.get("tmdb_id"), "imdb": r.get("imdb_id")}
+        c["titles"]["canonical"] = r.get("title")
+        c["year"] = r.get("year") or None
+        c["media_type"] = r.get("media_type")
+        c["sources"] = [r.get("source") or "tmdb"]
+        _merge(cands, c)
+    for m in results.get("anilist") or []:
+        t = m.get("title") or {}
+        c = _blank_candidate()
+        c["ids"] = {"anilist": m.get("id"), "mal": m.get("idMal")}
+        c["titles"] = {
+            "canonical": t.get("userPreferred") or t.get("romaji"),
+            "native": t.get("native"), "english": t.get("english"),
+            "synonyms": list(m.get("synonyms") or [])}
+        if t.get("romaji") and t["romaji"] not in c["titles"]["synonyms"]:
+            c["titles"]["synonyms"].append(t["romaji"])
+        c["year"] = m.get("seasonYear")
+        c["media_type"] = kind or "anime"
+        c["sources"] = ["anilist"]
+        _merge(cands, c)
+    row = results.get("tvdb")
     if row:
         c = _blank_candidate()
         imdb_id, tmdb_id = _tvdb_remote_ids(row)
@@ -248,21 +253,18 @@ async def lookup(deps: GwDeps, name: str, media_type: str = ""):
         c["year"] = row.get("year") or None
         c["sources"] = ["tvdb"]
         _merge(cands, c)
-    # Jikan — MAL-side titles for anime/donghua.
-    if animeish:
-        rows = await guard("jikan", jikan_search(deps, name))
-        for a in rows or []:
-            c = _blank_candidate()
-            c["ids"] = {"mal": a.get("mal_id")}
-            c["titles"] = {
-                "canonical": a.get("title"), "native": a.get("title_japanese"),
-                "english": a.get("title_english"),
-                "synonyms": [t.get("title") for t in (a.get("titles") or [])
-                             if t.get("title")]}
-            c["year"] = a.get("year")
-            c["media_type"] = kind
-            c["sources"] = ["jikan"]
-            _merge(cands, c)
+    for a in results.get("jikan") or []:
+        c = _blank_candidate()
+        c["ids"] = {"mal": a.get("mal_id")}
+        c["titles"] = {
+            "canonical": a.get("title"), "native": a.get("title_japanese"),
+            "english": a.get("title_english"),
+            "synonyms": [t.get("title") for t in (a.get("titles") or [])
+                         if t.get("title")]}
+        c["year"] = a.get("year")
+        c["media_type"] = kind
+        c["sources"] = ["jikan"]
+        _merge(cands, c)
     out = {"ok": True, "candidates": cands, "providers_down": down}
     if not down:
         await _cache_put(deps, key, out, "lookup")
