@@ -245,7 +245,7 @@ async def lookup(deps: GwDeps, name: str, media_type: str = ""):
     if row:
         c = _blank_candidate()
         imdb_id, tmdb_id = _tvdb_remote_ids(row)
-        c["ids"] = {"tvdb": row.get("id") or row.get("tvdb_id"),
+        c["ids"] = {"tvdb": _tvdb_numeric_id(row),
                     "imdb": imdb_id, "tmdb": tmdb_id}
         c["titles"]["canonical"] = row.get("name")
         c["titles"]["synonyms"] = [a for a in (row.get("aliases") or [])
@@ -269,6 +269,21 @@ async def lookup(deps: GwDeps, name: str, media_type: str = ""):
     if not down:
         await _cache_put(deps, key, out, "lookup")
     return out
+
+
+def _tvdb_numeric_id(row: dict):
+    """TVDB search rows carry both a slug id ('series-333354') and
+    the numeric tvdb_id — always emit the number."""
+    import re
+    for raw in (row.get("tvdb_id"), row.get("id")):
+        if raw is None:
+            continue
+        if isinstance(raw, int):
+            return raw
+        m = re.search(r"(\d+)", str(raw))
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def _tvdb_remote_ids(doc: dict):

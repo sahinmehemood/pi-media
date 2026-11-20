@@ -38,7 +38,8 @@ def _deps(**over):
                  "media_type": "tv"}]
 
     async def tvdb_search(title):
-        return {"id": 555, "name": "Perfect World",
+        return {"id": "series-555", "tvdb_id": "555",
+                "name": "Perfect World",
                 "aliases": ["Wanmei Shijie"],
                 "remoteIds": [{"sourceName": "IMDb", "id": "tt14986786"},
                               {"sourceName": "TheMovieDB", "id": "999"}]}
