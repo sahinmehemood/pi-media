@@ -149,25 +149,28 @@ def real_deps() -> Deps:
                 for d in (res or {}).get("results") or []]
 
     async def copy_message(chat_id, msg_id, caption):
+        # pyrofork's copy_message silently no-ops on these posts
+        # (returns None, nothing lands — proven live 2026-11-20).
+        # Re-send the file by its file_id instead: read the message,
+        # take the media's file_id, post it fresh with the new
+        # caption. Same file, new post, observable result.
         from Backend.pyrofork import bot as botmod
         client = botmod.Userbot or botmod.StreamBot
-        which = "userbot" if botmod.Userbot is not None else "streambot"
-        sent = await client.copy_message(
-            chat_id, chat_id, msg_id, caption=caption)
+        msg = await client.get_messages(chat_id, msg_id)
+        media = (getattr(msg, "document", None) or getattr(msg, "video", None)
+                 or getattr(msg, "audio", None) or getattr(msg, "photo", None))
+        if media is None:
+            raise RuntimeError("the file has no media to repost")
+        if hasattr(client, "send_cached_media"):
+            sent = await client.send_cached_media(
+                chat_id, media.file_id, caption=caption)
+        else:
+            sent = await client.send_document(
+                chat_id, media.file_id, caption=caption)
         new_id = getattr(sent, "id", None)
-        if new_id:
-            return new_id
-        # Some client builds return None for a copy; confirm by
-        # finding the post carrying the new caption among the
-        # channel's newest posts.
-        for _ in range(10):
-            async for m in client.get_chat_history(chat_id, limit=15):
-                if (m.caption or "") == caption:
-                    return m.id
-            await asyncio.sleep(1.0)
-        raise RuntimeError(
-            f"copy via {which} returned no id and no matching post "
-            f"appeared in the channel's newest 15 posts")
+        if not new_id:
+            raise RuntimeError("repost sent but returned no message id")
+        return new_id
 
     async def delete_message(chat_id, msg_id):
         from Backend.pyrofork import bot as botmod
