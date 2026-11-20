@@ -402,6 +402,17 @@ def test_repost_copy_that_does_not_index_is_removed():
     assert deps.ledger.docs[0]["status"] == "open"  # nothing changed
 
 
+def test_fix_refuses_when_post_is_gone():
+    deps = _deps()
+
+    async def gone(chat, msg):
+        return None
+    deps.read_caption = gone
+    out = _run(ls.fix(deps, ANI, 101, NEW, OLD, key="k1", stem="pw"))
+    assert not out["ok"] and "no longer exist" in out["message"]
+    assert deps._state["captions"][(ANI, 101)] == OLD  # untouched
+
+
 def test_recent_fixes_newest_first():
     deps = _deps()
     deps.fixes.docs.append({"chat_id": ANI, "msg_id": 1, "before": "a",

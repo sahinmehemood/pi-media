@@ -286,7 +286,14 @@ async def fix(deps: Deps, chat_id, msg_id, new_caption, expected_caption,
         return {"ok": False,
                 "message": f"Daily edit budget spent ({today}/{budget})."}
     live = await deps.read_caption(chat_id, msg_id)
-    if live is not None and live != expected_caption:
+    if live is None:
+        # The drift check needs a live read. A missing read means
+        # the post is gone (or unreadable) — the waiting pile holds
+        # such ghosts, and editing blind is how wrong files happen.
+        return {"ok": False,
+                "message": "Could not read the file's current caption "
+                           "— the post may no longer exist."}
+    if live != expected_caption:
         return {"ok": False,
                 "message": "Caption changed by someone else — fix refused.",
                 "live_caption": live}
