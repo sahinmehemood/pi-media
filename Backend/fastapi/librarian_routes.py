@@ -315,9 +315,9 @@ async def librarian_mode(request: Request):
 
 
 # ------------------------------------------------------------------
-# Fix / fix-batch (Phase 4, §4.5): validation, then the test-mode
-# engine. undo keeps the Phase 3 stub (§4.5.3); scan is real from
-# Phase 5 Workstream D (§5.2 of the Phase 5 plan).
+# Fix / fix-batch (Phase 4, §4.5): validation, then the engine.
+# Undo is real from Phase 5 Workstream C (§4.3 of the Phase 5
+# plan); scan is real from Phase 5 Workstream D (§5.2).
 # ------------------------------------------------------------------
 
 _ID_FIELD_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -397,15 +397,37 @@ def _validate_fix_item(body):
     intended = body.get("intended")
     if intended is not None and not _valid_numbering(intended):
         return "intended must be {season, episode} or {absolute}"
-    # `intended` is required when the channel's stored type is in
-    # the TV family (§4.5.1; the stored type map is the only source,
-    # §9). This reads settings, not the store.
-    from Backend.helper.settings_manager import SettingsManager
+    # The `intended`-required check is NOT here: Phase 5 (§2.5,
+    # C-2) keys it to the referenced series record's stored
+    # media_type, which needs a store load — see
+    # _check_intended_against_record, run by both handlers after
+    # this shape validation. The retired channel-type map is no
+    # longer consulted for it (or for anything).
+    return None
 
-    channel_type = (SettingsManager.current().librarian_channel_types
-                    .get(str(body["chat_id"])))
-    if channel_type in _TV_FAMILY_TYPES and intended is None:
-        return f"intended is required for {channel_type} channels"
+
+async def _check_intended_against_record(body):
+    """Phase 5 §2.5 (C-2): `intended` is required when the fix
+    references a series record whose stored `media_type` is in
+    the TV family — enforcement keyed to the referenced record,
+    never to the retired channel-type map (§2.11 as amended).
+    Runs only when a record is referenced and `intended` is
+    absent; a missing record is the engine's step-1 refusal, not
+    a route 400. Returns an error message naming `intended`, or
+    None."""
+    if body.get("intended") is not None:
+        return None
+    record_id = body.get("series_record_id")
+    if record_id is None:
+        return None
+    from bson import ObjectId
+
+    from Backend.helper import librarian_store
+
+    record = await librarian_store.get_record_by_id(ObjectId(record_id))
+    if record is not None and record.get("media_type") in _TV_FAMILY_TYPES:
+        return (f"intended is required for {record['media_type']} "
+                f"series records")
     return None
 
 
@@ -418,6 +440,16 @@ def _fix_result_body(result):
         body = _fix_item(result)
         if result.get("would_be_action") is not None:
             body["would_be_action"] = result["would_be_action"]
+        # Tech Lead Q2 ruling (a): the engine's structured
+        # retry_after (§2.2 item 2: "in the result body and in
+        # error as plain words") is projected here, in this
+        # branch only — _fix_item is shared with history/page,
+        # whose persisted rows never carry retry_after (it is a
+        # result-body-only field, never persisted; an idempotent
+        # replay of a flood_wait row therefore surfaces the
+        # seconds in `error` prose only, by design).
+        if result.get("retry_after") is not None:
+            body["retry_after"] = result["retry_after"]
         return body
     return {"request_id": result.get("request_id"),
             "state": result.get("state"),
@@ -433,6 +465,9 @@ async def librarian_fix(request: Request):
     if body_err is not None:
         return body_err
     problem = _validate_fix_item(body)
+    if problem is not None:
+        return _error(400, problem)
+    problem = await _check_intended_against_record(body)
     if problem is not None:
         return _error(400, problem)
     from Backend.helper import librarian_engine
@@ -462,8 +497,13 @@ async def librarian_fix_batch(request: Request):
         return _error(400, "items must be a non-empty list")
     # Validation is atomic (§4.5.2): every item is schema-validated
     # upfront; any failure 400s the whole batch before any persist.
+    # The §2.5 record check runs in the same upfront loop (its
+    # record loads awaited here), so it is atomic too.
     for item in items:
         problem = _validate_fix_item(item)
+        if problem is not None:
+            return _error(400, problem)
+        problem = await _check_intended_against_record(item)
         if problem is not None:
             return _error(400, problem)
     from Backend.helper import librarian_engine
@@ -477,19 +517,37 @@ async def librarian_fix_batch(request: Request):
     })
 
 
-async def _not_implemented(request):
+@router.post("/api/librarian/undo")
+async def librarian_undo(request: Request):
+    # DESIGN §8 Undo + Phase 5 plan §4.3 (DISP-8, OQ-1(a) as
+    # ratified): the payload's request_id is the undo operation's
+    # OWN idempotency key (required); the optional
+    # target_request_id names the specific fixed row to undo
+    # (absent -> the most recent fixed row for the post). Every
+    # operation outcome is HTTP 200 in the fix route's shapes —
+    # a persisted row via _fix_item, refusals and the target
+    # resolution's not_found as {request_id, state, error};
+    # validation failures are 400, before the engine.
     err = await _require_token(request)
     if err is not None:
         return err
-    _body, body_err = await _body_json(request)
+    body, body_err = await _body_json(request)
     if body_err is not None:
         return body_err
-    return _json(200, {"state": "not_implemented"})
+    if not _valid_id_field(body.get("request_id")):
+        return _error(400, "request_id must be a non-empty string of at "
+                           "most 64 characters using [A-Za-z0-9_-]")
+    for field in ("chat_id", "msg_id"):
+        if not _is_int(body.get(field)):
+            return _error(400, f"{field} must be an integer")
+    target = body.get("target_request_id")
+    if target is not None and not _valid_id_field(target):
+        return _error(400, "target_request_id must be a non-empty string "
+                           "of at most 64 characters using [A-Za-z0-9_-]")
+    from Backend.helper import librarian_engine
 
-
-@router.post("/api/librarian/undo")
-async def librarian_undo(request: Request):
-    return await _not_implemented(request)
+    result = await librarian_engine.undo_one(body)
+    return _json(200, _fix_result_body(result))
 
 
 @router.post("/api/librarian/scan")

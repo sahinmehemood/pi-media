@@ -2091,6 +2091,445 @@ def test_A3_flood_wait_under_concurrency_inflight_finish_rest_aborted():
 
 
 
+# ------------------------------------------------------------------
+# C-1 — undo for edits (Phase 5 plan §4, DISP-7/DISP-8; DESIGN §8
+# Undo). The undo's writer is the same transport double as A-2's;
+# the index removal is doubled on the fake database with the real
+# method's contract (database.py:1306: remove_media_part(channel,
+# msg_id) -> bool, addressed by the STRIPPED channel id — the §6
+# boundary conversion). Undo gates are §8's asymmetry: enabled +
+# test mode off ONLY — no writes flag, no allowlist, no budget.
+# ------------------------------------------------------------------
+
+OLD_LINKED_TEXT = ("Fixture Show S01E01 1080p\nIMDB\n"
+                   "https://www.imdb.com/title/tt1234567")
+OLD_LINKED_HTML = ('Fixture Show S01E01 1080p\n'
+                   '<a href="https://www.imdb.com/title/tt1234567">IMDB</a>')
+CORRECTED_TEXT = "Fixture Show S01E01 1080p [Corrected]"
+
+REMOVE_CALLS = []
+
+
+def _index_double(result=True, exc=None):
+    REMOVE_CALLS.clear()
+
+    async def _remove_media_part(channel, msg_id):
+        REMOVE_CALLS.append((channel, msg_id))
+        if exc is not None:
+            raise exc
+        return result
+
+    api.fake_db.remove_media_part = _remove_media_part
+
+
+def _undo_settings(**kw):
+    # Writes flag OFF by default: C-ACC-1's gate asymmetry is the
+    # point — undo must succeed without it.
+    base = {"librarian_test_mode": False, "librarian_writes_enabled": False}
+    base.update(kw)
+    return _settings(**base)
+
+
+def _seed_fixed_target(request_id="fix-1", msg_id=1, created_at=None,
+                       **row_kw):
+    kw = {"request_id": request_id, "state": "fixed", "dry_run": False,
+          "budget_counted": True, "index_confirmed": True,
+          "old_caption": CAPTION, "old_caption_text": CAPTION,
+          "new_caption": NEW_CAPTION, "new_caption_text": NEW_CAPTION_TEXT,
+          "current_locator": {"chat_id": CHAT, "msg_id": msg_id},
+          "source_locator": {"chat_id": CHAT, "msg_id": msg_id}}
+    if created_at is not None:
+        kw["created_at"] = created_at
+    kw.update(row_kw)
+    return _run(store.insert_fix(_fix_store_row(**kw)))
+
+
+def _setup_undo(msg=None, writer_outcomes=(), on_writer_call=None,
+                remove_result=True, remove_exc=None, **settings_kw):
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _undo_settings(**settings_kw)
+    _seed_ledger(status="fixed")
+    _seed_fixed_target()
+    msg = msg if msg is not None else _message()
+    _set_live_caption(msg, NEW_CAPTION_TEXT, IMDB_URL)
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    writer = FakeWriter(writer_outcomes, on_call=on_writer_call)
+    engine._bot_api_edit_caption = writer
+    _index_double(result=remove_result, exc=remove_exc)
+    return msg, writer
+
+
+def _undo_payload(**kw):
+    body = {"request_id": "undo-1", "chat_id": CHAT, "msg_id": 1}
+    body.update(kw)
+    return body
+
+
+def _undo_via_route(body):
+    return api._call("POST", "/api/librarian/undo",
+                     api._authed_req(body=body))
+
+
+def _undo_rows():
+    return [r for r in _fixes_docs() if r["action"] == "undo_edit"]
+
+
+def _restore_to_old(msg):
+    def on_call(n, chat_id, msg_id, caption_html):
+        _set_live_caption(msg, CAPTION)
+    return on_call
+
+
+# --- C-ACC-1: the full undo walk, writes flag OFF throughout --------
+
+def test_C1_undo_restores_removes_returns_undone_writes_flag_off():
+    msg = _message()
+    _msg, writer = _setup_undo(msg=msg, on_writer_call=_restore_to_old(msg))
+    assert _budget_used() == 1  # the original fix's reservation
+    resp = _undo_via_route(_undo_payload())
+    assert resp.status_code == 200, resp.content
+    assert resp.content["state"] == "undone"
+    assert resp.content["action"] == "undo_edit"
+    # The restore sent the reconstructed old caption (no URL line in
+    # it, so the HTML form is the escaped text itself), exactly once.
+    assert writer.calls == [(CHAT, 1, CAPTION)]
+    # The index entry was removed by the STRIPPED locator (§6).
+    assert REMOVE_CALLS == [(111, 1)]
+    # Ledger returned to waiting; the original row is untouched.
+    assert _ledger_docs()[0]["status"] == "waiting"
+    rows = {r["request_id"]: r for r in _fixes_docs()}
+    assert rows["fix-1"]["state"] == "fixed"
+    undo = rows["undo-1"]
+    assert undo["state"] == "undone" and undo["undone_at"] is not None
+    assert undo["budget_counted"] is False and undo["dry_run"] is False
+    assert undo["error"] is None
+    assert undo["undone_request_id"] == "fix-1"
+    assert undo["old_caption_text"] == CAPTION
+    assert undo["new_caption_text"] == NEW_CAPTION_TEXT
+    # Undo never counts against the budget (§8).
+    assert _budget_used() == 1
+
+
+def test_C1_undo_of_id_linked_fix_reanchors_the_old_caption():
+    # The §13 gate case in unit form: the fix's OLD caption is the
+    # ID-linked one (canonical form: bare IMDB label line + URL
+    # line, the app's uppercase form); the live caption is the
+    # corrected text the fix left behind.
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _undo_settings()
+    _seed_ledger(status="fixed")
+    _seed_fixed_target(old_caption=OLD_LINKED_TEXT,
+                       old_caption_text=OLD_LINKED_TEXT,
+                       new_caption=CORRECTED_TEXT,
+                       new_caption_text=CORRECTED_TEXT)
+    msg = _message()
+    _set_live_caption(msg, CORRECTED_TEXT)
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+
+    def land_old(n, chat_id, msg_id, caption_html):
+        _set_live_caption(msg, OLD_LINKED_TEXT, IMDB_URL)
+
+    writer = FakeWriter(on_call=land_old)
+    engine._bot_api_edit_caption = writer
+    _index_double()
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "undone", result
+    # The sent HTML re-anchors the URL line per §4.2's construction.
+    assert writer.calls == [(CHAT, 1, OLD_LINKED_HTML)]
+    assert REMOVE_CALLS == [(111, 1)]
+    assert _ledger_docs()[0]["status"] == "waiting"
+
+
+# --- C-ACC-2: gates ---------------------------------------------------
+
+def test_C1_undo_test_mode_refusal_creates_no_row():
+    _msg, writer = _setup_undo(librarian_test_mode=True)
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result == {"request_id": "undo-1",
+                      "state": "refused_precondition",
+                      "error": "undo mutates Telegram — test mode is on"}
+    assert _undo_rows() == []
+    assert writer.calls == [] and REMOVE_CALLS == []
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+def test_C1_undo_racing_active_operation_is_refused_without_row():
+    _msg, writer = _setup_undo()
+    # Warm the engine first: reconciliation at init terminalises
+    # every non-terminal row by design (§8), so a racing operation
+    # can only exist post-init — created after this process began
+    # serving, exactly as a live fix would be.
+    _run(engine._ensure_engine_init())
+    _run(store.insert_fix(_fix_store_row(
+        request_id="other-op", state="editing", dry_run=False)))
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "refused_precondition"
+    assert "in progress" in result["error"]
+    assert _undo_rows() == []
+    assert writer.calls == [] and REMOVE_CALLS == []
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+def test_C1_undo_of_dry_run_row_is_not_found():
+    _reset()
+    bridge.register(None)
+    api._enable()
+    _undo_settings()
+    _seed_ledger(status="fixed")
+    _seed_fixed_target(dry_run=True, budget_counted=False)
+    _index_double()
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "not_found"
+    assert "dry-run" in result["error"]
+    targeted = _run(engine.undo_one(
+        _undo_payload(request_id="undo-2", target_request_id="fix-1")))
+    assert targeted["state"] == "not_found"
+    assert "dry-run" in targeted["error"]
+    assert _undo_rows() == []
+
+
+def test_C1_undo_of_non_fixed_row_is_not_found():
+    _reset()
+    bridge.register(None)
+    api._enable()
+    _undo_settings()
+    _seed_ledger(status="fixed")
+    _seed_fixed_target(state="edit_failed")
+    _index_double()
+    result = _run(engine.undo_one(
+        _undo_payload(target_request_id="fix-1")))
+    assert result["state"] == "not_found"
+    assert "edit_failed" in result["error"]
+    assert _undo_rows() == []
+
+
+def test_C1_undo_unknown_post_and_unknown_target_are_not_found():
+    _reset()
+    bridge.register(None)
+    api._enable()
+    _undo_settings()
+    _index_double()
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "not_found"  # no ledger row at all
+    _seed_ledger(status="fixed")
+    result = _run(engine.undo_one(
+        _undo_payload(request_id="undo-2", target_request_id="ghost-9")))
+    assert result["state"] == "not_found"
+    assert "ghost-9" in result["error"]
+    assert _undo_rows() == []
+
+
+# --- Target selection (§10.4): explicit vs most recent ---------------
+
+def test_C1_undo_explicit_target_and_default_most_recent():
+    _reset()
+    bridge.register(None)
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _undo_settings()
+    _seed_ledger(status="fixed")
+    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    _seed_fixed_target(request_id="fix-old", created_at=older,
+                       old_caption_text="Oldest Caption",
+                       old_caption="Oldest Caption",
+                       new_caption_text="First Correction",
+                       new_caption="First Correction")
+    _seed_fixed_target(request_id="fix-new", created_at=newer,
+                       old_caption_text="First Correction",
+                       old_caption="First Correction",
+                       new_caption_text="Second Correction",
+                       new_caption="Second Correction")
+    msg = _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    _index_double()
+
+    # Explicit target: the OLDER fix is undone even though a newer
+    # fixed row exists; the live caption is the older fix's new one.
+    _set_live_caption(msg, "First Correction")
+    writer = FakeWriter(on_call=lambda n, c, m, h:
+                        _set_live_caption(msg, "Oldest Caption"))
+    engine._bot_api_edit_caption = writer
+    result = _run(engine.undo_one(
+        _undo_payload(target_request_id="fix-old")))
+    assert result["state"] == "undone", result
+    assert result["undone_request_id"] == "fix-old"
+    assert writer.calls == [(CHAT, 1, "Oldest Caption")]
+
+    # Default: the most recent fixed row (fix-new) is the target.
+    _set_live_caption(msg, "Second Correction")
+    writer2 = FakeWriter(on_call=lambda n, c, m, h:
+                         _set_live_caption(msg, "First Correction"))
+    engine._bot_api_edit_caption = writer2
+    result = _run(engine.undo_one(_undo_payload(request_id="undo-2")))
+    assert result["state"] == "undone", result
+    assert result["undone_request_id"] == "fix-new"
+    assert writer2.calls == [(CHAT, 1, "First Correction")]
+
+
+# --- C-ACC-3: drift ----------------------------------------------------
+
+def test_C1_undo_caption_changed_since_fix_is_refused_drift():
+    msg = _message()
+    _msg, writer = _setup_undo(msg=msg)
+    _set_live_caption(msg, "Someone Else Edited This")
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "refused_drift"
+    assert result["error"] == (
+        "the live caption no longer matches the fix being undone")
+    row = _undo_rows()[0]
+    assert row["state"] == "refused_drift"
+    assert row["refused_drift_at"] is not None
+    assert writer.calls == [] and REMOVE_CALLS == []
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+# --- C-ACC-4: partial undo ----------------------------------------------
+
+def test_C1_undo_partial_when_index_removal_fails():
+    msg = _message()
+    _msg, writer = _setup_undo(
+        msg=msg, on_writer_call=_restore_to_old(msg), remove_result=False)
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "undo_partial"
+    assert "restored" in result["error"]
+    assert f"{CHAT}:1" in result["error"] and "111:1" in result["error"]
+    # Never reported undone; the ledger was NOT returned.
+    assert _undo_rows()[0]["state"] == "undo_partial"
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+def test_C1_undo_partial_when_index_removal_raises():
+    msg = _message()
+    _msg, writer = _setup_undo(
+        msg=msg, on_writer_call=_restore_to_old(msg),
+        remove_exc=RuntimeError("storage db gone"))
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "undo_partial"
+    assert "storage db gone" in result["error"]
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+def test_C1_undo_partial_when_ledger_cannot_return():
+    # Caption restored and index removed, but the ledger row is no
+    # longer `fixed` (it sits `parked`): Telegram and the ledger
+    # would disagree about the undo, so it is partial, never
+    # `undone` (§8). (Already-`waiting` is NOT this case: a fixed
+    # row can only reach waiting through a prior undo's return, so
+    # the stacked-undo sequence in
+    # test_C1_undo_explicit_target_and_default_most_recent
+    # completes — the invariant is that the ledger ENDS waiting.)
+    msg = _message()
+    _msg, writer = _setup_undo(msg=msg, on_writer_call=_restore_to_old(msg))
+    api.fake_db.dbs["tracking"]["reject_ledger"].docs[0]["status"] = "parked"
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "undo_partial"
+    assert "ledger" in result["error"]
+    assert REMOVE_CALLS == [(111, 1)]
+
+
+# --- FloodWait on the restore (§4.1: the ordinary rule) -----------------
+
+def test_C1_undo_restore_flood_wait_names_the_partial_state():
+    _msg, writer = _setup_undo(writer_outcomes=[(
+        429, {"ok": False, "error_code": 429,
+              "description": "Too Many Requests: retry after 45",
+              "parameters": {"retry_after": 45}})])
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "flood_wait"
+    assert result["retry_after"] == 45
+    assert "45-second" in result["error"]
+    assert "not restored" in result["error"]
+    assert "index entry was not removed" in result["error"]
+    assert REMOVE_CALLS == []
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+# --- Restore failure shapes ----------------------------------------------
+
+def test_C1_undo_restore_generic_error_is_edit_failed():
+    _msg, writer = _setup_undo(writer_outcomes=[(
+        400, {"ok": False, "error_code": 400,
+              "description": "Bad Request: message can't be edited"})])
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "edit_failed"
+    assert REMOVE_CALLS == []
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+def test_C1_undo_restore_ambiguous_landed_still_completes():
+    msg = _message()
+
+    def land_old(n, chat_id, msg_id, caption_html):
+        _set_live_caption(msg, CAPTION)
+
+    _msg, writer = _setup_undo(
+        msg=msg, on_writer_call=land_old,
+        writer_outcomes=[engine.BotApiTransportError("timeout")])
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "undone", result
+    assert len(writer.calls) == 1  # never re-sent
+    assert REMOVE_CALLS == [(111, 1)]
+
+
+def test_C1_undo_restore_ambiguous_not_landed_is_edit_failed():
+    _msg, writer = _setup_undo(
+        writer_outcomes=[engine.BotApiTransportError("timeout")])
+    result = _run(engine.undo_one(_undo_payload()))
+    assert result["state"] == "edit_failed"
+    assert "ambiguous" in result["error"]
+    assert REMOVE_CALLS == []
+    assert _ledger_docs()[0]["status"] == "fixed"
+
+
+# --- Idempotency -----------------------------------------------------------
+
+def test_C1_undo_idempotent_replay_returns_stored_row():
+    msg = _message()
+    _msg, writer = _setup_undo(msg=msg, on_writer_call=_restore_to_old(msg))
+    first = _run(engine.undo_one(_undo_payload()))
+    assert first["state"] == "undone"
+    second = _run(engine.undo_one(_undo_payload()))
+    assert second["request_id"] == "undo-1"
+    assert second["state"] == "undone"
+    assert len(writer.calls) == 1 and REMOVE_CALLS == [(111, 1)]
+
+
+# --- Route validation (§4.3: 400 before the engine) -------------------------
+
+def test_C1_undo_route_validation_400s():
+    _reset()
+    api._enable()
+    for body, field in (
+            ({"chat_id": CHAT, "msg_id": 1}, "request_id"),
+            ({"request_id": "bad id!", "chat_id": CHAT, "msg_id": 1},
+             "request_id"),
+            ({"request_id": "u-1", "msg_id": 1}, "chat_id"),
+            ({"request_id": "u-1", "chat_id": "x", "msg_id": 1}, "chat_id"),
+            ({"request_id": "u-1", "chat_id": CHAT, "msg_id": True},
+             "msg_id"),
+            ({"request_id": "u-1", "chat_id": CHAT, "msg_id": 1,
+              "target_request_id": "bad id!"}, "target_request_id")):
+        resp = _undo_via_route(body)
+        assert resp.status_code == 400, (body, resp.content)
+        assert field in resp.content["error"], resp.content
+    assert _fixes_docs() == []
+    # A valid body reaches the engine: in this harness's default
+    # settings (test mode on) the pinned refusal comes back as the
+    # small {request_id, state, error} shape, HTTP 200.
+    resp = _undo_via_route(_undo_payload())
+    assert resp.status_code == 200
+    assert resp.content == {
+        "request_id": "undo-1", "state": "refused_precondition",
+        "error": "undo mutates Telegram — test mode is on"}
+
+
 # --- html_from_canonical (§4.2's reconstruction, landed by A-2) ------
 
 def test_A2_html_from_canonical_shapes():

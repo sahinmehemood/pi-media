@@ -57,13 +57,14 @@ Workstream C: the CLI had no ``--target-request-id`` flag yet
 (DISP-8 was still awaiting Yan's OQ-1 ratification), so the case
 could not be written then and was deferred to C-2, the commit
 that adds the flag. The undo case below is that deferred case.
-The undo route at this tree is still the ``not_implemented``
-stub (the real route lands with C-1), so — exactly as this
-file's scan case did before D-2 — the case pins the wire
-behaviour (POST dispatch, auth header, payload byte-shape
-including ``target_request_id``) and accepts the stub's response
-state; tightening it to the real route's shapes is C-1's
-follow-up, mirroring the scan case's D-2 tightening.
+It was written (C-2) against the ``not_implemented`` stub —
+exactly as this file's scan case was before D-2 — pinning the
+wire behaviour (POST dispatch, auth header, payload byte-shape
+including ``target_request_id``) and accepting the stub's
+response state. C-1 has now landed the real undo route, so the
+case is tightened to the real route's shape, mirroring the scan
+case's D-2 tightening: this harness runs with test mode on, so
+the route answers §4.1's pinned test-mode refusal.
 """
 
 import asyncio
@@ -362,10 +363,9 @@ def test_http_scan_dispatch_over_real_transport():
 # ------------------------------------------------------------------
 # undo --target-request-id — POST dispatch through the real
 # transport (the E-3 case deferred to C-2; see the docstring's
-# deferral history). The undo route is still the not_implemented
-# stub at this tree, so the case pins the wire behaviour and
-# accepts the stub's response state, exactly as the scan case
-# did before D-2.
+# deferral history). C-1 landed the real undo route; in this
+# harness's settings (test mode on) it answers the pinned
+# test-mode refusal, asserted exactly below.
 # ------------------------------------------------------------------
 
 def test_http_undo_target_request_id_dispatch_over_real_transport():
@@ -388,7 +388,9 @@ def test_http_undo_target_request_id_dispatch_over_real_transport():
             "chat_id": CHAT, "msg_id": 55,
             "request_id": "u-1", "target_request_id": "fix-1"}
         assert out.encode("utf-8") == rec["response_body"]
-        # The stub-era response state, accepted as the scan case
-        # accepted it before D-2; C-1 tightens this when the real
-        # undo route lands.
-        assert json.loads(out) == {"state": "not_implemented"}
+        # The real route's response (C-1): test mode is on in this
+        # harness, so the engine's pinned refusal (§4.1) comes back
+        # in the small {request_id, state, error} shape.
+        assert json.loads(out) == {
+            "request_id": "u-1", "state": "refused_precondition",
+            "error": "undo mutates Telegram — test mode is on"}

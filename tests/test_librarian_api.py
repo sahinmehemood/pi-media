@@ -1556,20 +1556,25 @@ def test_status_and_mode_shapes():
     assert resp.content["budget"] == {"limit": 1, "used_today": 2, "remaining": 0}
 
 
-def test_stub_routes_not_implemented():
+def test_former_stub_routes_are_real():
     _reset_api()
     _enable()
-    # Phase 4 (§4.5.3): undo keeps the stub verbatim; fix and
-    # fix-batch are real from Phase 4 and are covered by
-    # tests/test_librarian_engine.py instead. Scan was the second
-    # stub until Phase 5 Workstream D (§5.2) made it real — in this
-    # harness's default settings (test mode on) it now answers the
-    # pinned test-mode refusal; its full route coverage lives in
-    # tests/test_librarian_scan.py.
-    resp = _call("POST", "/api/librarian/undo", _authed_req(body={"request_id": "u-1"}))
-    assert resp.status_code == 200
-    assert resp.content == {"state": "not_implemented"}
+    # No stub routes remain: fix/fix-batch landed in Phase 4, scan
+    # in Phase 5 Workstream D (§5.2), and undo in Phase 5
+    # Workstream C (C-1, §4.3) — _not_implemented was deleted with
+    # its last consumer. This harness never loads the engine
+    # module, so here undo is asserted up to its validation
+    # boundary (400 before the engine, §4.3); the valid-body path
+    # (the pinned test-mode refusal in this harness's default
+    # settings) and all engine coverage live in
+    # tests/test_librarian_engine.py.
     resp = _call("POST", "/api/librarian/undo", _authed_req(raw_body="{not json"))
+    assert resp.status_code == 400
+    resp = _call("POST", "/api/librarian/undo", _authed_req(body={"request_id": "u-1"}))
+    assert resp.status_code == 400
+    resp = _call("POST", "/api/librarian/undo",
+                 _authed_req(body={"request_id": "u-1", "chat_id": -100111,
+                                   "msg_id": "1"}))
     assert resp.status_code == 400
     resp = _call("POST", "/api/librarian/scan", _authed_req(body={}))
     assert resp.status_code == 200

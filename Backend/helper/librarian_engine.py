@@ -12,7 +12,11 @@ this module never imports ``receiver.py``), the
 ``edited_unindexed`` auto-restore, and the terminal record. The
 repost send of §8 step 7 is NOT built (phase5-plan DISP-2): its
 Phase 5 terminal shapes are pinned in ``fix_one``'s step-3 branch
-and in step 6's not-editable branch.
+and in step 6's not-editable branch. Undo for edits (§8 Undo)
+lives here too (``undo_one``, Phase 5 Workstream C): its own
+operation row, the same writer, the §4.2 reconstruction helper
+shared with the auto-restore; repost undo is Phase 6, with the
+repost send.
 
 Import discipline mirrors librarian_store / librarian_gateway:
 stdlib at top level; Backend modules imported inside functions.
@@ -890,6 +894,267 @@ async def _run_real_fix(request_id, payload, ledger, current_locator,
     return await _finish(
         request_id, "edit_failed",
         error=f"the Bot API edit failed: {description}")
+
+
+# ------------------------------------------------------------------
+# Undo for edits (§8 Undo; phase5-plan §4, DISP-7/DISP-8)
+# ------------------------------------------------------------------
+
+def _locator_matches(row, current_locator) -> bool:
+    loc = row.get("current_locator") or {}
+    try:
+        return (int(loc.get("chat_id")) == int(current_locator["chat_id"])
+                and int(loc.get("msg_id")) == int(current_locator["msg_id"]))
+    except (TypeError, ValueError):
+        return False
+
+
+def _undoable_reason(row):
+    """Why a candidate row is not an undoable fix, or None when it
+    is (§8 Undo: the target is a row in state `fixed`; DISP-7: edit
+    undos only, and a dry-run row wrote nothing to undo)."""
+    if row.get("state") != "fixed":
+        return f"its state is {row.get('state')!r}, not 'fixed'"
+    if row.get("action") != "edit":
+        return "it is not an edit fix (repost undo arrives in Phase 6)"
+    if row.get("dry_run"):
+        return "it is a dry-run record — nothing was written to undo"
+    return None
+
+
+async def _resolve_undo_target(payload, current_locator):
+    """(target_row, not_found_error): the row to undo, per §8 Undo
+    + DISP-8 (OQ-1(a) as ratified). An explicit
+    `target_request_id` names the row; absent, the target is the
+    most recent `fixed` row for the post's `current_locator` —
+    resolved as an in-engine filter over the store's existing
+    list_history (created_at-descending), per the Tech Lead's
+    ruling; no new store query was added."""
+    from Backend.helper import librarian_store
+
+    target_request_id = payload.get("target_request_id")
+    if target_request_id:
+        row = await librarian_store.get_fix_by_request_id(target_request_id)
+        if row is None:
+            return None, (f"no fix row with request_id "
+                          f"{target_request_id!r} exists")
+        if not _locator_matches(row, current_locator):
+            return None, (f"the fix {target_request_id!r} belongs to "
+                          f"a different post")
+        reason = _undoable_reason(row)
+        if reason is not None:
+            return None, f"the fix {target_request_id!r} cannot be undone: {reason}"
+        return row, None
+    candidates = [row for row in await librarian_store.list_history()
+                  if _locator_matches(row, current_locator)]
+    for row in candidates:
+        if _undoable_reason(row) is None:
+            return row, None
+    if candidates:
+        return None, ("the most recent fix for this post cannot be "
+                      f"undone: {_undoable_reason(candidates[0])}")
+    return None, "no fix has been recorded for this post"
+
+
+async def undo_one(payload: dict) -> dict:
+    """{chat_id, msg_id, request_id, target_request_id?} -> the
+    undo operation's persisted row, a step-1-class refusal, or a
+    per-operation not_found (§4.1's route shape pin).
+
+    §8 Undo, verbatim where the plan pins it: the undo creates its
+    OWN librarian_fixes row (`action: "undo_edit"`, the payload's
+    `request_id` is the undo's own idempotency key — DISP-8) and
+    never mutates the original row. Gates are §8's asymmetry: this
+    path requires test mode OFF (it mutates Telegram) and —
+    through the route's token check — `librarian_enabled`; it does
+    NOT consult `librarian_writes_enabled`, the allowlist, or the
+    budget, and never sets `budget_counted`, so an undo works with
+    the writes flag off (§15's rollback story depends on it)."""
+    from Backend.helper import librarian_store
+    from Backend.helper.metadata.common import caption_with_links
+    from Backend.helper.settings_manager import SettingsManager
+
+    await _ensure_engine_init()
+    request_id = payload["request_id"]
+    chat_id = payload["chat_id"]
+    msg_id = payload["msg_id"]
+
+    # Idempotency at the engine's door (T-7): a stored operation
+    # wins verbatim, even over a different repeated payload.
+    existing = await librarian_store.get_fix_by_request_id(request_id)
+    if existing is not None:
+        return _stored_result(existing)
+
+    # The one gate of §8 Undo that is the engine's own (enabled is
+    # the route's token check): test mode on -> refusal, no row.
+    if SettingsManager.current().librarian_test_mode:
+        return _refusal(request_id, "refused_precondition",
+                        "undo mutates Telegram — test mode is on")
+
+    ledger = await librarian_store.get_ledger_row(chat_id, msg_id)
+    if ledger is None:
+        return {"request_id": request_id, "state": "not_found",
+                "error": scrub_secrets(
+                    f"unknown ledger row: {chat_id}:{msg_id}")}
+    current_locator = ledger.get("current_locator") or ledger["source_locator"]
+
+    target, problem = await _resolve_undo_target(payload, current_locator)
+    if target is None:
+        return {"request_id": request_id, "state": "not_found",
+                "error": scrub_secrets(problem)}
+
+    #----- Persist the undo row under the write lock, behind the
+    #----- one-active-operation-per-post check (§8 Undo: refused
+    #----- while any non-terminal operation exists on the post —
+    #----- an undo racing a fix could otherwise remove the index
+    #----- entry the fix just confirmed). The row references the
+    #----- undone row (`undone_request_id`, its locators and
+    #----- captions) and never counts against the budget.
+    row = {
+        "request_id": request_id,
+        "batch_id": None,
+        "ledger_id": ledger["_id"],
+        "source_locator": dict(ledger["source_locator"]),
+        "current_locator": dict(current_locator),
+        "stem": ledger.get("stem"),
+        "chat_id": ledger["chat_id"],
+        "old_caption": target.get("old_caption") or "",
+        "old_caption_text": target.get("old_caption_text") or "",
+        "new_caption": target.get("new_caption") or "",
+        "new_caption_text": target.get("new_caption_text") or "",
+        "expected_ids": dict(target.get("expected_ids") or {}),
+        "series_record_id": target.get("series_record_id"),
+        "action": "undo_edit",
+        "undone_request_id": target["request_id"],
+        "state": "prepared",
+        "index_confirmed": False,
+        "error": None,
+        "budget_counted": False,
+        "dry_run": False,
+    }
+    async with _WRITE_LOCK:
+        existing = await librarian_store.get_fix_by_request_id(request_id)
+        if existing is not None:
+            return _stored_result(existing)
+        active = await librarian_store.find_active_fix(
+            current_locator["chat_id"], current_locator["msg_id"])
+        if active is not None:
+            return _refusal(
+                request_id, "refused_precondition",
+                "another operation is in progress on this post "
+                f"({active['request_id']}, state "
+                f"{active.get('state')}) — undo is refused while it "
+                "runs")
+        row["prepared_at"] = datetime.now(timezone.utc)
+        await librarian_store.insert_fix(row)
+
+    chat_id = current_locator["chat_id"]
+    msg_id = current_locator["msg_id"]
+    old_caption_text = row["old_caption_text"]
+
+    #----- Live re-read: the live caption must equal the recorded
+    #----- new caption in canonical form (§8 Undo) — plain text
+    #----- plus URLs via caption_with_links on both sides, never
+    #----- the HTML form, so an ID-linked caption can match.
+    result = await probe(chat_id, msg_id)
+    live_matches = any(
+        read["state"] == "found"
+        and caption_with_links(read["message"]) == row["new_caption_text"]
+        for read in result.values())
+    if not live_matches:
+        # Plan pin (§4.1): the refusal is recorded on the undo row
+        # as refused_drift — the taxonomy's caption-mismatch
+        # refusal — rather than inventing a state.
+        return await _finish(
+            request_id, "refused_drift",
+            error="the live caption no longer matches the fix "
+                  "being undone")
+
+    #----- Restore the exact old caption through the same writer
+    #----- (its HTML form reconstructed from the stored canonical
+    #----- text, §4.2's shared helper), confirmed by a live
+    #----- re-read in canonical form.
+    await librarian_store.update_fix_state(request_id, "editing")
+    try:
+        status, body = await _bot_api_edit_caption(
+            chat_id, msg_id, html_from_canonical(old_caption_text))
+    except BotApiTransportError as exc:
+        # Ambiguous (§8): re-read before concluding anything; if
+        # the old caption is already live the restore landed.
+        if not await _caption_is_live(chat_id, msg_id, old_caption_text):
+            return await _finish(
+                request_id, "edit_failed",
+                error=(f"the undo's restore outcome is ambiguous "
+                       f"({exc}) and a re-read does not show the "
+                       f"previous caption — nothing else was changed"))
+        status, body = 200, {"ok": True}
+    if status == 200 and body.get("ok"):
+        outcome, retry = "ok", None
+    else:
+        outcome, retry = classify_bot_api_error(status, body)
+    if outcome == "flood_wait":
+        # §4.1: undo's restore is an edit-class write and takes the
+        # ordinary FloodWait rule (the deleting_original exception
+        # does not cover it); the partial state is named — nothing
+        # else had been attempted yet.
+        return await _flood_wait_finish(
+            request_id, retry,
+            "the undo's restore was rate-limited — the previous "
+            "caption was not restored and the index entry was not "
+            "removed")
+    if outcome not in ("ok", "not_modified"):
+        description = str(body.get("description") or f"HTTP {status}")
+        return await _finish(
+            request_id, "edit_failed",
+            error=(f"the undo's restore edit failed: {description} "
+                   f"— the index entry was not removed"))
+    if not await _caption_is_live(chat_id, msg_id, old_caption_text):
+        return await _finish(
+            request_id, "edit_failed",
+            error=("the undo's restore was sent but a live re-read "
+                   "does not show the previous caption — the index "
+                   "entry was not removed"))
+
+    #----- Remove the corrected index entry (the stripped locator,
+    #----- §6's boundary conversion, as receiver.py calls it).
+    #----- From here on the caption IS restored: any failure is a
+    #----- partial undo, escalated with coordinates — never
+    #----- reported `undone` while Telegram and the index (or the
+    #----- ledger) disagree (§8 Undo).
+    from Backend import db
+
+    stripped_chat = int(str(chat_id).replace("-100", ""))
+    try:
+        removed = bool(await db.remove_media_part(stripped_chat, msg_id))
+        remove_detail = "remove_media_part reported no entry removed"
+    except Exception as exc:
+        removed = False
+        remove_detail = scrub_secrets(f"{type(exc).__name__}: {exc}")
+    if not removed:
+        return await _finish(
+            request_id, "undo_partial",
+            error=("the previous caption was restored, but the "
+                   "corrected index entry could not be removed "
+                   f"({remove_detail}) — post: {chat_id}:{msg_id}; "
+                   f"index entry: {stripped_chat}:{msg_id}"))
+
+    # The ledger must END in `waiting`: `fixed` means the guarded
+    # transition just made it so; `waiting` means it already is —
+    # reachable when an earlier undo of a stacked fix returned it
+    # (a `fixed` ledger row can leave that status only through
+    # this transition, so already-waiting is the invariant met,
+    # not a disagreement). Any other status is a real divergence.
+    ledger_row, current = await librarian_store.return_ledger_to_waiting(
+        payload["chat_id"], payload["msg_id"])
+    if ledger_row is None or current not in ("fixed", "waiting"):
+        return await _finish(
+            request_id, "undo_partial",
+            error=("the previous caption was restored and the "
+                   "corrected index entry was removed, but the "
+                   "ledger row could not be returned to waiting "
+                   f"(its status is {current!r}) — post: "
+                   f"{chat_id}:{msg_id}"))
+    return await _finish(request_id, "undone", error=None)
 
 
 # ------------------------------------------------------------------
