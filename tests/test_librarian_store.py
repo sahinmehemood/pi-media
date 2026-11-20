@@ -746,6 +746,80 @@ def test_funnel_delete_never_precedes_capture():
 
 
 # ------------------------------------------------------------------
+# Phase 5 D-3 — the capture-timeout guard (plan §5.3, §10.5;
+# D-ACC-4 / D-ACC-5). The funnel awaits capture under
+# asyncio.wait_for(..., timeout=CAPTURE_TIMEOUT_S); the constant is
+# shortened here exactly as §10.5 pins (the PROBE_TIMEOUT precedent).
+# ------------------------------------------------------------------
+
+def test_funnel_capture_timeout_proceeds_and_logs():
+    # D-ACC-4: a capture that blocks past the bound leaves the
+    # funnel's copy/delete behaviour untouched and is logged.
+    # D-ACC-5 (Security N-3): the timeout-cancel leaves NO
+    # half-formed ledger row, asserted by row shape.
+    import asyncio as _a
+    import logging
+    import time
+
+    _reset()
+    FakeSettingsManager._current.delete_on_metadata_fail = True
+    original_capture = store.capture_rejection
+    original_timeout = funnel.CAPTURE_TIMEOUT_S
+
+    async def blocking_capture(message, origin):
+        # Production-shaped stand-in for a wedged capture: the real
+        # capture_rejection awaits its DB work BEFORE its single
+        # update_one write (librarian_store.py:140-250), so a cancel
+        # can only land at an await ahead of that write — modelled
+        # here as one long await before any write could happen.
+        await _a.sleep(30)
+        raise AssertionError("the wait_for timeout should have fired")
+
+    store.capture_rejection = blocking_capture
+    funnel.CAPTURE_TIMEOUT_S = 0.05
+    records = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    logger = logging.getLogger("librarian-tests")
+    handler = _Capture()
+    logger.addHandler(handler)
+    try:
+        events = []
+
+        async def go():
+            m = _msg(events=events)
+            started = time.monotonic()
+            await funnel.route_to_skip_channel(object(), m)
+            elapsed = time.monotonic() - started
+            # The funnel returned on the 0.05s bound, not after the
+            # double's 30s block.
+            assert elapsed < 5, elapsed
+            # Copy/delete proceeded exactly as for a capture
+            # exception: copy attempted (ledger empty at copy time —
+            # capture never wrote), original deleted after.
+            assert events == [("copy", 0)]
+            assert _delete_events == [(-1003966209940, 101)]
+            # D-ACC-5, by row shape: no row at all — and therefore
+            # no partial document. (A complete row would also pass
+            # D-ACC-5; a half-formed one never can.)
+            assert _ledger().docs == []
+
+        run(go())
+    finally:
+        logger.removeHandler(handler)
+        store.capture_rejection = original_capture
+        funnel.CAPTURE_TIMEOUT_S = original_timeout
+    # The timeout was logged through the funnel's capture-failure
+    # line (a timeout is treated exactly like a capture exception).
+    assert any("Capture failed for message 101" in r for r in records), records
+    # The production constant is the ratified 30s (OQ-2 (a), S5-8).
+    assert original_timeout == 30
+
+
+# ------------------------------------------------------------------
 # A-1: engine-only ledger transitions (§2.3) + budget-reservation
 # release (§2.3a)
 # ------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import sleep as asleep
 
 from pyrogram import Client
@@ -6,6 +7,13 @@ from pyrogram.types import Message
 
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
+
+# Librarian capture bound (DESIGN §18 / Phase 5 DISP-6 item 5,
+# OQ-2 ratified (a), Security S5-8): capture is a database-only
+# operation, awaited on the funnel's live path — slower than this
+# is a failure, not a wait. A timeout is treated exactly like a
+# capture exception: logged, never raised, copy/delete untouched.
+CAPTURE_TIMEOUT_S = 30
 
 
 def is_skip_channel(message: Message) -> bool:
@@ -28,7 +36,8 @@ async def route_to_skip_channel(client: Client, message: Message, origin: str = 
     try:
         from Backend.helper.librarian_store import capture_rejection
 
-        await capture_rejection(message, origin)
+        await asyncio.wait_for(capture_rejection(message, origin),
+                               timeout=CAPTURE_TIMEOUT_S)
     except Exception as e:
         LOGGER.error(f"[Librarian] Capture failed for message {message.id}: {e}")
 
