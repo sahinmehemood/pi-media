@@ -74,8 +74,25 @@ def real_deps() -> Deps:
         return (msg.caption if msg else None) or None
 
     async def edit_caption(chat_id, msg_id, caption):
-        # Bot API as the Media Manager bot (v1's proven path). A flood
-        # wait comes back as an exception carrying retry_after.
+        # Primary writer: the app's userbot (StreamBot). Proven live
+        # 2026-11-20: Bot API editMessageCaption returns "message to
+        # edit not found" for channel posts the bot did not send —
+        # even with the bot as channel admin — while the userbot
+        # reads and edits them fine. Bot API stays as the fallback
+        # for channels where the userbot is not an admin.
+        try:
+            from Backend.pyrofork.bot import StreamBot
+            await StreamBot.edit_message_caption(chat_id, msg_id, caption)
+            return
+        except Exception as e:
+            flood = getattr(e, "value", None)
+            if flood:
+                err = RuntimeError(f"flood wait {flood}s")
+                err.retry_after = int(flood)
+                raise err
+            if "not modified" in str(e).lower():
+                return
+            # fall through to the Bot API attempt below
         import aiohttp
         token = SettingsManager.current().hermes_bot_token
         url = f"https://api.telegram.org/bot{token}/editMessageCaption"
