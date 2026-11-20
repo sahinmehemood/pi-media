@@ -327,10 +327,6 @@ async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
 
 @app.get("/admin/librarian", response_class=HTMLResponse)
 async def admin_librarian(request: Request, _: bool = Depends(require_auth)):
-    return await librarian_simple_page(request, _)
-
-@app.get("/admin/librarian-full", response_class=HTMLResponse)
-async def admin_librarian_full(request: Request, _: bool = Depends(require_auth)):
     return await librarian_page(request, _)
 
 @app.get("/admin/librarian/fragment/{name}", response_class=HTMLResponse)

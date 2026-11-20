@@ -28,7 +28,7 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..8628a0a 100644
+index 9ae7925..952dd36 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
 @@ -70,8 +70,25 @@ from Backend.fastapi.routes.api_routes import (
@@ -78,7 +78,7 @@ index 9ae7925..8628a0a 100644
  
  
  #----- Streaming and Stremio routers
-@@ -293,6 +317,142 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +317,138 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -92,10 +92,6 @@ index 9ae7925..8628a0a 100644
 +
 +@app.get("/admin/librarian", response_class=HTMLResponse)
 +async def admin_librarian(request: Request, _: bool = Depends(require_auth)):
-+    return await librarian_simple_page(request, _)
-+
-+@app.get("/admin/librarian-full", response_class=HTMLResponse)
-+async def admin_librarian_full(request: Request, _: bool = Depends(require_auth)):
 +    return await librarian_page(request, _)
 +
 +@app.get("/admin/librarian/fragment/{name}", response_class=HTMLResponse)
@@ -221,7 +217,7 @@ index 9ae7925..8628a0a 100644
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +973,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +969,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
