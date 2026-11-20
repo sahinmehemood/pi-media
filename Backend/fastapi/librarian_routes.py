@@ -1315,6 +1315,52 @@ async def librarian_writer_token_clear(request: Request, _: bool = Depends(requi
 # Page operator actions (§6.8) + the /admin/librarian page (§6.10)
 # ------------------------------------------------------------------
 
+async def _page_undo(body):
+    """The page's per-fix undo (DESIGN §11; phase5-plan §4.4;
+    OQ-1b(a) as ratified, Security S5-7). The template's Undo
+    control carries the target fix's `request_id` in the page
+    action's `key` field (the field every page action uses); the
+    undo operation's OWN `request_id` is minted here, server-side,
+    with `secrets.token_hex(16)` — at least 16 bytes of entropy,
+    persisted verbatim as the undo row's `request_id` by the
+    engine, so the minted ID stays auditable in fix history. This
+    minting exists ONLY on this session-authenticated operator
+    surface: the bot-API undo route never receives an
+    app-invented ID (DESIGN §18, DISP-8). Gates are §8 Undo's,
+    exactly — enabled (checked by the caller) and test mode off;
+    undo deliberately does NOT require the writes flag, the
+    allowlist, or budget. Target eligibility (a `fixed`,
+    non-dry-run `edit` row) is the engine's call (§4.1); this
+    surface only resolves the target row to the post it names —
+    the post's `current_locator`, §8's undo target — and passes
+    both IDs through."""
+    from Backend.helper import librarian_engine, librarian_store
+    from Backend.helper.settings_manager import SettingsManager
+
+    if SettingsManager.current().librarian_test_mode:
+        return _json(200, {"state": "refused_precondition",
+                           "error": "undo mutates Telegram — test mode is on"})
+    target_request_id = body.get("key") or body.get("target_request_id")
+    if not _valid_id_field(target_request_id):
+        return _error(400, "undo requires the target fix's request_id")
+    target = await librarian_store.get_fix_by_request_id(target_request_id)
+    if target is None:
+        return _json(200, {"state": "not_found",
+                           "error": f"unknown fix: {target_request_id}"})
+    locator = target.get("current_locator") or target.get("source_locator") or {}
+    chat_id, msg_id = locator.get("chat_id"), locator.get("msg_id")
+    if not _is_int(chat_id) or not _is_int(msg_id):
+        return _json(200, {"state": "not_found",
+                           "error": "the target fix has no post to undo"})
+    request_id = secrets.token_hex(16)
+    result = await librarian_engine.undo_one({
+        "chat_id": chat_id, "msg_id": msg_id,
+        "request_id": request_id,
+        "target_request_id": target_request_id,
+    })
+    return _json(200, _fix_result_body(result))
+
+
 @router.post("/admin/librarian/action")
 @_api
 async def librarian_page_action(request: Request, _: bool = Depends(require_auth)):
@@ -1324,10 +1370,12 @@ async def librarian_page_action(request: Request, _: bool = Depends(require_auth
     from Backend.helper.settings_manager import SettingsManager
 
     action = body.get("action")
-    if action not in ("park", "unpark", "escalate"):
+    if action not in ("park", "unpark", "escalate", "undo"):
         return _error(400, f"unknown action: {action!r}")
     if not SettingsManager.current().librarian_enabled:
         return _json(403, {"state": "disabled", "error": "librarian is disabled"})
+    if action == "undo":
+        return await _page_undo(body)
     return await _apply_transition(action, body)
 
 

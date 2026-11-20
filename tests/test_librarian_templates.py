@@ -470,3 +470,447 @@ def test_librarian_channels_picker_render():
     assert seg.count("checked") == 2  # only the two allowlisted rows
     assert "<select" not in seg
     assert "lct-" not in html
+
+
+# ------------------------------------------------------------------
+# Page undo surface completion (Phase 5 C-3b, plan §4.4; OQ-1(a) +
+# OQ-1b(a) as ratified; Security S5-7) — the REAL
+# ``librarian_page_action`` handler from the REAL
+# ``Backend/fastapi/librarian_routes.py``, loaded by file path and
+# driven through its recorded route, per the F2 precedent (real
+# route + real template render; the template half is the C-3a
+# section above). Doubles sit only at the module boundaries the
+# handler itself calls, with the real functions' shapes:
+#
+# - ``librarian_store.get_fix_by_request_id(request_id)`` —
+#   librarian_store.py: an async find_one by ``request_id``
+#   returning the stored row (a copy) or None.
+# - ``librarian_engine.undo_one(payload)`` — plan §4.1's pinned
+#   signature: ``{chat_id, msg_id, request_id, target_request_id?}``
+#   in, the undo operation's persisted row (the §6 fix-row shape,
+#   so the route's ``_fix_item`` projection applies) or a
+#   step-1-class ``{request_id, state, error}`` refusal out. The
+#   double echoes the payload's ``request_id`` as the persisted
+#   row's — exactly what the real engine's stored-result rule does
+#   — and records every call as the assertion surface.
+# - ``SettingsManager.current()`` — a settings object carrying the
+#   real property names/formulas for the three librarian switches
+#   the surface reads (settings_manager.py defaults: enabled
+#   False, test_mode True, writes_enabled False).
+#
+# ``sys.modules`` entries touched here are saved and restored
+# around every surface, so this section composes with the api
+# suite's harness in either run order.
+# ------------------------------------------------------------------
+
+import asyncio as _asyncio
+import contextlib as _contextlib
+import copy as _copy
+import importlib.util as _ilu
+import sys as _sys
+import types as _types
+
+_ROUTES_PATH = ROOT / "Backend/fastapi/librarian_routes.py"
+_MISSING = object()
+
+
+class _C3bHTTPException(Exception):
+    def __init__(self, status_code, detail=None, headers=None):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+class _C3bJSONResponse:
+    def __init__(self, content=None, status_code=200, media_type=None):
+        self.content = content
+        self.status_code = status_code
+
+
+class _C3bRouter:
+    def __init__(self, *args, **kwargs):
+        self.routes = []
+        self.on_startup = list(kwargs.get("on_startup") or [])
+
+    def _add(self, method, path, dependencies=None):
+        def deco(fn):
+            self.routes.append((method, path, fn))
+            return fn
+        return deco
+
+    def get(self, path, dependencies=None, **kw):
+        return self._add("GET", path, dependencies)
+
+    def post(self, path, dependencies=None, **kw):
+        return self._add("POST", path, dependencies)
+
+    def delete(self, path, dependencies=None, **kw):
+        return self._add("DELETE", path, dependencies)
+
+    def route_map(self):
+        return {(m, p): fn for m, p, fn in self.routes}
+
+
+class _C3bTemplates:
+    def __init__(self, directory=None):
+        self.directory = directory
+
+    def TemplateResponse(self, name, context=None, *args, **kwargs):
+        return _C3bJSONResponse(content=f"<template:{name}>")
+
+
+class _C3bRequest:
+    """The starlette surface the page action uses: session +
+    async json()."""
+
+    def __init__(self, body=None, session=None):
+        self.headers = {}
+        self.query_params = {}
+        self.session = dict(session or {})
+        self.cookies = {}
+        self._body = body
+
+    async def json(self):
+        return _copy.deepcopy(self._body)
+
+
+class _C3bSettings:
+    def __init__(self, data=None):
+        self._d = dict(data or {})
+
+    @property
+    def librarian_enabled(self):
+        return bool(self._d.get("librarian_enabled", False))
+
+    @property
+    def librarian_test_mode(self):
+        return bool(self._d.get("librarian_test_mode", True))
+
+    @property
+    def librarian_writes_enabled(self):
+        return bool(self._d.get("librarian_writes_enabled", False))
+
+
+class _C3bSettingsManager:
+    _current = _C3bSettings()
+
+    @classmethod
+    def current(cls):
+        return cls._current
+
+
+class _C3bUndoEngine:
+    """undo_one double with §4.1's pinned signature/semantics:
+    returns the persisted undo row under the payload's own
+    request_id (stored-result rule), or a scripted result."""
+
+    def __init__(self):
+        self.calls = []
+        self.scripted = None  # dict, or callable(payload) -> dict
+
+    async def undo_one(self, payload):
+        self.calls.append(_copy.deepcopy(payload))
+        if self.scripted is not None:
+            if callable(self.scripted):
+                return self.scripted(payload)
+            return _copy.deepcopy(self.scripted)
+        loc = {"chat_id": payload["chat_id"], "msg_id": payload["msg_id"]}
+        return {
+            "request_id": payload["request_id"], "batch_id": None,
+            "source_locator": dict(loc), "current_locator": dict(loc),
+            "action": "undo_edit", "state": "undone",
+            "index_confirmed": True, "dry_run": False,
+            "budget_counted": False, "error": None,
+            "old_caption": "New caption tt1234567",
+            "new_caption": "Old caption tt1111111",
+            "expected_ids": {}, "series_record_id": None,
+            "created_at": "2026-11-20T14:00:00+00:00",
+        }
+
+
+def _c3b_target_row(**kw):
+    row = {
+        "request_id": "fix-req-1", "batch_id": None,
+        "source_locator": {"chat_id": -100111, "msg_id": 55},
+        "current_locator": {"chat_id": -100111, "msg_id": 55},
+        "action": "edit", "state": "fixed", "dry_run": False,
+        "budget_counted": True, "index_confirmed": True, "error": None,
+        "old_caption": "Old caption tt1111111",
+        "new_caption": "New caption tt1234567",
+        "old_caption_text": "Old caption tt1111111",
+        "new_caption_text": "New caption tt1234567",
+        "expected_ids": {"tmdb": 1234567}, "series_record_id": None,
+        "created_at": "2026-11-20T13:35:00+00:00",
+    }
+    row.update(kw)
+    return row
+
+
+@_contextlib.contextmanager
+def _c3b_surface(settings_data=None, target_rows=(), engine=None):
+    """Install the boundary doubles, load the REAL routes module,
+    and yield (routes, store_rows, engine). Restores sys.modules
+    exactly on exit."""
+    engine = engine if engine is not None else _C3bUndoEngine()
+    store_rows = {r["request_id"]: r for r in target_rows}
+
+    async def get_fix_by_request_id(request_id):
+        row = store_rows.get(request_id)
+        return _copy.deepcopy(row) if row is not None else None
+
+    _C3bSettingsManager._current = _C3bSettings(settings_data)
+
+    fastapi = _types.ModuleType("fastapi")
+    fastapi.APIRouter = _C3bRouter
+    fastapi.Depends = lambda dependency=None: ("Depends", dependency)
+    fastapi.HTTPException = _C3bHTTPException
+    fastapi.Request = _C3bRequest
+    fa_responses = _types.ModuleType("fastapi.responses")
+    fa_responses.JSONResponse = _C3bJSONResponse
+    fa_templating = _types.ModuleType("fastapi.templating")
+    fa_templating.Jinja2Templates = _C3bTemplates
+    fastapi.responses = fa_responses
+    fastapi.templating = fa_templating
+
+    backend = _types.ModuleType("Backend")
+    backend_fastapi = _types.ModuleType("Backend.fastapi")
+    security_pkg = _types.ModuleType("Backend.fastapi.security")
+    credentials = _types.ModuleType("Backend.fastapi.security.credentials")
+
+    async def require_auth(request):
+        if not request.session.get("authenticated"):
+            raise _C3bHTTPException(status_code=401,
+                                    detail="Not authenticated")
+        return True
+
+    credentials.require_auth = require_auth
+    credentials.get_current_user = (
+        lambda request: "admin" if request.session.get("authenticated")
+        else None)
+    security_pkg.credentials = credentials
+    backend_fastapi.security = security_pkg
+
+    helper = _types.ModuleType("Backend.helper")
+    settings_manager = _types.ModuleType(
+        "Backend.helper.settings_manager")
+    settings_manager.SettingsManager = _C3bSettingsManager
+    settings_manager.Settings = _C3bSettings
+    store_mod = _types.ModuleType("Backend.helper.librarian_store")
+    store_mod.get_fix_by_request_id = get_fix_by_request_id
+    engine_mod = _types.ModuleType("Backend.helper.librarian_engine")
+    engine_mod.undo_one = engine.undo_one
+    helper.settings_manager = settings_manager
+    helper.librarian_store = store_mod
+    helper.librarian_engine = engine_mod
+    backend.fastapi = backend_fastapi
+    backend.helper = helper
+
+    modules = {
+        "fastapi": fastapi,
+        "fastapi.responses": fa_responses,
+        "fastapi.templating": fa_templating,
+        "Backend": backend,
+        "Backend.fastapi": backend_fastapi,
+        "Backend.fastapi.security": security_pkg,
+        "Backend.fastapi.security.credentials": credentials,
+        "Backend.helper": helper,
+        "Backend.helper.settings_manager": settings_manager,
+        "Backend.helper.librarian_store": store_mod,
+        "Backend.helper.librarian_engine": engine_mod,
+    }
+    saved = {name: _sys.modules.get(name, _MISSING) for name in modules}
+    saved["librarian_routes_c3b_under_test"] = _sys.modules.get(
+        "librarian_routes_c3b_under_test", _MISSING)
+    _sys.modules.update(modules)
+    try:
+        spec = _ilu.spec_from_file_location(
+            "librarian_routes_c3b_under_test", str(_ROUTES_PATH))
+        routes = _ilu.module_from_spec(spec)
+        _sys.modules[spec.name] = routes
+        spec.loader.exec_module(routes)
+        yield routes, store_rows, engine
+    finally:
+        for name, prev in saved.items():
+            if prev is _MISSING:
+                _sys.modules.pop(name, None)
+            else:
+                _sys.modules[name] = prev
+
+
+def _c3b_act(routes, body):
+    handler = routes.router.route_map()[("POST", "/admin/librarian/action")]
+    req = _C3bRequest(body=body, session={"authenticated": True})
+    return _asyncio.run(handler(req))
+
+
+# Enabled, test mode OFF, writes flag OFF (the §8 gate asymmetry:
+# undo must succeed without librarian_writes_enabled).
+_C3B_UNDO_SETTINGS = {"librarian_enabled": True,
+                      "librarian_test_mode": False,
+                      "librarian_writes_enabled": False}
+
+
+def test_C3b_page_undo_mints_own_id_and_targets_fix():
+    """§4.4 / OQ-1(a): the page action passes BOTH ids to the
+    engine — a freshly minted own key (secrets.token_hex, >= 16
+    bytes of entropy, hex, within the §9 ID-field limits, never
+    the target's id, never reused) and the target fix's
+    request_id — with the post taken from the target row's
+    current_locator; the persisted undo row's request_id in the
+    response IS the minted id (S5-7: persisted/auditable)."""
+    with _c3b_surface(_C3B_UNDO_SETTINGS,
+                      target_rows=[_c3b_target_row()]) as (routes, _s, eng):
+        resp = _c3b_act(routes, {"action": "undo", "key": "fix-req-1",
+                                 "reason": ""})
+        assert resp.status_code == 200, resp.content
+        assert len(eng.calls) == 1
+        payload = eng.calls[0]
+        assert payload["target_request_id"] == "fix-req-1"
+        assert payload["chat_id"] == -100111 and payload["msg_id"] == 55
+        minted = payload["request_id"]
+        assert minted != "fix-req-1"
+        assert len(bytes.fromhex(minted)) >= 16  # S5-7 entropy pin
+        assert len(minted) <= 64
+        assert resp.content["state"] == "undone"
+        assert resp.content["request_id"] == minted
+        assert resp.content["action"] == "undo_edit"
+        assert resp.content["budget_counted"] is False
+        # A second click mints a FRESH id — two undos of one fix
+        # are distinct operations (DISP-8's rejected-reading pin).
+        resp2 = _c3b_act(routes, {"action": "undo", "key": "fix-req-1"})
+        assert resp2.content["state"] == "undone"
+        assert eng.calls[1]["request_id"] != minted
+
+
+def test_C3b_page_undo_uses_current_locator():
+    """§8/DISP-7: undo targets the post's current_locator, not
+    the source locator, when the two differ."""
+    row = _c3b_target_row(
+        current_locator={"chat_id": -100222, "msg_id": 77})
+    with _c3b_surface(_C3B_UNDO_SETTINGS,
+                      target_rows=[row]) as (routes, _s, eng):
+        resp = _c3b_act(routes, {"action": "undo", "key": "fix-req-1"})
+        assert resp.content["state"] == "undone"
+        assert eng.calls[0]["chat_id"] == -100222
+        assert eng.calls[0]["msg_id"] == 77
+
+
+def test_C3b_page_undo_test_mode_refused_no_engine_call():
+    """§4.4 gate parity with the route: test mode on -> the
+    §4.1 refusal verbatim, and the engine is never called (no
+    row, nothing minted-and-persisted, nothing written)."""
+    settings = dict(_C3B_UNDO_SETTINGS, librarian_test_mode=True)
+    with _c3b_surface(settings,
+                      target_rows=[_c3b_target_row()]) as (routes, _s, eng):
+        resp = _c3b_act(routes, {"action": "undo", "key": "fix-req-1"})
+        assert resp.status_code == 200
+        assert resp.content["state"] == "refused_precondition"
+        assert resp.content["error"] == (
+            "undo mutates Telegram — test mode is on")
+        assert eng.calls == []
+
+
+def test_C3b_page_undo_disabled_and_unknown_action():
+    """The pre-existing page gates stand for undo: disabled ->
+    403 disabled; an unknown action -> 400 before any gate."""
+    settings = dict(_C3B_UNDO_SETTINGS, librarian_enabled=False)
+    with _c3b_surface(settings,
+                      target_rows=[_c3b_target_row()]) as (routes, _s, eng):
+        resp = _c3b_act(routes, {"action": "undo", "key": "fix-req-1"})
+        assert resp.status_code == 403
+        assert resp.content["state"] == "disabled"
+        assert eng.calls == []
+    with _c3b_surface(_C3B_UNDO_SETTINGS) as (routes, _s, eng):
+        resp = _c3b_act(routes, {"action": "bogus", "key": "fix-req-1"})
+        assert resp.status_code == 400
+        assert eng.calls == []
+
+
+def test_C3b_page_undo_unknown_or_locatorless_target():
+    """A target the store cannot resolve is a plain-words
+    not_found (HTTP 200, the per-operation shape) and the engine
+    is never called — the surface cannot invent a post."""
+    with _c3b_surface(_C3B_UNDO_SETTINGS) as (routes, _s, eng):
+        resp = _c3b_act(routes, {"action": "undo", "key": "no-such-fix"})
+        assert resp.status_code == 200
+        assert resp.content["state"] == "not_found"
+        assert "no-such-fix" in resp.content["error"]
+        assert eng.calls == []
+    row = _c3b_target_row(current_locator=None, source_locator=None)
+    with _c3b_surface(_C3B_UNDO_SETTINGS,
+                      target_rows=[row]) as (routes, _s, eng):
+        resp = _c3b_act(routes, {"action": "undo", "key": "fix-req-1"})
+        assert resp.status_code == 200
+        assert resp.content["state"] == "not_found"
+        assert eng.calls == []
+
+
+def test_C3b_page_undo_invalid_key_400():
+    """The target must be a §9-shaped ID field: missing, empty,
+    or off-charset keys 400 before any store or engine call."""
+    with _c3b_surface(_C3B_UNDO_SETTINGS,
+                      target_rows=[_c3b_target_row()]) as (routes, _s, eng):
+        for body in ({"action": "undo"},
+                     {"action": "undo", "key": ""},
+                     {"action": "undo", "key": "bad key!"},
+                     {"action": "undo", "key": "x" * 65}):
+            resp = _c3b_act(routes, body)
+            assert resp.status_code == 400, body
+        assert eng.calls == []
+
+
+def test_C3b_page_undo_engine_outcomes_pass_through():
+    """Engine outcomes reach the page verbatim in the fix-result
+    shape, carrying the minted request_id: a drift refusal and a
+    partial undo both surface their state + plain-words error
+    (the template's JS branch alerts on any state != 'undone' —
+    a partial is never reported as an undo)."""
+    cases = [
+        ({"state": "refused_drift",
+          "error": "the live caption no longer matches the fix "
+                   "being undone"},
+         "refused_drift"),
+        ({"state": "undo_partial",
+          "error": "caption restored; index removal failed"},
+         "undo_partial"),
+    ]
+    for refusal, state in cases:
+        engine = _C3bUndoEngine()
+
+        def script(payload, _r=refusal):
+            return {"request_id": payload["request_id"], **_r}
+
+        engine.scripted = script
+        with _c3b_surface(_C3B_UNDO_SETTINGS,
+                          target_rows=[_c3b_target_row()],
+                          engine=engine) as (routes, _s, eng):
+            resp = _c3b_act(routes, {"action": "undo",
+                                     "key": "fix-req-1"})
+            assert resp.status_code == 200
+            assert resp.content["state"] == state
+            assert resp.content["error"] == refusal["error"]
+            assert resp.content["request_id"] == eng.calls[0]["request_id"]
+
+
+def test_C3b_minting_pin_static():
+    """S5-7 fencing, statically: the ONLY token_hex mint in the
+    routes module is inside the page-undo helper (>= 16 bytes);
+    the bot-API undo route mints nothing — it never receives an
+    app-invented ID."""
+    text = _ROUTES_PATH.read_text(encoding="utf-8")
+    # Exactly one mint statement in the module (the docstring's
+    # prose mention of the call is not a second mint).
+    assert text.count("request_id = secrets.token_hex(16)") == 1
+    helper = text[text.index("async def _page_undo"):
+                  text.index("@router.post(\"/admin/librarian/action\")")]
+    assert "request_id = secrets.token_hex(16)" in helper
+    assert "target_request_id" in helper
+    assert "librarian_test_mode" in helper
+    # No writes-flag / allowlist / budget gate in the undo path.
+    for forbidden in ("librarian_writes_enabled", "librarian_channels",
+                      "count_budget_used_today"):
+        assert forbidden not in helper, forbidden
+    bot_undo = text[text.index("async def librarian_undo"):
+                    text.index("async def librarian_scan")]
+    assert "token_hex" not in bot_undo
+    assert "token_urlsafe" not in bot_undo
