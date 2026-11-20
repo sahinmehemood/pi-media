@@ -29,6 +29,7 @@ PLUGIN_FILES=(
   Backend/helper/librarian_store.py
   Backend/helper/librarian_gateway.py
   Backend/helper/librarian_engine.py
+  Backend/helper/librarian_reindex.py
   Backend/fastapi/librarian_routes.py
   Backend/fastapi/templates/librarian.html
   tools/librarian_cli.py
@@ -112,6 +113,7 @@ PLUGIN_FILES=(
   tests/test_librarian_engine.py
   tests/test_librarian_templates.py
   tests/test_librarian_cli_http.py
+  tests/test_librarian_reindex.py
   tools/chief-profile/SOUL.md
   tools/chief-profile/AGENTS.md
   tools/chief-profile/memories/MEMORY.md
