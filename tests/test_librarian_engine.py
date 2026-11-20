@@ -2337,6 +2337,57 @@ def test_A4_fix_route_no_retry_after_field_when_telegram_gave_none():
     assert "retry_after" not in resp.content, resp.content
 
 
+def test_A4_flood_wait_persisted_row_carries_no_retry_after_field():
+    # Security A-4 pin: the structured retry_after seconds are a
+    # RESPONSE-BODY-only projection (_fix_result_body). The
+    # PERSISTED fix row must never gain a retry_after field — the
+    # stored document carries the seconds only as plain words
+    # inside `error`. (An idempotent replay of this row therefore
+    # surfaces the seconds in error prose only, by design.)
+    _msg, _writer, _seam = _setup_real(writer_outcomes=[(
+        429, {"ok": False, "error_code": 429,
+              "description": "Too Many Requests: retry after 30",
+              "parameters": {"retry_after": 30}})])
+    resp = _fix_via_route(_payload())
+    assert resp.status_code == 200, resp.content
+    assert resp.content["state"] == "flood_wait"
+    assert resp.content["retry_after"] == 30, resp.content
+    assert "30-second" in resp.content["error"]
+    rows = _fixes_docs()
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row["state"] == "flood_wait", row
+    assert "retry_after" not in row, row
+    assert "30-second" in row["error"], row
+
+
+def test_A4_absent_record_no_intended_passes_route_engine_refuses():
+    # Senior A-4 pin: a WELL-FORMED but ABSENT series_record_id
+    # with NO `intended` is not a route 400 — the route's record
+    # check (_check_intended_against_record) finds no record and
+    # lets the item through; the ENGINE refuses it at step 1
+    # (missing record -> refused_record_conflicted), and a step-1
+    # refusal persists NO operation row. The channel's stored
+    # type IS "tv" here: under the retired type-map check this
+    # exact request 400'd at the route (intended required for tv
+    # channels) and never reached the engine — the record-keyed
+    # check is what lets it through to the step-1 refusal.
+    _reset()
+    api._enable(librarian_channels=["-100111"],
+                librarian_channel_types={"-100111": "tv"})
+    _settings()
+    _seed_ledger()
+    msg = _message()
+    _clients({(CHAT, 1): msg}, {(CHAT, 1): msg})
+    body = _payload(series_record_id=str(api.ObjectId()),
+                    series_record_updated_at="2026-01-01T00:00:00+00:00")
+    del body["intended"]
+    resp = _fix_via_route(body)
+    assert resp.status_code == 200, resp.content
+    assert resp.content["state"] == "refused_record_conflicted", resp.content
+    assert _fixes_docs() == []
+
+
 # ------------------------------------------------------------------
 # C-1 — undo for edits (Phase 5 plan §4, DISP-7/DISP-8; DESIGN §8
 # Undo). The undo's writer is the same transport double as A-2's;
