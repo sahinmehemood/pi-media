@@ -115,7 +115,9 @@ def real_deps() -> Deps:
             err = RuntimeError(f"flood wait {params.get('retry_after')}s")
             err.retry_after = int(params.get("retry_after") or 30)
             raise err
-        raise RuntimeError(f"edit failed: {res.get('description')}")
+        raise RuntimeError(
+            f"edit failed: {res.get('description')} "
+            f"(userbot attempt: {ub_error})")
 
     async def indexed_ids(chat_id, msg_id):
         got = await db.get_media_ids_by_part(chat_id, msg_id)
