@@ -69,30 +69,34 @@ def real_deps() -> Deps:
     tracking = (getattr(db, "dbs", None) or {}).get("tracking")
 
     async def read_caption(chat_id, msg_id):
-        from Backend.pyrofork.bot import StreamBot
-        msg = await StreamBot.get_messages(chat_id, msg_id)
+        from Backend.pyrofork import bot as botmod
+        client = botmod.Userbot or botmod.StreamBot
+        msg = await client.get_messages(chat_id, msg_id)
         return (msg.caption if msg else None) or None
 
     async def edit_caption(chat_id, msg_id, caption):
-        # Primary writer: the app's userbot (StreamBot). Proven live
+        # Primary writer: the app's USERBOT client. Proven live
         # 2026-11-20: Bot API editMessageCaption returns "message to
         # edit not found" for channel posts the bot did not send —
-        # even with the bot as channel admin — while the userbot
-        # reads and edits them fine. Bot API stays as the fallback
-        # for channels where the userbot is not an admin.
-        try:
-            from Backend.pyrofork.bot import StreamBot
-            await StreamBot.edit_message_caption(chat_id, msg_id, caption)
-            return
-        except Exception as e:
-            flood = getattr(e, "value", None)
-            if flood:
-                err = RuntimeError(f"flood wait {flood}s")
-                err.retry_after = int(flood)
-                raise err
-            if "not modified" in str(e).lower():
+        # even with the bot as channel admin — and StreamBot is a
+        # bot client with the same limit. The userbot (the account
+        # that posted/admins the library channels) edits them fine.
+        # Bot API stays as the fallback.
+        from Backend.pyrofork import bot as botmod
+        if botmod.Userbot is not None:
+            try:
+                await botmod.Userbot.edit_message_caption(
+                    chat_id, msg_id, caption)
                 return
-            # fall through to the Bot API attempt below
+            except Exception as e:
+                flood = getattr(e, "value", None)
+                if flood:
+                    err = RuntimeError(f"flood wait {flood}s")
+                    err.retry_after = int(flood)
+                    raise err
+                if "not modified" in str(e).lower():
+                    return
+                # fall through to the Bot API attempt below
         import aiohttp
         token = SettingsManager.current().hermes_bot_token
         url = f"https://api.telegram.org/bot{token}/editMessageCaption"
