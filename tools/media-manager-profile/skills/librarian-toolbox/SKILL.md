@@ -160,11 +160,11 @@ Don't use for:
 1. Run `status` first. Read the live counts and settings as
    reported. Counts are live at the moment of the call; never reuse
    counts from memory, an earlier message, or a batch log.
-   `status` also returns the `channel_types` map (channel → stored
-   media type, `unknown` where absent): it is the only source of a
-   channel's type, and the way a type-named scope ("the cartoon
-   channel") resolves to a channel — if more than one channel
-   carries the named type, ask Yan which.
+   A channel's type is inferred from its NAME (a channel named
+   "Donghua Dumping" holds donghua); when a name is unclear,
+   research it — never guess. A type-named scope ("the cartoon
+   channel") resolves by channel name — if more than one channel's
+   name carries the named type, ask Yan which.
 2. Run `mode` second. Read the autonomy mode and test-mode state
    before planning any write.
    If **every** call, including `status`, fails authentication, the

@@ -56,9 +56,9 @@ Don't use for:
   and `aliases` are available.
 - The channel for the group is known. The channel is ground truth
   for media type and is never overridden by a provider result.
-  Its type is read from the stored `librarian_channel_types` map;
-  a channel absent from the map is type `unknown` — never guess
-  a type for it.
+  Its type is inferred from the channel's NAME (a channel named
+  "Donghua Dumping" holds donghua); when a name is unclear,
+  research the channel — never guess a type for it.
 
 ## Procedure
 
@@ -169,8 +169,8 @@ Hold all of the following before Stage 3 research begins:
   the season and episode structure, the group's numbering
   convention, and which files are specials. One file alone
   shows none of this.
-- The channel and its conventions: media type (from the stored
-  `librarian_channel_types` map; absent means `unknown`, never
+- The channel and its conventions: media type (inferred from the
+  channel's name; research when the name is unclear, never
   guessed), established title language, and how neighbouring
   groups in the channel are filed.
 - The series record via `record-get` and the alias via `aliases`,
