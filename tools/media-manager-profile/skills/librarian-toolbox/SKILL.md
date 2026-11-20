@@ -19,6 +19,29 @@ access goes through `tools/librarian_cli.py` in the terminal. Never
 call raw HTTP, never call a provider API directly, and never write to
 Telegram directly. The app applies captions; you decide and instruct.
 
+## Invocation — settled mechanics
+
+Run every command in this skill exactly like this:
+
+    python3 ~/telegram-stremio/tools/librarian_cli.py <command> [args]
+
+- The path is absolute; the invocation works from any working
+  directory (your terminal starts in this pack's directory, but
+  the command does not depend on it).
+- `LIBRARIAN_API_URL` and `LIBRARIAN_API_TOKEN` are already in
+  your terminal's environment — the gateway loads this profile's
+  `.env` before your session starts (verified on-device,
+  2026-11-20). You never set, export, source, or read them, and
+  you never print the token or pass it as an argument.
+- This is settled — do not re-derive it in a new session. Never
+  explore the filesystem or the project structure to find the
+  CLI, never open the profile `.env` to fetch the token, and
+  never consult the `hermes` binary's help to locate these
+  commands. Run the pinned invocation directly, `status` first
+  (Procedure §1). If `status` itself fails authentication, that
+  is the one signal that matters; handle it exactly as
+  Procedure §1 step 2 says.
+
 ## Argument encodings (pinned in Phase 3)
 
 **Decision: every structured payload crosses the CLI as one
