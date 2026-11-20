@@ -70,6 +70,24 @@ files simply never appear in your packets, and a proposal containing
 one is refused — never argue with a policy refusal; work what you
 are given.
 
+## Yan's standing order — one title at a time, beginning to end
+
+Yan's order (2026-11-20): **never graze the waiting queue.** Work
+exactly ONE title at a time:
+
+- Yan names a series, a movie, or a name → that title only
+  (Playbook B). Search and find its files yourself; work nothing else
+  alongside it.
+- No title named → take ONE series present in the channel and do it
+  **from the beginning to the end**: every file of that series, in
+  episode order, season by season, until the series is finished.
+  Only then take the next one.
+- Inside a series, work serially: first episode → last episode.
+  Files you cannot resolve get ❓/⛔ with the reason; finish the rest
+  of the series and report the gaps when the series closes.
+- The waiting queue is a reference list of what is broken — never a
+  work order. Do not hop packet to packet across unrelated shows.
+
 ## Playbooks — pick one, copy its steps, skip nothing silently
 
 Match the request to ONE playbook. Work its steps in order. If a
@@ -77,8 +95,13 @@ step cannot be done, write `skip: <reason>` in your notes and
 continue — a skipped step is visible, never invisible.
 
 **Playbook A — channel run** (Yan names a channel, or says "fix files")
-1. `status` — permissions noted (AGENTS.md run protocol).
-2. `packet` for the channel → `packet-triage` for batching.
+Under the standing order: work the channel series by series — one
+series, beginning to end, at a time. A packet is pulled per series
+run, never as a mixed batch of unrelated shows.
+1. `status` — note what the server allows (auto-apply level,
+   paused/killed, per-scope permissions).
+2. `packet` for the channel, filtered to the ONE series you are
+   running → `packet-triage` for batching.
 3. Per run: classify → naming skill → `provider-research` →
    `specials-and-arcs` if anything is SP-marked or arc-shaped.
 4. Build the plan (contract below) → `self-check-eval` → `propose`.

@@ -1278,3 +1278,36 @@ def test_proposal_reject_and_lazy_expiry():
         assert res["ok"] is False
     finally:
         _unwire(lib, saved)
+
+
+def test_apply_failure_releases_claim():
+    lib = load_lib()
+    saved, ledger, proposals, audit = _engine_setup(lib, 2)
+    settings = lib._stubs["settings"]
+    settings.librarian_dry_run = False
+    for k in ("e1", "e2"):
+        ledger.docs[k]["proposal_id"] = "pe"
+
+    async def fake_bot_api(method, params):
+        return {"ok": True, "result": {"message_id": params.get("message_id", 0)}}
+
+    async def fake_verify(chat, msg, tmdb, imdb):
+        return msg != 101  # e1 (msg 101) never indexes -> apply fails it
+
+    async def fake_clean(item):
+        return None
+
+    orig = (lib._bot_api, lib._verify_indexed, lib._delete_skip_copies)
+    lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = (
+        fake_bot_api, fake_verify, fake_clean)
+    try:
+        res = run(lib.apply_proposal("pe"))
+        assert res["ok"] is True and res["applied"] == 1, res
+        assert ledger.docs["e2"]["status"] == "fixed"
+        # The failed item is back in the pool, not locked to a dead proposal.
+        assert ledger.docs["e1"].get("proposal_id") is None
+        assert ledger.docs["e1"]["status"] == "open"
+    finally:
+        lib._bot_api, lib._verify_indexed, lib._delete_skip_copies = orig
+        settings.librarian_dry_run = True
+        _unwire(lib, saved)

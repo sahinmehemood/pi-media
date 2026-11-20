@@ -1716,6 +1716,15 @@ async def apply_proposal(proposal_id: str, approver: str = "yan") -> dict:
     results = [r if r is not None else {"key": "", "ok": False,
                                         "reason": "not processed"}
                for r in results]
+    # Items that did not land return to the pool: a failed or partial
+    # apply must not leave them claimed by a dead proposal forever.
+    for r in results:
+        if not r["ok"] and r.get("key"):
+            try:
+                await ledger.update_one({"_id": r["key"]},
+                                        {"$set": {"proposal_id": None}})
+            except Exception:
+                pass
     done = sum(1 for r in results if r["ok"])
     status = "applied" if done == len(results) else ("partial" if done else "failed")
     await coll.update_one({"_id": proposal_id}, {"$set": {
