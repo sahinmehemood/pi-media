@@ -120,6 +120,15 @@ resolution is decided once per series and stored in the series
 record (Step 8); later files of that series reuse the stored
 decision instead of re-deriving it.
 
+Scope: this absolute resolution is the default for donghua
+only. For anime it applies only when the file's caption
+already carries absolute numbering — those numbers are used
+as-is, with no conversion — or when Yan has explicitly
+directed absolute handling for that series, recorded in the
+series record. Otherwise anime keeps standard season/episode
+handling and no conversion is looked up. TV and movies never
+use this machinery.
+
 Never sum season lengths. Never add cour lengths to reach an
 absolute number. Never derive a Season 0 position from a season's
 episode count. Summed arithmetic assumes the provider's seasons
@@ -174,6 +183,12 @@ that arc. The numbers here are placeholders, not a real mapping.
 
 Specials, OVAs, and bonus episodes are placed from the fetched
 Season 0 or entry structure, never appended to a season by count:
+
+Scope: this placement research applies to donghua series
+only. Anime, TV, and movie specials keep the providers'
+standard Season 0 treatment — no positional mapping and no
+placement override — even if placement data is somehow
+present in a record.
 
 - Confirm the special exists in the provider structure by title
   or air date before assigning any specials position.
