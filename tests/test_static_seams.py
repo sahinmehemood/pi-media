@@ -87,8 +87,15 @@ def test_dl_link_plugin_is_seamless():
     patch = read("patches/integrate.patch")
     # No seam edits inside plugins/ — plugin files ship whole. (The
     # one deliberate pyrofork seam is clients.py: the failed-client
-    # crash fix, asserted in test_clients_failed_start_is_skipped.)
-    assert "diff --git a/Backend/pyrofork/plugins" not in patch
+    # crash fix, asserted in test_clients_failed_start_is_skipped.
+    # Phase 5 adds exactly one more, by DESIGN §4 seam 2:
+    # receiver.py, the Librarian re-index seam — it is the ONLY
+    # plugins/ diff the patch may carry.)
+    plugin_diffs = [line for line in patch.splitlines()
+                    if line.startswith("diff --git a/Backend/pyrofork/plugins")]
+    assert plugin_diffs == [
+        "diff --git a/Backend/pyrofork/plugins/receiver.py "
+        "b/Backend/pyrofork/plugins/receiver.py"]
     # The /dl menu entry lives in upstream's commands list instead.
     pyro = read("Backend/helper/pyro.py")
     assert 'BotCommand("dl"' in pyro
