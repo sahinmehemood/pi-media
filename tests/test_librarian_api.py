@@ -1000,6 +1000,121 @@ def test_R4_settings_payload_cannot_set_hash():
     run(go())
 
 
+# ------------------------------------------------------------------
+# Phase 4 Workstream B — B-3 regression (plan §3.3 fallback placement:
+# the real update_settings_api needs this suite's stub inventory).
+# A settings payload carrying plausible db-name keys goes through the
+# REAL update_settings_api (and is really merged by SettingsManager.
+# update — the fake records it), yet a subsequently constructed REAL
+# Database resolves its name exactly as before: no settings path can
+# reach db_name, self.db_name, or os.environ (security B-3).
+# ------------------------------------------------------------------
+
+_real_database_cls = None
+
+
+def _load_real_database():
+    global _real_database_cls
+    if _real_database_cls is not None:
+        return _real_database_cls
+
+    def _ensure(name):
+        mod = sys.modules.get(name)
+        if mod is None:
+            mod = types.ModuleType(name)
+            sys.modules[name] = mod
+        return mod
+
+    # Only the names database.py imports that this suite's inventory
+    # does not already provide, with the real shapes.
+    motor_asyncio = _ensure("motor.motor_asyncio")
+    if not hasattr(motor_asyncio, "AsyncIOMotorClient"):
+        motor_asyncio.AsyncIOMotorClient = type("AsyncIOMotorClient", (), {})
+    if not hasattr(motor_asyncio, "AsyncIOMotorDatabase"):
+        motor_asyncio.AsyncIOMotorDatabase = type("AsyncIOMotorDatabase", (), {})
+    _ensure("motor").motor_asyncio = motor_asyncio
+
+    pydantic = _ensure("pydantic")
+    if not hasattr(pydantic, "ValidationError"):
+        pydantic.ValidationError = type("ValidationError", (Exception,), {})
+
+    pymongo = sys.modules["pymongo"]
+    if not hasattr(pymongo, "DESCENDING"):
+        pymongo.DESCENDING = -1
+
+    config = _ensure("Backend.config")
+    if not hasattr(config, "Telegram"):
+        config.Telegram = type("Telegram", (), {})
+    if len(getattr(config.Telegram, "DATABASE", []) or []) < 2:
+        config.Telegram.DATABASE = [
+            "mongodb://user:pass@host1.example/b3-tests",
+            "mongodb://user:pass@host2.example/b3-tests",
+        ]
+
+    if "Backend.helper.bounded" not in sys.modules:
+        bounded = load_module("Backend.helper.bounded",
+                              "Backend/helper/bounded.py")
+        sys.modules["Backend.helper"].bounded = bounded
+
+    modal = _ensure("Backend.helper.modal")
+    for name in ("Episode", "MovieSchema", "QualityDetail",
+                 "QualityPart", "Season", "TVShowSchema"):
+        if not hasattr(modal, name):
+            setattr(modal, name, type(name, (), {}))
+    sys.modules["Backend.helper"].modal = modal
+
+    task_manager = _ensure("Backend.helper.task_manager")
+    if not hasattr(task_manager, "delete_message"):
+        async def _delete_message(*args, **kwargs):
+            return None
+        task_manager.delete_message = _delete_message
+    sys.modules["Backend.helper"].task_manager = task_manager
+
+    mod = load_module("database_b3_under_test", "Backend/helper/database.py")
+    _real_database_cls = mod.Database
+    return _real_database_cls
+
+
+def test_B3_settings_payload_cannot_reach_db_name():
+    _reset_api()
+    Database = _load_real_database()
+    payload = {"db_name": "otherdb", "TS_DB_NAME": "otherdb",
+               "database_name": "otherdb"}
+    sentinel = object()
+    old_env = os.environ.get("TS_DB_NAME", sentinel)
+
+    async def submit():
+        await api_routes.update_settings_api(dict(payload))
+
+    try:
+        # Env in force: a staging name. The payload must not move it.
+        os.environ["TS_DB_NAME"] = "dbFyvio_staging"
+        assert Database().db_name == "dbFyvio_staging"
+        run(submit())
+        # The payload really went through the real update path and was
+        # merged into the settings document (SettingsManager.update
+        # merges arbitrary keys) — it simply has no path to Database.
+        assert FakeSettingsManager.update_calls, "update() should have been called"
+        merged = FakeSettingsManager.update_calls[-1]
+        for key in payload:
+            assert merged.get(key) == "otherdb", (key, merged)
+        assert os.environ["TS_DB_NAME"] == "dbFyvio_staging"
+        assert Database().db_name == "dbFyvio_staging"
+
+        # Env unset: the payload must not move the default either.
+        del os.environ["TS_DB_NAME"]
+        FakeSettingsManager.update_calls = []
+        run(submit())
+        assert FakeSettingsManager.update_calls
+        assert "TS_DB_NAME" not in os.environ
+        assert Database().db_name == "dbFyvio"
+    finally:
+        if old_env is sentinel:
+            os.environ.pop("TS_DB_NAME", None)
+        else:
+            os.environ["TS_DB_NAME"] = old_env
+
+
 def test_R4_librarian_validation_table():
     _reset_api()
 

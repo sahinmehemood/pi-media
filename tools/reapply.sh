@@ -106,6 +106,7 @@ PLUGIN_FILES=(
   tests/test_wave2_prewarm.py
   tests/test_wave2_update_manager.py
   tests/test_librarian_store.py
+  tests/test_librarian_dbname.py
   tools/chief-profile/SOUL.md
   tools/chief-profile/AGENTS.md
   tools/chief-profile/memories/MEMORY.md

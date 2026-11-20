@@ -1,3 +1,4 @@
+import os
 import re
 import secrets
 import string
@@ -37,10 +38,45 @@ _COUNT_TTL = 60
 _count_cache = BoundedDict(500)
 
 
+_DB_NAME_DEFAULT = "dbFyvio"
+_DB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")            # B-4 shape
+_DB_NAME_NS_RE = re.compile(r"^dbFyvio_[a-z0-9_]+$")          # B-5 namespace
+
+
+def _resolve_db_name(explicit):
+    """(name, source) — precedence: explicit > env > default (B-1).
+
+    Raises ValueError on a malformed or out-of-namespace env value
+    (B-4/B-5): a staging typo must never silently land on live.
+    Explicit-argument values (from code, e.g. the Phase 3 staging
+    shim) pass the same shape regex but not the namespace allowlist.
+    """
+    if explicit is not None:
+        if not _DB_NAME_RE.match(explicit):
+            raise ValueError(
+                "db_name argument is not a valid database name "
+                "(letters, digits, '_' and '-' only, max 64 chars)")
+        return explicit, "explicit"
+    raw = os.environ.get("TS_DB_NAME")
+    if raw is None or not raw.strip():
+        return _DB_NAME_DEFAULT, "default"
+    value = raw.strip()
+    if not _DB_NAME_RE.match(value):
+        raise ValueError(
+            "TS_DB_NAME is not a valid database name "
+            "(letters, digits, '_' and '-' only, max 64 chars)")
+    if value != _DB_NAME_DEFAULT and not _DB_NAME_NS_RE.match(value):
+        raise ValueError(
+            "TS_DB_NAME must be 'dbFyvio' or a 'dbFyvio_' staging "
+            "namespace (e.g. 'dbFyvio_staging')")
+    return value, "env"
+
+
 class Database:
-    def __init__(self, db_name: str = "dbFyvio"):
+    def __init__(self, db_name: str = None):
         self.db_uris = Telegram.DATABASE
-        self.db_name = db_name
+        self.db_name, _source = _resolve_db_name(db_name)
+        LOGGER.info(f"Database name: {self.db_name} (source: {_source})")
 
         if len(self.db_uris) < 2:
             raise ValueError("At least 2 database URIs are required (1 for tracking + 1 for storage).")
@@ -236,6 +272,7 @@ class Database:
                 "locked": index <= 1,
                 "type": "tracking" if index == 0 else "storage",
                 "connected": db_key in self.clients,
+                "db_name": self.db_name,
             }
             if index > 1:
                 entry["full_uri"] = uri
