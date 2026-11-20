@@ -168,6 +168,38 @@ def test_search_cache_avoids_repeat_calls():
     assert len([c for c in prov.calls if c[0] == "search"]) == n
 
 
+def test_outage_is_never_negative_cached():
+    store, prov, ident = _setup()
+    prov.down.update({"tmdb", "tvdb", "cinemeta"})
+    res = ident.resolve("Bleach", kind="tv", year=2004, now=T0)
+    assert res.status == "unresolved"
+    assert res.breakdown.get("providers_down") is True
+    # Providers recover: the same stem resolves immediately — no 24h
+    # negative cache standing in the way.
+    prov.down.clear()
+    prov.search_results[("tmdb", "Bleach")] = [
+        _cand("tmdb", "5", "Bleach", 2004, "tt0434665")]
+    res2 = ident.resolve("Bleach", kind="tv", year=2004, now=T0 + 60)
+    assert res2.status == "identified"
+
+
+def test_partial_results_used_but_not_cached():
+    store, prov, ident = _setup()
+    prov.down.add("tmdb")
+    prov.search_results[("tvdb", "Bleach")] = [
+        _cand("tvdb", "8", "Bleach", 2004, "tt0434665")]
+    res = ident.resolve("Bleach", kind="tv", year=2004, now=T0)
+    assert res.status == "identified" and res.score == 0.90
+    # TMDB recovers with the same series: a fresh search must happen
+    # (partial result was not frozen into the cache) and agreement
+    # raises the score to 0.95.
+    prov.down.discard("tmdb")
+    prov.search_results[("tmdb", "Bleach")] = [
+        _cand("tmdb", "5", "Bleach", 2004, "tt0434665")]
+    res2 = ident.resolve("Bleach", kind="tv", year=2004, now=T0 + 60)
+    assert res2.score == 0.95 and res2.breakdown["agreement"] is True
+
+
 def test_verify_proposal_scores():
     store, prov, ident = _setup()
     prov.by_id[("tmdb", "999")] = _cand("tmdb", "999", "Perfect World",

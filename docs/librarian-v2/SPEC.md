@@ -293,6 +293,13 @@ byte-compare + full suite is the release proof for every phase.
 
 ## Amendments
 
+3. 2026-11-20 (Yan's correction + shadow analysis): TMDB from the Narzo
+   is *intermittent*, not dead — it connects and errors at different
+   times. An outage must never be mistaken for a dead end: when every
+   provider in the chain is down/breaker-skipped, `resolve` returns
+   `providers_down` and writes NO negative cache (the stem stays
+   retryable); partial results (some providers down) are scored and
+   used but never cached as if complete.
 2. 2026-11-20 (Phase 2 shadow run): the ladder alone resolved **0/40**
    known-fixed stems on the live library — TMDB was unreachable for the
    whole run, the merged search facade left only Cinemeta, and the

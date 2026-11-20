@@ -202,16 +202,27 @@ class Identifier:
 
         chain = CHAINS.get(kind, CHAINS["tv"])
         candidates = []
+        answered = 0
         for provider in chain:
             results = self._search(provider, raw_title, kind, year, now)
-            if results:
+            if results is not None:
+                answered += 1
                 candidates.extend(results)
         if not candidates:
+            if answered == 0:
+                # Every provider is down or breaker-skipped: this is an
+                # OUTAGE, not a dead end. Never negative-cache it — the
+                # stem stays retryable (SPEC amendment 3).
+                return Resolution(None, "search", 0.0,
+                                  {"providers_down": True}, "unresolved")
             self.store.cache_put(cache_key, [], NEGATIVE_TTL, now,
                                  negative=True)
             return Resolution(None, "search", 0.0, {"no_candidates": True},
                               "unresolved")
-        self.store.cache_put(cache_key, candidates, SEARCH_TTL, now)
+        if answered == len(chain):
+            # Only a complete picture is worth caching; a partial one
+            # (some providers down) is used now but never frozen.
+            self.store.cache_put(cache_key, candidates, SEARCH_TTL, now)
         return self._score_candidates(candidates, raw_title, year, kind, now)
 
     def _score_candidates(self, candidates, raw_title, year, kind, now,
