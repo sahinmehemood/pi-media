@@ -280,3 +280,77 @@ def test_C5_settings_writer_render_sentinel():
                                       "database_list": []}))
     assert "Writer bot: Not set" in html
     assert WRITER_SENTINEL not in html
+
+
+# ------------------------------------------------------------------
+# settings.html — Librarian channels tick-box picker (Yan, 2026-11-20:
+# channel types retired — the bot infers a channel's nature from its
+# NAME; the allowlist is a closed picker of the app's source channels
+# plus the skip channel, shown by name; the save clears the stored
+# types map so no phantom ground truth lingers)
+# ------------------------------------------------------------------
+
+def test_librarian_channels_picker_static():
+    text = SETTINGS_HTML.read_text(encoding="utf-8")
+    # Picker container + tick toggles, pre-ticked from the allowlist.
+    assert 'id="librarian_channels_items"' in text
+    assert 'class="librarian-allow-toggle"' in text
+    assert "collectLibrarianChannels" in text
+    assert "rebuildLibrarianChannels" in text
+    # Closed universe: sources are the app's source-channel lists plus
+    # the skip channel; names come from the channel_titles map — the
+    # same data source every other channel list on the page uses.
+    for key in ("settings.auth_channels", "settings.manual_channels",
+                "settings.global_search_channels", "settings.skip_channel",
+                "settings.channel_titles"):
+        assert key in text, key
+    # No types UI anywhere: no type selects/vocabulary, no merged-row
+    # machinery, and no add-by-ID row (the universe is closed).
+    for gone in ("lct-type", "lct-channel", "LIBRARIAN_CHANNEL_TYPES",
+                 "collectLibrarianChannelTypes", "librarian_channels_new",
+                 "addLibrarianChannelRow"):
+        assert gone not in text, gone
+    # Help line carries Yan's model: tick + name inference.
+    assert "tick the channels the bot may work in" in text
+    assert "reads each channel's" in text
+    # Save payload: ticked IDs via the collector, and the stored types
+    # map cleared explicitly (an absent key would be left untouched by
+    # the settings backend, so the empty map must be posted).
+    start = text.index("const payload = {")
+    end = text.index("};", start)
+    payload = text[start:end]
+    assert "librarian_channels:" in payload
+    assert "collectLibrarianChannels()" in payload
+    assert re.search(r"librarian_channel_types:\s*\{\}", payload)
+
+
+def test_librarian_channels_picker_render():
+    """Render: source channels + skip render by name; exactly the
+    allowlisted ones are ticked; no type select renders."""
+    source = SETTINGS_HTML.read_text(encoding="utf-8")
+    settings = {
+        "channel_titles": {
+            "-100111": "Donghua Dumping", "-100222": "Movie Dumping",
+            "-100333": "Series Dumping", "-100444": "Ani Dumping",
+            "-100999": "Skip Bin",
+        },
+        "database_list": [],
+        "auth_channels": ["-100111", "-100222"],
+        "manual_channels": ["-100333"],
+        "global_search_channels": ["-100444"],
+        "skip_channel": "-100999",
+        "librarian_channels": ["-100111", "-100999"],
+        "librarian_channel_types": {"-100111": "donghua"},
+    }
+    html = _try_render("settings.html", source, _settings_ctx(settings))
+    if html is None:
+        return
+    seg_start = html.index('id="librarian_channels_items"')
+    seg = html[seg_start:html.index('<hr class="divider">', seg_start)]
+    for name in ("Donghua Dumping", "Movie Dumping", "Series Dumping",
+                 "Ani Dumping", "Skip Bin"):
+        assert name in seg, name
+    assert seg.count('class="librarian-allow-toggle"') == 5
+    assert seg.count("checked") == 2  # only the two allowlisted rows
+    assert "<select" not in seg
+    assert "lct-" not in html
