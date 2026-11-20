@@ -26,8 +26,6 @@ PLUGIN_FILES=(
   Backend/helper/stream_source.py
   Backend/helper/prewarm.py
   Backend/helper/update_manager.py
-  Backend/helper/hermes_bot.py
-  Backend/helper/automations.py
   Backend/pyrofork/plugins/dl_link.py
   Backend/pyrofork/plugins/prewarm_hooks.py
   Backend/fastapi/templates/dl_index.html
@@ -40,8 +38,6 @@ PLUGIN_FILES=(
   tests/test_wave2_engine.py
   tests/test_wave2_prewarm.py
   tests/test_wave2_update_manager.py
-  tests/test_hermes_bot.py
-  tests/test_automations.py
   tools/chief-profile/SOUL.md
   tools/chief-profile/AGENTS.md
   tools/chief-profile/memories/MEMORY.md
