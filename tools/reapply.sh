@@ -111,6 +111,7 @@ PLUGIN_FILES=(
   tests/test_librarian_writer.py
   tests/test_librarian_engine.py
   tests/test_librarian_templates.py
+  tests/test_librarian_cli_http.py
   tools/chief-profile/SOUL.md
   tools/chief-profile/AGENTS.md
   tools/chief-profile/memories/MEMORY.md

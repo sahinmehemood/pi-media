@@ -15,7 +15,8 @@ MODULES = ["test_stream_buffer_core", "test_buffered_streamer", "test_static_sea
            "test_wave2_update_manager", "test_librarian_store",
            "test_librarian_gateway", "test_librarian_api",
            "test_librarian_dbname", "test_librarian_templates",
-           "test_librarian_writer", "test_librarian_engine"]
+           "test_librarian_writer", "test_librarian_engine",
+           "test_librarian_cli_http"]
 
 
 def main() -> int:
