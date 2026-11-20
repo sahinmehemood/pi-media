@@ -2117,6 +2117,78 @@ def test_A3_flood_wait_under_concurrency_inflight_finish_rest_aborted():
         assert "flood" in row["error"].lower()
 
 
+def test_A3_concurrent_batch_budget_race_exactly_one_counted():
+    # Security A-3 follow-up (S5-3 through the batch executor):
+    # the standalone race pin above drives concurrent fix_one
+    # calls; this drives the same boundary THROUGH a non-serial
+    # fix_batch — budget = 1 remaining, six items, serial=False.
+    # Exactly one item may reserve (budget_counted=true); every
+    # other item is recorded aborted/uncounted, and no item is
+    # written twice. The winner is lock-arrival order, NOT
+    # request order (Senior A-3 note), so only the count
+    # invariant is asserted — never which request_id wins.
+    #
+    # The fake DB's awaits never yield, so without latency the
+    # "race" would serialise by accident and could not bind the
+    # step-2 lock discipline at all. A real motor count is a
+    # network round-trip that yields, so the wrapper below is
+    # production-shaped: it snapshots the count, then yields
+    # before the caller can act on it. Inside _WRITE_LOCK the
+    # snapshot + persist stay one unit (the holder sleeps, the
+    # contenders wait on the lock and recount after it); were
+    # the evaluation moved outside the lock, every in-flight
+    # item would snapshot 0 and reserve.
+    channels = [-100511 - i for i in range(6)]
+    spec = [(c, 1) for c in channels]
+    writer = TrackingWriter(delay=0.05)
+    _setup_batch(channels, spec, writer,
+                 librarian_edit_budget_per_day=1)
+    items = [_payload(request_id=f"cb-{i}", chat_id=c, msg_id=1)
+             for i, c in enumerate(channels)]
+    orig_count = store.count_budget_used_today
+
+    async def yielding_count():
+        used = await orig_count()
+        await asyncio.sleep(0.01)
+        return used
+
+    store.count_budget_used_today = yielding_count
+    try:
+        resp = _batch_via_route("cb-batch", items, serial=False)
+    finally:
+        store.count_budget_used_today = orig_count
+    assert resp.status_code == 200, resp.content
+    results = resp.content["results"]
+    # Results still come back in request order, every item present.
+    assert [r["request_id"] for r in results] == [
+        f"cb-{i}" for i in range(6)]
+    states = [r["state"] for r in results]
+    assert states.count("fixed") == 1, states
+    assert states.count("aborted") == 5, states
+    rows = _fixes_docs()
+    # One row per item: nothing dropped, nothing duplicated.
+    assert len(rows) == 6
+    assert len({r["request_id"] for r in rows}) == 6
+    counted = [r for r in rows if r["budget_counted"] is True]
+    assert len(counted) == 1, counted
+    assert counted[0]["state"] == "fixed"
+    # The persisted reservation and the reported winner agree
+    # (whichever item that is — arrival order decides).
+    fixed_ids = [r["request_id"] for r in results
+                 if r["state"] == "fixed"]
+    assert fixed_ids == [counted[0]["request_id"]]
+    for row in rows:
+        if row["budget_counted"] is True:
+            continue
+        assert row["state"] == "aborted", row
+        assert "budget" in row["error"]
+    assert _budget_used() == 1
+    # Exactly one write ever reached Telegram: the losers were
+    # refused at their step-2 persist, before any writer call,
+    # and the winner was written exactly once.
+    assert len(writer.calls) == 1, writer.calls
+
+
 # ------------------------------------------------------------------
 # A-4 — the route completion (Phase 5 plan §2.5, C-2; Tech Lead Q2
 # ruling): `intended` enforcement keyed to the REFERENCED RECORD's
