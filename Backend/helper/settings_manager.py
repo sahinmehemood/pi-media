@@ -5,7 +5,6 @@ from typing import Any, Dict, List
 
 import Backend.pyrofork.bot as botmod
 from Backend.config import Telegram
-from Backend.helper.hermes_bot import sanitize_identity as _sanitize_hermes_identity
 from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
 from Backend.helper.prewarm import PROFILES as _PREWARM_PROFILES
 from Backend.helper.prewarm import RANGES as _PREWARM_RANGES
@@ -55,11 +54,6 @@ _DEFAULTS: Dict[str, Any] = {
     #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
     "dl_channel_id": "",
     "dl_expire_days": 0,
-    #----- Hermes Bot (Media Manager): token + resolved identity.
-    #----- The token is verified via getMe on save and NEVER used to
-    #----- build a streaming client — the bot is librarian-only.
-    "hermes_bot_token": "",
-    "hermes_bot": {},
     "delete_on_metadata_fail": False,
     "better_poster_enabled": False,
     "better_poster": "",
@@ -93,28 +87,6 @@ _DEFAULTS: Dict[str, Any] = {
     "prewarm_trigger_pct": 70,
     "prewarm_daily_budget_mb": 2048,
     "prewarm_only_charging": False,
-    "librarian_enabled": False,
-    "librarian_dry_run": True,
-    "librarian_auto_apply_tier_a": False,
-    "librarian_auto_apply": "",
-    "librarian_modules": {},
-    "librarian_channel_policies": {},
-    "librarian_bot_state": "active",
-    "librarian_digest": "manual",
-    "librarian_edit_budget_per_day": 50,
-    "librarian_channels": [],
-    "librarian_api_token": "",
-    "librarian_batch_size": 60,
-    "librarian_apply_workers": 4,
-    "librarian_gate_strict_year": False,
-    "librarian_specials_policy": "guard",
-    "librarian_v2_enabled": False,
-    "librarian_v2_db_path": "",
-    "librarian_v2_dry_run": True,
-    "librarian_v2_daily_budget": 5000,
-    "librarian_v2_auto_floor": 0.95,
-    "librarian_v2_approval_floor": 0.80,
-    "librarian_v2_specials_policy": "guard",
 }
 
 
@@ -210,16 +182,6 @@ class Settings:
     def announce_new_content(self) -> bool:
         return bool(self._d.get("announce_new_content", False))
 
-    @property
-    def hermes_bot_token(self) -> str:
-        return str(self._d.get("hermes_bot_token") or "").strip()
-
-    @property
-    def hermes_bot(self) -> Dict[str, Any] | None:
-        """Resolved Hermes Bot identity {user_id, username, name}, or
-        None when no Hermes Bot is registered. The Bot Admin Manager
-        promotes this bot by user id; it is never a streaming client."""
-        return _sanitize_hermes_identity(self._d.get("hermes_bot"))
 
     @property
     def delete_on_metadata_fail(self) -> bool:
@@ -490,142 +452,6 @@ class Settings:
     def prewarm_only_charging(self) -> bool:
         return bool(self._d.get("prewarm_only_charging", False))
 
-    #----- Librarian (Hermes curation — docs/librarian/DESIGN.md).
-    #----- Read live on every use, so changes apply without a restart.
-    #----- librarian_channels empty means every auth channel is in
-    #----- scope; a non-empty list restricts curation to those.
-    @property
-    def librarian_enabled(self) -> bool:
-        return bool(self._d.get("librarian_enabled", False))
-
-    @property
-    def librarian_dry_run(self) -> bool:
-        return bool(self._d.get("librarian_dry_run", True))
-
-    @property
-    def librarian_auto_apply_tier_a(self) -> bool:
-        return bool(self._d.get("librarian_auto_apply_tier_a", False))
-
-    @property
-    def librarian_auto_apply(self) -> str:
-        """The automation ladder (v5): off | safe | all. This setting IS
-        the bot's permission to apply fixes without asking in Telegram.
-        The stored default is "" (unset) on purpose: an explicit 'off'
-        must beat the legacy migration — the old tier-a toggle was
-        cosmetic, and an owner who had it ON gets 'safe', the
-        behaviour it always promised."""
-        value = str(self._d.get("librarian_auto_apply") or "").strip().lower()
-        if value in ("off", "safe", "all"):
-            return value
-        return "safe" if self._d.get("librarian_auto_apply_tier_a") else "off"
-
-    @property
-    def librarian_modules(self) -> dict:
-        """Which Librarian-page sections Yan has chosen (module id ->
-        bool). Merged over the registry defaults by the page handler."""
-        raw = self._d.get("librarian_modules") or {}
-        return raw if isinstance(raw, dict) else {}
-
-    @property
-    def librarian_channel_policies(self) -> dict:
-        """Per-channel permission matrix for the Media Manager:
-        {channel_id: {"auto": inherit|off|safe|all, "scopes":
-        {"waiting"|"indexed"|"unindexed": allow|ask|deny}}}."""
-        raw = self._d.get("librarian_channel_policies") or {}
-        return raw if isinstance(raw, dict) else {}
-
-    @property
-    def librarian_bot_state(self) -> str:
-        """The Hermes agent panel's master control for the Media
-        Manager: active | paused (no new work) | killed (no bot API
-        work at all until Yan restarts it)."""
-        value = str(self._d.get("librarian_bot_state") or "active").strip().lower()
-        return value if value in ("active", "paused", "killed") else "active"
-
-    @property
-    def librarian_digest(self) -> str:
-        value = str(self._d.get("librarian_digest") or "manual").strip().lower()
-        return value if value in ("manual", "daily", "weekly") else "manual"
-
-    @property
-    def librarian_edit_budget_per_day(self) -> int:
-        value = self._d.get("librarian_edit_budget_per_day", 50)
-        if isinstance(value, bool) or not isinstance(value, int):
-            return 50
-        return max(0, min(10000, value))
-
-    @property
-    def librarian_channels(self) -> list:
-        value = self._d.get("librarian_channels")
-        return list(value) if isinstance(value, list) else []
-
-    @property
-    def librarian_api_token(self) -> str:
-        return str(self._d.get("librarian_api_token") or "").strip()
-
-    @property
-    def librarian_batch_size(self) -> int:
-        value = self._d.get("librarian_batch_size", 60)
-        if isinstance(value, bool) or not isinstance(value, int):
-            return 60
-        return max(1, min(200, value))
-
-    @property
-    def librarian_apply_workers(self) -> int:
-        value = self._d.get("librarian_apply_workers", 4)
-        if isinstance(value, bool) or not isinstance(value, int):
-            return 4
-        return max(1, min(16, value))
-
-    @property
-    def librarian_gate_strict_year(self) -> bool:
-        return bool(self._d.get("librarian_gate_strict_year", False))
-
-    @property
-    def librarian_specials_policy(self) -> str:
-        value = str(self._d.get("librarian_specials_policy") or "guard").strip().lower()
-        return value if value in ("guard", "off") else "guard"
-
-    #----- Librarian v2 (Work Orders — docs/librarian-v2/SPEC.md).
-    @property
-    def librarian_v2_enabled(self) -> bool:
-        return bool(self._d.get("librarian_v2_enabled", False))
-
-    @property
-    def librarian_v2_db_path(self) -> str:
-        return str(self._d.get("librarian_v2_db_path") or
-                   "librarian_v2.sqlite3")
-
-    @property
-    def librarian_v2_dry_run(self) -> bool:
-        return bool(self._d.get("librarian_v2_dry_run", True))
-
-    @property
-    def librarian_v2_daily_budget(self) -> int:
-        try:
-            return int(self._d.get("librarian_v2_daily_budget", 5000))
-        except (TypeError, ValueError):
-            return 5000
-
-    @property
-    def librarian_v2_auto_floor(self) -> float:
-        try:
-            return float(self._d.get("librarian_v2_auto_floor", 0.95))
-        except (TypeError, ValueError):
-            return 0.95
-
-    @property
-    def librarian_v2_approval_floor(self) -> float:
-        try:
-            return float(self._d.get("librarian_v2_approval_floor", 0.80))
-        except (TypeError, ValueError):
-            return 0.80
-
-    @property
-    def librarian_v2_specials_policy(self) -> str:
-        value = str(self._d.get("librarian_v2_specials_policy") or
-                    "guard").strip().lower()
-        return value if value in ("guard", "off") else "guard"
 
     #----- Lists
     @property

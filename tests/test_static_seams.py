@@ -232,120 +232,8 @@ def test_template_context_seam():
     assert '"buffer_health": buffer_health' in text
 
 
-def test_hermes_bot_seams():
-    routes = read("Backend/fastapi/routes/api_routes.py")
-    assert "_all_known_bots" in routes
-    # Scan and apply must resolve bots through the known set (pool +
-    # Hermes Bot), never the pool alone, so the Hermes Bot is never
-    # reported as an orphan.
-    assert routes.count("bots = await _all_known_bots()") == 2
-    # The Hermes Bot token is verified via getMe on settings save.
-    assert "_resolve_bot_identity" in routes
-    assert '"hermes_bot_token" in payload' in routes
-    main = read("Backend/fastapi/main.py")
-    assert "bot-admin/external" not in main
-    tools = read("Backend/fastapi/templates/tools.html")
-    assert "ba-ext-username" not in tools
-    assert "addExternalBot" not in tools
-    assert "(Hermes bot)" in tools
-    settings_page = read("Backend/fastapi/templates/settings.html")
-    assert 'id="hermes_bot_token"' in settings_page
-    assert "Hermes Bot" in settings_page
-    sm = read("Backend/helper/settings_manager.py")
-    assert '"hermes_bot_token"' in sm
-    assert '"hermes_bot"' in sm
-    assert "def hermes_bot" in sm
-    assert "bot_admin_extra_bots" not in sm
-    helper = read("Backend/helper/hermes_bot.py")
-    # The identity helper must stay pool-agnostic.
-    assert "multi_clients" not in helper
-    # Promoting a bot the session has never met needs the peer resolved
-    # first, or Telegram answers PEER_ID_INVALID.
-    assert "_meet_peer" in routes
-    assert "await _meet_peer(bot)" in routes
 
 
-def test_librarian_seams():
-    routes = read("Backend/fastapi/routes/api_routes.py")
-    main_py = read("Backend/fastapi/main.py")
-    templates = read("Backend/fastapi/routes/template_routes.py")
-    skip = read("Backend/helper/skip_channel.py")
-    scan = read("Backend/helper/scan_manager.py")
-    sm = read("Backend/helper/settings_manager.py")
-    settings_html = read("Backend/fastapi/templates/settings.html")
-    base_html = read("Backend/fastapi/templates/base.html")
-
-    # Ledger hook: both ingest paths funnel through route_to_skip_channel;
-    # the scan path tags its origin, the live path keeps the default.
-    assert "record_from_message" in skip
-    assert 'origin: str = "live-fail"' in skip
-    assert 'origin="scan-fail"' in scan
-    # Settings: defaults + live properties for every Librarian key.
-    for key in ("librarian_enabled", "librarian_dry_run",
-                "librarian_auto_apply_tier_a", "librarian_auto_apply",
-                "librarian_digest",
-                "librarian_edit_budget_per_day", "librarian_channels",
-                "librarian_api_token", "librarian_batch_size",
-                "librarian_gate_strict_year", "librarian_specials_policy"):
-        assert f'"{key}"' in sm, key
-        assert f"def {key}" in sm, key
-    # Page controls: only the essentials Yan uses (2026-11-19 trim) —
-    # digest / batch_size / strict_year / specials_policy stay backend
-    # settings (defaults + API validation above) but have no page input.
-    for key in ("librarian_enabled", "librarian_dry_run",
-                "librarian_auto_apply",
-                "librarian_edit_budget_per_day", "librarian_api_token"):
-        assert f'id="{key}"' in settings_html, key
-    assert 'id="librarian_channels_items"' in settings_html
-    assert "collectList('librarian_channels')" in settings_html
-    assert "'librarian_channels'" in settings_html  # channelLists validation
-    # API validation + actions + token-guarded bot endpoints.
-    assert '"librarian_digest" in payload' in routes
-    assert '"librarian_batch_size" in payload' in routes
-    assert '"librarian_specials_policy" in payload' in routes
-    assert '"librarian_gate_strict_year" in payload' in routes
-    # v4.1 guards live in the librarian module.
-    lib_src = read("Backend/helper/librarian.py")
-    assert "_live_identity_ok" in lib_src
-    assert "seen_caption" in lib_src
-    assert "curation_packets" in lib_src
-    assert "runs_hint" in lib_src
-    assert "librarian_action_api" in routes
-    assert "librarian_bot_status_api" in routes
-    assert "librarian_bot_packet_api" in routes
-    assert "librarian_bot_proposals_api" in routes
-    assert "librarian_bot_apply_api" in routes
-    assert "x-librarian-token" in routes
-    # Routes + page + nav.
-    assert '"/admin/librarian"' in main_py
-    assert '"/api/librarian/status"' in main_py
-    assert '"/api/librarian/packet"' in main_py
-    assert '"/api/librarian/proposals"' in main_py
-    assert '"/api/librarian/apply"' in main_py
-    assert "def librarian_page" in templates
-    assert "'/admin/librarian'" in base_html
-    # The v4 page is a control panel, not the Phase 1 tables.
-    page = read("Backend/fastapi/templates/librarian.html")
-    assert "Scan channel" in page
-    assert 'id="lib-stop"' in page
-    assert "lib_counts.waiting" in page
-    assert "Runs & proposals" not in page
-    # v4.1 visibility: per-file before/after + Telegram deep links —
-    # since the modular page (L2) these live in the fragment partials.
-    proposals_frag = read("Backend/fastapi/templates/librarian/_proposals.html")
-    activity_frag = read("Backend/fastapi/templates/librarian/_activity.html")
-    assert "items_detail" in proposals_frag
-    assert "t.me/c/" in activity_frag
-    assert "f.before" in activity_frag
-    # L2 modules: registry, fragment route, sections chooser.
-    assert "PAGE_MODULES" in lib_src
-    assert '"/admin/librarian/fragment/{name}"' in main_py
-    assert "data-module" in page
-    assert "data-frag" in page
-    # L3 automations: engine actions + ticker started at app startup.
-    assert '"job_config"' in routes
-    assert '"job_run"' in routes
-    assert "automations.start()" in main_py
 
 
 if __name__ == "__main__":
@@ -365,29 +253,7 @@ def test_clients_failed_start_is_skipped():
     assert "diff --git a/Backend/pyrofork/clients.py" in patch
 
 
-def test_automations_imports_logger_from_backend_logger():
-    # Regression guard: `from Backend import LOGGER` ImportErrors in
-    # production (Backend/__init__ does not export LOGGER) and killed
-    # every app start at the FastAPI lifespan hook — the test harness
-    # stub masked it once; never again.
-    text = read("Backend/helper/automations.py")
-    assert "from Backend.logger import LOGGER" in text
-    assert "from Backend import LOGGER" not in text
 
 
-def test_automations_uses_real_tracking_accessor():
-    # Regression guard: db.get_tracking_db() does not exist on the
-    # Database class — calling it silently disabled ALL automations
-    # persistence in production (configs never saved, runs never
-    # recorded) while the stubbed unit tests stayed green.
-    text = read("Backend/helper/automations.py")
-    assert "get_tracking_db" not in text
-    assert 'get("tracking")' in text
 
 
-def test_apply_engine_present():
-    lib = read("Backend/helper/librarian.py")
-    assert "class _Pacer" in lib
-    assert "librarian_apply_workers" in lib
-    sm = read("Backend/helper/settings_manager.py")
-    assert '"librarian_apply_workers": 4' in sm

@@ -12,11 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 MODULES = ["test_stream_buffer_core", "test_buffered_streamer", "test_static_seams",
            "test_dl_link", "test_wave2_engine", "test_wave2_prewarm",
-           "test_wave2_update_manager", "test_hermes_bot", "test_librarian",
-           "test_automations", "test_librarian_v2_harness",
-           "test_librarian_v2_core", "test_librarian_v2_identify",
-           "test_librarian_v2_orders", "test_librarian_v2_api",
-           "test_librarian_simple", "test_librarian_gateway"]
+           "test_wave2_update_manager"]
 
 
 def main() -> int:

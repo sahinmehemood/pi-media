@@ -27,29 +27,10 @@ PLUGIN_FILES=(
   Backend/helper/prewarm.py
   Backend/helper/update_manager.py
   Backend/helper/hermes_bot.py
-  Backend/helper/librarian.py
-Backend/helper/librarian_simple.py
-Backend/helper/librarian_gateway.py
   Backend/helper/automations.py
-  Backend/librarian_v2/__init__.py
-  Backend/librarian_v2/schema.sql
-  Backend/librarian_v2/store.py
-  Backend/librarian_v2/jobs.py
-  Backend/librarian_v2/identify.py
-  Backend/librarian_v2/orders.py
-  Backend/librarian_v2/api.py
   Backend/pyrofork/plugins/dl_link.py
   Backend/pyrofork/plugins/prewarm_hooks.py
   Backend/fastapi/templates/dl_index.html
-  Backend/fastapi/templates/librarian.html
-  Backend/fastapi/templates/librarian_simple.html
-  Backend/fastapi/templates/librarian/_proposals.html
-  Backend/fastapi/templates/librarian/_activity.html
-  Backend/fastapi/templates/librarian/_flagged.html
-  Backend/fastapi/templates/librarian/_aliases.html
-  Backend/fastapi/templates/librarian/_automations.html
-  Backend/fastapi/templates/librarian/_agent.html
-  Backend/fastapi/templates/librarian/_preidentified.html
   tests/_loader.py
   tests/run_all.py
   tests/test_stream_buffer_core.py
@@ -60,45 +41,7 @@ Backend/helper/librarian_gateway.py
   tests/test_wave2_prewarm.py
   tests/test_wave2_update_manager.py
   tests/test_hermes_bot.py
-  tests/test_librarian.py
   tests/test_automations.py
-  tests/librarian_v2/__init__.py
-  tests/librarian_v2/harness.py
-  tests/test_librarian_v2_harness.py
-  tests/test_librarian_v2_core.py
-  tests/test_librarian_v2_identify.py
-  tests/test_librarian_v2_orders.py
-  tests/test_librarian_v2_api.py
-  tests/test_librarian_simple.py
-  tests/test_librarian_gateway.py
-  docs/librarian/DESIGN.md
-  docs/librarian/DESIGN-v4.md
-  docs/librarian/DESIGN-v5.md
-  docs/librarian-v2/SPEC.md
-  tools/librarian_cli.py
-  tools/media-manager-profile/SOUL.md
-  tools/media-manager-profile/AGENTS.md
-  tools/media-manager-profile/memories/MEMORY.md
-  tools/media-manager-profile/memories/USER.md
-  tools/media-manager-profile/skills/librarian/SKILL.md
-  tools/media-manager-profile/skills/librarian-simple/SKILL.md
-  tools/media-manager-profile/skills/provider-research/SKILL.md
-  tools/media-manager-profile/skills/release-naming/SKILL.md
-  tools/media-manager-profile/skills/movie-naming/SKILL.md
-  tools/media-manager-profile/skills/tv-naming/SKILL.md
-  tools/media-manager-profile/skills/anime-naming/SKILL.md
-  tools/media-manager-profile/skills/donghua-naming/SKILL.md
-  tools/media-manager-profile/skills/cartoon-naming/SKILL.md
-  tools/media-manager-profile/skills/drama-naming/SKILL.md
-  tools/media-manager-profile/skills/telegram-uploaders/SKILL.md
-  tools/media-manager-profile/skills/packet-triage/SKILL.md
-  tools/media-manager-profile/skills/specials-and-arcs/SKILL.md
-  tools/media-manager-profile/skills/quality-and-editions/SKILL.md
-  tools/media-manager-profile/skills/gate-and-apply/SKILL.md
-  tools/media-manager-profile/skills/alias-and-memory-discipline/SKILL.md
-  tools/media-manager-profile/skills/screenshot-evidence/SKILL.md
-  tools/media-manager-profile/skills/self-check-eval/SKILL.md
-  tools/media-manager-profile/skills/failure-playbooks/SKILL.md
   tools/chief-profile/SOUL.md
   tools/chief-profile/AGENTS.md
   tools/chief-profile/memories/MEMORY.md

@@ -32,7 +32,6 @@ from Backend.helper.encrypt import decode_string, encode_string
 from Backend.helper.health import run_health_checks
 from Backend.helper.manual_add import resolve_telegram_message, retag_media, stamp_caption_by_ref
 from Backend.helper import own_bots
-from Backend.helper.hermes_bot import manager_entry as _hermes_manager_entry
 from Backend.helper.pyro import resolve_video_thumb_url
 from Backend.helper.requests_manager import (
     delete_request,
@@ -1940,41 +1939,6 @@ async def update_settings_api(payload: dict) -> dict:
         if isinstance(_v, bool) or not isinstance(_v, int):
             raise HTTPException(status_code=400, detail="'dl_expire_days' must be an integer.")
         payload["dl_expire_days"] = max(0, min(3650, _v))
-    if "librarian_enabled" in payload:
-        payload["librarian_enabled"] = bool(payload["librarian_enabled"])
-    if "librarian_dry_run" in payload:
-        payload["librarian_dry_run"] = bool(payload["librarian_dry_run"])
-    if "librarian_auto_apply_tier_a" in payload:
-        payload["librarian_auto_apply_tier_a"] = bool(payload["librarian_auto_apply_tier_a"])
-    if "librarian_auto_apply" in payload:
-        _v = str(payload["librarian_auto_apply"] or "off").strip().lower()
-        if _v not in ("off", "safe", "all"):
-            raise HTTPException(status_code=400, detail="'librarian_auto_apply' must be off, safe or all.")
-        payload["librarian_auto_apply"] = _v
-    if "librarian_digest" in payload:
-        _v = str(payload["librarian_digest"] or "manual").strip().lower()
-        if _v not in ("manual", "daily", "weekly"):
-            raise HTTPException(status_code=400, detail="'librarian_digest' must be manual, daily or weekly.")
-        payload["librarian_digest"] = _v
-    if "librarian_edit_budget_per_day" in payload:
-        _v = payload["librarian_edit_budget_per_day"]
-        if isinstance(_v, bool) or not isinstance(_v, int):
-            raise HTTPException(status_code=400, detail="'librarian_edit_budget_per_day' must be an integer.")
-        payload["librarian_edit_budget_per_day"] = max(0, min(10000, _v))
-    if "librarian_api_token" in payload:
-        payload["librarian_api_token"] = str(payload["librarian_api_token"] or "").strip()
-    if "librarian_batch_size" in payload:
-        _v = payload["librarian_batch_size"]
-        if isinstance(_v, bool) or not isinstance(_v, int):
-            raise HTTPException(status_code=400, detail="'librarian_batch_size' must be an integer.")
-        payload["librarian_batch_size"] = max(1, min(200, _v))
-    if "librarian_gate_strict_year" in payload:
-        payload["librarian_gate_strict_year"] = bool(payload["librarian_gate_strict_year"])
-    if "librarian_specials_policy" in payload:
-        _v = str(payload["librarian_specials_policy"] or "guard").strip().lower()
-        if _v not in ("guard", "off"):
-            raise HTTPException(status_code=400, detail="'librarian_specials_policy' must be guard or off.")
-        payload["librarian_specials_policy"] = _v
 
     if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
@@ -2046,13 +2010,6 @@ async def update_settings_api(payload: dict) -> dict:
                 cleaned.append(c)
         payload["manual_channels"] = cleaned
 
-    if "librarian_channels" in payload:
-        cleaned = []
-        for channel in payload["librarian_channels"]:
-            c = _validate_channel_id(channel, "librarian channel")
-            if c:
-                cleaned.append(c)
-        payload["librarian_channels"] = cleaned
 
     if "announcement_channel" in payload and payload["announcement_channel"]:
         payload["announcement_channel"] = _validate_channel_id(
@@ -2110,20 +2067,6 @@ async def update_settings_api(payload: dict) -> dict:
     #----- Hermes Bot: when the token changes, verify it with Telegram
     #----- (getMe) and cache the resolved identity for the Bot Admin
     #----- Manager. An unverifiable token rejects the whole save.
-    if "hermes_bot_token" in payload:
-        new_token = str(payload.get("hermes_bot_token") or "").strip()
-        payload["hermes_bot_token"] = new_token
-        if new_token != SettingsManager.current().hermes_bot_token:
-            if not new_token:
-                payload["hermes_bot"] = {}
-            else:
-                identity = await _resolve_bot_identity(new_token)
-                if identity is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Hermes Bot token could not be verified with Telegram (getMe failed). Check the token and try again.",
-                    )
-                payload["hermes_bot"] = identity
 
     #----- Strip whitespace from string fields
     for key in ("tmdb_api", "base_url", "upstream_repo", "upstream_branch",
@@ -2777,18 +2720,8 @@ async def _managed_bots() -> list[dict]:
 
 
 async def _all_known_bots() -> list[dict]:
-    """Pool bots + the Hermes Bot, for Bot Admin scan/apply.
-
-    The Hermes Bot is registered in Settings and promoted by user id
-    only — it is never a streaming client. If its user id ever collided
-    with a pool bot, the pool entry wins.
-    """
-    managed = await _managed_bots()
-    managed_ids = {b["user_id"] for b in managed}
-    hermes = _hermes_manager_entry(SettingsManager.current().hermes_bot)
-    if hermes is not None and hermes["user_id"] not in managed_ids:
-        return managed + [hermes]
-    return managed
+    """Pool bots, for Bot Admin scan/apply."""
+    return await _managed_bots()
 
 
 def _bot_served_channels() -> list[dict]:
@@ -3186,382 +3119,34 @@ async def update_manager_rollback_api() -> dict:
 
 
 
-#----- Librarian v4 (Hermes curation: locator, packets, proposals, gate,
-#----- apply). Admin actions run in the background (state is polled by the
-#----- Librarian page); the bot-facing API is guarded by the dedicated
-#----- Librarian API token from Settings.
-async def librarian_action_api(payload: dict) -> dict:
-    from Backend.helper import librarian
-
-    action = str(payload.get("action") or "")
-    if action == "state":
-        return {"status": "success", "state": librarian.ACTION_STATE}
-    if action == "stop":
-        return librarian.request_stop()
-    if action in ("sweep", "audit", "locator", "scan"):
-        if not SettingsManager.current().librarian_enabled:
-            return {"status": "error",
-                    "message": "Librarian is disabled — enable it in Settings first."}
-        channel = payload.get("channel")
-        if action in ("locator", "scan") and not channel:
-            return {"status": "error",
-                    "message": f"The {action} needs a channel to walk."}
-        return librarian.start_action(action, channel)
-    if action == "rollback":
-        return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
-    if action == "alias_delete":
-        return await librarian.delete_alias(str(payload.get("alias_id") or ""))
-    if action == "dismiss":
-        return await librarian.dismiss_item(str(payload.get("key") or ""))
-    if action == "approve":
-        return await librarian.apply_proposal(
-            str(payload.get("proposal_id") or ""), approver="yan-page")
-    if action == "reject":
-        return await librarian.reject_proposal(
-            str(payload.get("proposal_id") or ""))
-    if action == "candidate_clear":
-        return await librarian.clear_candidate(str(payload.get("key") or ""))
-    if action == "bot_state":
-        state = str(payload.get("state") or "").strip().lower()
-        if state not in ("active", "paused", "killed"):
-            return {"status": "error", "message": "Unknown bot state."}
-        await SettingsManager.update(db, {"librarian_bot_state": state})
-        return {"ok": True, "state": state,
-                "message": f"Media Manager is now {state}."}
-    if action == "policies":
-        channel = str(payload.get("channel") or "")
-        if not channel:
-            return {"status": "error", "message": "A channel is required."}
-        auto = str(payload.get("auto") or "inherit")
-        if auto not in librarian.POLICY_AUTO_LEVELS:
-            return {"status": "error", "message": "Unknown auto level."}
-        scopes = {}
-        raw_scopes = payload.get("scopes") or {}
-        for s in librarian.POLICY_SCOPES:
-            value = str(raw_scopes.get(s) or "allow")
-            if value not in librarian.POLICY_SCOPE_LEVELS:
-                return {"status": "error",
-                        "message": f"Unknown level for scope {s}."}
-            scopes[s] = value
-        stored = dict(SettingsManager.current().librarian_channel_policies)
-        stored[channel] = {"auto": auto, "scopes": scopes}
-        await SettingsManager.update(
-            db, {"librarian_channel_policies": stored})
-        return {"ok": True, "message": "Channel policy saved.",
-                "policy": librarian.resolve_channel_policy(stored, channel)}
-    if action == "job_run":
-        from Backend.helper import automations
-        return automations.run_now(str(payload.get("job") or ""))
-    if action == "job_config":
-        from Backend.helper import automations
-        return await automations.set_config(
-            str(payload.get("job") or ""),
-            enabled=payload.get("enabled"),
-            schedule=payload.get("schedule"))
-    if action == "modules":
-        raw = payload.get("modules") or {}
-        clean = {}
-        for m in librarian.PAGE_MODULES:
-            if m["id"] in raw:
-                clean[m["id"]] = bool(raw[m["id"]])
-        await SettingsManager.update(db, {"librarian_modules": clean})
-        return {"ok": True, "modules": librarian.enabled_modules(clean),
-                "message": "Page sections saved."}
-    if action == "regen_token":
-        import secrets
-
-        token = secrets.token_urlsafe(32)
-        await SettingsManager.update(db, {"librarian_api_token": token})
-        return {"status": "success", "token": token,
-                "message": "New Librarian API token generated and saved."}
-    return {"status": "error", "message": f"Unknown action: {action}"}
-
-
-def _librarian_token_ok(request: Request) -> bool:
-    token = SettingsManager.current().librarian_api_token
-    return bool(token) and request.headers.get("x-librarian-token") == token
-
-
-async def librarian_bot_status_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian
-
-    await librarian.record_bot_activity("status")
-    settings = SettingsManager.current()
-    return {
-        "enabled": settings.librarian_enabled,
-        "dry_run": settings.librarian_dry_run,
-        "auto_apply": settings.librarian_auto_apply,
-        "digest": settings.librarian_digest,
-        "bot_state": settings.librarian_bot_state,
-        "counts": await librarian.panel_counts(),
-        "action_state": librarian.ACTION_STATE,
-    }
-
-
-async def librarian_bot_packet_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian
-
-    channel = request.query_params.get("channel")
-    if not channel:
-        raise HTTPException(status_code=400, detail="channel is required.")
-    raw_limit = request.query_params.get("limit")
-    try:
-        limit = int(raw_limit) if raw_limit else None
-    except ValueError:
-        limit = None
-    scope = request.query_params.get("scope") or "waiting"
-    await librarian.record_bot_activity("packet")
-    return await librarian.get_packet(channel, limit, scope)
-
-
-async def librarian_bot_proposals_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian
-
-    payload = await request.json()
-    await librarian.record_bot_activity("proposals")
-    return await librarian.submit_proposal(payload)
-
-
-async def librarian_bot_apply_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian
-
-    payload = await request.json()
-    await librarian.record_bot_activity("apply")
-    if librarian.bot_state() == "killed":
-        return {"ok": False,
-                "message": "The bot is stopped (killed) from the "
-                           "Librarian page — applies are refused."}
-    return await librarian.apply_proposal(
-        str(payload.get("proposal_id") or ""),
-        approver=str(payload.get("approver") or "yan"))
-
-
-async def librarian_bot_rollback_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian
-
-    payload = await request.json()
-    return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
-
-
-async def librarian_bot_search_api(request: Request) -> dict:
-    """The app's own /set candidate search, for the Media Manager."""
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper.metadata.entry import (
-        search_any_candidates,
-        search_movie_candidates,
-        search_tv_candidates,
-    )
-
-    query = request.query_params.get("q") or ""
-    media_type = (request.query_params.get("type") or "any").lower()
-    if media_type == "movie":
-        results = await search_movie_candidates(query)
-    elif media_type == "tv":
-        results = await search_tv_candidates(query)
-    else:
-        results = await search_any_candidates(query)
-    return {"results": results}
-
-
-# --- Librarian, simple (Yan's model): the bot verifies and writes the
-# caption; these endpoints only apply it. See helper/librarian_simple.py.
-
-async def librarian_simple_status_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian_simple
-    return await librarian_simple.counts(librarian_simple.real_deps())
-
-
-async def librarian_simple_waiting_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian_simple
-    return await librarian_simple.waiting(
-        librarian_simple.real_deps(),
-        channel=request.query_params.get("channel"),
-        stem=request.query_params.get("stem"),
-        limit=int(request.query_params.get("limit") or 30))
-
-
-async def librarian_simple_fix_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian_simple
-    payload = await request.json()
-    return await librarian_simple.fix(
-        librarian_simple.real_deps(),
-        int(payload["chat_id"]), int(payload["msg_id"]),
-        str(payload.get("new_caption") or ""),
-        str(payload.get("expected_caption") or ""),
-        key=payload.get("key"), stem=payload.get("stem"))
-
-
-async def librarian_simple_undo_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian_simple
-    payload = await request.json()
-    return await librarian_simple.undo(
-        librarian_simple.real_deps(),
-        int(payload["chat_id"]), int(payload["msg_id"]))
-
-
-# --- Librarian v6 toolbox: sight, records, batch, scans, gateway ---
-
-def _simple_deps():
-    from Backend.helper import librarian_simple
-    return librarian_simple, librarian_simple.real_deps()
-
-
-async def librarian_v6_grouped_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.waiting_grouped(deps)
-
-
-async def librarian_v6_find_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.find(deps, request.query_params.get("q") or "")
-
-
-async def librarian_v6_file_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.file_detail(
-        deps, int(request.query_params.get("chat") or 0),
-        int(request.query_params.get("msg") or 0))
-
-
-async def librarian_v6_history_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.history(
-        deps, stem=request.query_params.get("stem"),
-        today=request.query_params.get("today") == "1")
-
-
-async def librarian_v6_fix_batch_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    payload = await request.json()
-    return await ls.fix_batch(deps, payload.get("fixes") or [])
-
-
-async def librarian_v6_record_get_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.series_record_get(
-        deps, int(request.query_params.get("channel") or 0),
-        request.query_params.get("stem") or "")
-
-
-async def librarian_v6_record_set_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.series_record_set(deps, await request.json())
-
-
-async def librarian_v6_alias_list_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    ch = request.query_params.get("channel")
-    return await ls.alias_list(deps, int(ch) if ch else None)
-
-
-async def librarian_v6_alias_forget_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    payload = await request.json()
-    return await ls.alias_forget(
-        deps, int(payload["channel"]), str(payload.get("stem") or ""))
-
-
-async def librarian_v6_park_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    payload = await request.json()
-    return await ls.park(deps, str(payload.get("key") or ""),
-                         bool(payload.get("parked", True)))
-
-
-async def librarian_v6_mode_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.mode_info(deps)
-
-
-async def librarian_v6_scan_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    payload = await request.json() if request.method == "POST" else {}
-    ch = (payload or {}).get("channel")
-    return await ls.scan(deps, int(ch) if ch else None)
-
-
-async def librarian_v6_scan_status_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.scan_status(deps)
-
-
-async def librarian_v6_probe_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    ls, deps = _simple_deps()
-    return await ls.probe(
-        deps, int(request.query_params.get("chat") or 0),
-        int(request.query_params.get("msg") or 0))
-
-
-async def librarian_gw_lookup_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian_gateway
-    return await librarian_gateway.lookup(
-        librarian_gateway.real_deps(),
-        request.query_params.get("q") or "",
-        request.query_params.get("type") or "")
-
-
-async def librarian_gw_series_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian_gateway
-    return await librarian_gateway.series(
-        librarian_gateway.real_deps(),
-        request.query_params.get("ref") or "")
-
-
-async def librarian_gw_crossid_api(request: Request) -> dict:
-    if not _librarian_token_ok(request):
-        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-    from Backend.helper import librarian_gateway
-    return await librarian_gateway.crossid(
-        librarian_gateway.real_deps(),
-        request.query_params.get("ref") or "")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

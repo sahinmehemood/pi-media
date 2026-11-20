@@ -71,34 +71,6 @@ from Backend.fastapi.routes.api_routes import (
     get_tools_channels_api,
     bot_admin_scan_api,
     dl_index_action_api,
-    librarian_action_api,
-    librarian_bot_apply_api,
-    librarian_bot_packet_api,
-    librarian_bot_proposals_api,
-    librarian_bot_rollback_api,
-    librarian_bot_search_api,
-    librarian_bot_status_api,
-    librarian_simple_fix_api,
-    librarian_simple_status_api,
-    librarian_simple_undo_api,
-    librarian_simple_waiting_api,
-    librarian_gw_crossid_api,
-    librarian_gw_lookup_api,
-    librarian_gw_series_api,
-    librarian_v6_alias_forget_api,
-    librarian_v6_alias_list_api,
-    librarian_v6_file_api,
-    librarian_v6_find_api,
-    librarian_v6_fix_batch_api,
-    librarian_v6_grouped_api,
-    librarian_v6_history_api,
-    librarian_v6_mode_api,
-    librarian_v6_park_api,
-    librarian_v6_probe_api,
-    librarian_v6_record_get_api,
-    librarian_v6_record_set_api,
-    librarian_v6_scan_api,
-    librarian_v6_scan_status_api,
     bot_admin_apply_api,
     bot_admin_apply_status_api,
     update_manager_check_api,
@@ -159,10 +131,6 @@ from Backend.fastapi.routes.template_routes import (
     admin_access_page,
     admin_dashboard_page,
     dl_index_page,
-    librarian_page,
-    librarian_fragment,
-    librarian_simple_page,
-    librarian_simple_undo,
     admin_requests_page,
     admin_subscriptions_page,
     public_request_page,
@@ -208,8 +176,6 @@ async def _startup():
     asyncio.create_task(decay_client_failures())
     from Backend.helper.version_check import version_check_loop
     asyncio.create_task(version_check_loop())
-    from Backend.helper import automations
-    automations.start()
 
 
 #----- Streaming and Stremio routers
@@ -342,197 +308,51 @@ async def admin_dl_index(request: Request, _: bool = Depends(require_auth)):
 async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
     return await dl_index_action_api(payload)
 
-@app.get("/admin/librarian", response_class=HTMLResponse)
-async def admin_librarian(request: Request, _: bool = Depends(require_auth)):
-    return await librarian_page(request, _)
 
-@app.get("/admin/librarian/fragment/{name}", response_class=HTMLResponse)
-async def admin_librarian_fragment(request: Request, name: str, _: bool = Depends(require_auth)):
-    return await librarian_fragment(request, name, _)
 
-@app.get("/librarian-simple", response_class=HTMLResponse)
-async def simple_librarian_page(request: Request, _: bool = Depends(require_auth)):
-    return await librarian_simple_page(request, _)
 
-@app.post("/librarian-simple/undo")
-async def simple_librarian_undo(request: Request, _: bool = Depends(require_auth), chat_id: int = Form(...), msg_id: int = Form(...)):
-    return await librarian_simple_undo(request, _, chat_id, msg_id)
 
-@app.post("/api/admin/librarian/action")
-async def librarian_action(payload: dict, _: bool = Depends(require_auth)):
-    return await librarian_action_api(payload)
 
-@app.get("/api/librarian/status")
-async def librarian_status(request: Request):
-    return await librarian_bot_status_api(request)
 
-@app.get("/api/librarian/packet")
-async def librarian_packet(request: Request):
-    return await librarian_bot_packet_api(request)
 
-@app.post("/api/librarian/proposals")
-async def librarian_proposals(request: Request):
-    return await librarian_bot_proposals_api(request)
 
-@app.post("/api/librarian/apply")
-async def librarian_apply(request: Request):
-    return await librarian_bot_apply_api(request)
 
-@app.post("/api/librarian/rollback")
-async def librarian_rollback(request: Request):
-    return await librarian_bot_rollback_api(request)
 
-@app.get("/api/librarian/search")
-async def librarian_search(request: Request):
-    return await librarian_bot_search_api(request)
 
-@app.get("/api/librarian/simple/status")
-async def librarian_simple_status(request: Request):
-    return await librarian_simple_status_api(request)
 
-@app.get("/api/librarian/simple/waiting")
-async def librarian_simple_waiting(request: Request):
-    return await librarian_simple_waiting_api(request)
 
-@app.post("/api/librarian/simple/fix")
-async def librarian_simple_fix(request: Request):
-    return await librarian_simple_fix_api(request)
 
-@app.post("/api/librarian/simple/undo")
-async def librarian_simple_undo(request: Request):
-    return await librarian_simple_undo_api(request)
 
-@app.get("/api/librarian/v6/waiting-grouped")
-async def librarian_v6_grouped(request: Request):
-    return await librarian_v6_grouped_api(request)
 
-@app.get("/api/librarian/v6/find")
-async def librarian_v6_find(request: Request):
-    return await librarian_v6_find_api(request)
 
-@app.get("/api/librarian/v6/file")
-async def librarian_v6_file(request: Request):
-    return await librarian_v6_file_api(request)
 
-@app.get("/api/librarian/v6/history")
-async def librarian_v6_history(request: Request):
-    return await librarian_v6_history_api(request)
 
-@app.post("/api/librarian/v6/fix-batch")
-async def librarian_v6_fix_batch(request: Request):
-    return await librarian_v6_fix_batch_api(request)
 
-@app.get("/api/librarian/v6/record")
-async def librarian_v6_record_get(request: Request):
-    return await librarian_v6_record_get_api(request)
 
-@app.post("/api/librarian/v6/record")
-async def librarian_v6_record_set(request: Request):
-    return await librarian_v6_record_set_api(request)
 
-@app.get("/api/librarian/v6/aliases")
-async def librarian_v6_aliases(request: Request):
-    return await librarian_v6_alias_list_api(request)
 
-@app.post("/api/librarian/v6/alias-forget")
-async def librarian_v6_alias_forget(request: Request):
-    return await librarian_v6_alias_forget_api(request)
 
-@app.post("/api/librarian/v6/park")
-async def librarian_v6_park(request: Request):
-    return await librarian_v6_park_api(request)
 
-@app.get("/api/librarian/v6/mode")
-async def librarian_v6_mode(request: Request):
-    return await librarian_v6_mode_api(request)
 
-@app.post("/api/librarian/v6/scan")
-async def librarian_v6_scan(request: Request):
-    return await librarian_v6_scan_api(request)
 
-@app.get("/api/librarian/v6/scan-status")
-async def librarian_v6_scan_status(request: Request):
-    return await librarian_v6_scan_status_api(request)
 
-@app.get("/api/librarian/v6/probe")
-async def librarian_v6_probe(request: Request):
-    return await librarian_v6_probe_api(request)
 
-@app.get("/api/librarian/gw/lookup")
-async def librarian_gw_lookup(request: Request):
-    return await librarian_gw_lookup_api(request)
 
-@app.get("/api/librarian/gw/series")
-async def librarian_gw_series(request: Request):
-    return await librarian_gw_series_api(request)
 
-@app.get("/api/librarian/gw/crossid")
-async def librarian_gw_crossid(request: Request):
-    return await librarian_gw_crossid_api(request)
 
 # --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
-from Backend.librarian_v2.api import (
-    v2_approve_api,
-    v2_files_register_api,
-    v2_orders_apply_api,
-    v2_orders_kill_api,
-    v2_orders_open_api,
-    v2_orders_plan_api,
-    v2_orders_report_api,
-    v2_series_list_api,
-    v2_series_resolve_api,
-    v2_status_api,
-    v2_undo_api,
-    v2_unidentified_api,
-)
 
-@app.get("/api/librarian/v2/status")
-async def librarian_v2_status(request: Request):
-    return await v2_status_api(request)
 
-@app.get("/api/librarian/v2/series")
-async def librarian_v2_series(request: Request):
-    return await v2_series_list_api(request)
 
-@app.post("/api/librarian/v2/series/resolve")
-async def librarian_v2_resolve(request: Request):
-    return await v2_series_resolve_api(request)
 
-@app.get("/api/librarian/v2/unidentified")
-async def librarian_v2_unidentified(request: Request):
-    return await v2_unidentified_api(request)
 
-@app.post("/api/librarian/v2/files")
-async def librarian_v2_files(request: Request):
-    return await v2_files_register_api(request)
 
-@app.post("/api/librarian/v2/orders")
-async def librarian_v2_orders_open(request: Request):
-    return await v2_orders_open_api(request)
 
-@app.post("/api/librarian/v2/orders/plan")
-async def librarian_v2_orders_plan(request: Request):
-    return await v2_orders_plan_api(request)
 
-@app.post("/api/librarian/v2/orders/apply")
-async def librarian_v2_orders_apply(request: Request):
-    return await v2_orders_apply_api(request)
 
-@app.get("/api/librarian/v2/orders/report")
-async def librarian_v2_orders_report(request: Request):
-    return await v2_orders_report_api(request)
 
-@app.post("/api/librarian/v2/orders/kill")
-async def librarian_v2_orders_kill(request: Request):
-    return await v2_orders_kill_api(request)
 
-@app.post("/api/librarian/v2/undo")
-async def librarian_v2_undo(request: Request):
-    return await v2_undo_api(request)
 
-@app.post("/api/admin/librarian/v2/approve")
-async def librarian_v2_approve(request: Request, _: bool = Depends(require_auth)):
-    return await v2_approve_api(request)
 
 @app.get("/media/manage", response_class=HTMLResponse)
 async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):

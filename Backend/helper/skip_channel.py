@@ -46,11 +46,3 @@ async def route_to_skip_channel(client: Client, message: Message, origin: str = 
             await delete_message(message.chat.id, message.id)
         except Exception as e:
             LOGGER.warning(f"[SkipChannel] Could not delete original message {message.id}: {e}")
-
-    # Librarian Phase 1: record the rejection in the ledger (best-effort;
-    # record_from_message never raises and no-ops while disabled).
-    try:
-        from Backend.helper.librarian import record_from_message
-        await record_from_message(message, origin)
-    except Exception:
-        pass

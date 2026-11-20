@@ -28,42 +28,14 @@ index 3102299..5b4a7e6 100644
          await asyncio.sleep(0.5)
  
 diff --git a/Backend/fastapi/main.py b/Backend/fastapi/main.py
-index 9ae7925..aa6ae68 100644
+index 9ae7925..9a71e42 100644
 --- a/Backend/fastapi/main.py
 +++ b/Backend/fastapi/main.py
-@@ -70,8 +70,42 @@ from Backend.fastapi.routes.api_routes import (
+@@ -70,8 +70,14 @@ from Backend.fastapi.routes.api_routes import (
      get_system_stats_api,
      get_tools_channels_api,
      bot_admin_scan_api,
 +    dl_index_action_api,
-+    librarian_action_api,
-+    librarian_bot_apply_api,
-+    librarian_bot_packet_api,
-+    librarian_bot_proposals_api,
-+    librarian_bot_rollback_api,
-+    librarian_bot_search_api,
-+    librarian_bot_status_api,
-+    librarian_simple_fix_api,
-+    librarian_simple_status_api,
-+    librarian_simple_undo_api,
-+    librarian_simple_waiting_api,
-+    librarian_gw_crossid_api,
-+    librarian_gw_lookup_api,
-+    librarian_gw_series_api,
-+    librarian_v6_alias_forget_api,
-+    librarian_v6_alias_list_api,
-+    librarian_v6_file_api,
-+    librarian_v6_find_api,
-+    librarian_v6_fix_batch_api,
-+    librarian_v6_grouped_api,
-+    librarian_v6_history_api,
-+    librarian_v6_mode_api,
-+    librarian_v6_park_api,
-+    librarian_v6_probe_api,
-+    librarian_v6_record_get_api,
-+    librarian_v6_record_set_api,
-+    librarian_v6_scan_api,
-+    librarian_v6_scan_status_api,
      bot_admin_apply_api,
      bot_admin_apply_status_api,
 +    update_manager_check_api,
@@ -74,28 +46,15 @@ index 9ae7925..aa6ae68 100644
      clear_manual_session_api,
      search_manual_session_api,
      set_manual_session_api,
-@@ -124,6 +158,11 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
+@@ -124,6 +130,7 @@ from Backend.fastapi.routes.webdav_routes import router as webdav_router
  from Backend.fastapi.routes.template_routes import (
      admin_access_page,
      admin_dashboard_page,
 +    dl_index_page,
-+    librarian_page,
-+    librarian_fragment,
-+    librarian_simple_page,
-+    librarian_simple_undo,
      admin_requests_page,
      admin_subscriptions_page,
      public_request_page,
-@@ -169,6 +208,8 @@ async def _startup():
-     asyncio.create_task(decay_client_failures())
-     from Backend.helper.version_check import version_check_loop
-     asyncio.create_task(version_check_loop())
-+    from Backend.helper import automations
-+    automations.start()
- 
- 
- #----- Streaming and Stremio routers
-@@ -293,6 +334,206 @@ async def root(request: Request, _: bool = Depends(require_auth)):
+@@ -293,6 +300,60 @@ async def root(request: Request, _: bool = Depends(require_auth)):
  async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
      return await admin_dashboard_page(request, _)
  
@@ -107,202 +66,56 @@ index 9ae7925..aa6ae68 100644
 +async def dl_index_action(payload: dict, _: bool = Depends(require_auth)):
 +    return await dl_index_action_api(payload)
 +
-+@app.get("/admin/librarian", response_class=HTMLResponse)
-+async def admin_librarian(request: Request, _: bool = Depends(require_auth)):
-+    return await librarian_page(request, _)
 +
-+@app.get("/admin/librarian/fragment/{name}", response_class=HTMLResponse)
-+async def admin_librarian_fragment(request: Request, name: str, _: bool = Depends(require_auth)):
-+    return await librarian_fragment(request, name, _)
 +
-+@app.get("/librarian-simple", response_class=HTMLResponse)
-+async def simple_librarian_page(request: Request, _: bool = Depends(require_auth)):
-+    return await librarian_simple_page(request, _)
 +
-+@app.post("/librarian-simple/undo")
-+async def simple_librarian_undo(request: Request, _: bool = Depends(require_auth), chat_id: int = Form(...), msg_id: int = Form(...)):
-+    return await librarian_simple_undo(request, _, chat_id, msg_id)
 +
-+@app.post("/api/admin/librarian/action")
-+async def librarian_action(payload: dict, _: bool = Depends(require_auth)):
-+    return await librarian_action_api(payload)
 +
-+@app.get("/api/librarian/status")
-+async def librarian_status(request: Request):
-+    return await librarian_bot_status_api(request)
 +
-+@app.get("/api/librarian/packet")
-+async def librarian_packet(request: Request):
-+    return await librarian_bot_packet_api(request)
 +
-+@app.post("/api/librarian/proposals")
-+async def librarian_proposals(request: Request):
-+    return await librarian_bot_proposals_api(request)
 +
-+@app.post("/api/librarian/apply")
-+async def librarian_apply(request: Request):
-+    return await librarian_bot_apply_api(request)
 +
-+@app.post("/api/librarian/rollback")
-+async def librarian_rollback(request: Request):
-+    return await librarian_bot_rollback_api(request)
 +
-+@app.get("/api/librarian/search")
-+async def librarian_search(request: Request):
-+    return await librarian_bot_search_api(request)
 +
-+@app.get("/api/librarian/simple/status")
-+async def librarian_simple_status(request: Request):
-+    return await librarian_simple_status_api(request)
 +
-+@app.get("/api/librarian/simple/waiting")
-+async def librarian_simple_waiting(request: Request):
-+    return await librarian_simple_waiting_api(request)
 +
-+@app.post("/api/librarian/simple/fix")
-+async def librarian_simple_fix(request: Request):
-+    return await librarian_simple_fix_api(request)
 +
-+@app.post("/api/librarian/simple/undo")
-+async def librarian_simple_undo(request: Request):
-+    return await librarian_simple_undo_api(request)
 +
-+@app.get("/api/librarian/v6/waiting-grouped")
-+async def librarian_v6_grouped(request: Request):
-+    return await librarian_v6_grouped_api(request)
 +
-+@app.get("/api/librarian/v6/find")
-+async def librarian_v6_find(request: Request):
-+    return await librarian_v6_find_api(request)
 +
-+@app.get("/api/librarian/v6/file")
-+async def librarian_v6_file(request: Request):
-+    return await librarian_v6_file_api(request)
 +
-+@app.get("/api/librarian/v6/history")
-+async def librarian_v6_history(request: Request):
-+    return await librarian_v6_history_api(request)
 +
-+@app.post("/api/librarian/v6/fix-batch")
-+async def librarian_v6_fix_batch(request: Request):
-+    return await librarian_v6_fix_batch_api(request)
 +
-+@app.get("/api/librarian/v6/record")
-+async def librarian_v6_record_get(request: Request):
-+    return await librarian_v6_record_get_api(request)
 +
-+@app.post("/api/librarian/v6/record")
-+async def librarian_v6_record_set(request: Request):
-+    return await librarian_v6_record_set_api(request)
 +
-+@app.get("/api/librarian/v6/aliases")
-+async def librarian_v6_aliases(request: Request):
-+    return await librarian_v6_alias_list_api(request)
 +
-+@app.post("/api/librarian/v6/alias-forget")
-+async def librarian_v6_alias_forget(request: Request):
-+    return await librarian_v6_alias_forget_api(request)
 +
-+@app.post("/api/librarian/v6/park")
-+async def librarian_v6_park(request: Request):
-+    return await librarian_v6_park_api(request)
 +
-+@app.get("/api/librarian/v6/mode")
-+async def librarian_v6_mode(request: Request):
-+    return await librarian_v6_mode_api(request)
 +
-+@app.post("/api/librarian/v6/scan")
-+async def librarian_v6_scan(request: Request):
-+    return await librarian_v6_scan_api(request)
 +
-+@app.get("/api/librarian/v6/scan-status")
-+async def librarian_v6_scan_status(request: Request):
-+    return await librarian_v6_scan_status_api(request)
 +
-+@app.get("/api/librarian/v6/probe")
-+async def librarian_v6_probe(request: Request):
-+    return await librarian_v6_probe_api(request)
 +
-+@app.get("/api/librarian/gw/lookup")
-+async def librarian_gw_lookup(request: Request):
-+    return await librarian_gw_lookup_api(request)
 +
-+@app.get("/api/librarian/gw/series")
-+async def librarian_gw_series(request: Request):
-+    return await librarian_gw_series_api(request)
 +
-+@app.get("/api/librarian/gw/crossid")
-+async def librarian_gw_crossid(request: Request):
-+    return await librarian_gw_crossid_api(request)
 +
 +# --- Librarian v2 (Work Orders) — bot-token routes + Yan-only approve ---
-+from Backend.librarian_v2.api import (
-+    v2_approve_api,
-+    v2_files_register_api,
-+    v2_orders_apply_api,
-+    v2_orders_kill_api,
-+    v2_orders_open_api,
-+    v2_orders_plan_api,
-+    v2_orders_report_api,
-+    v2_series_list_api,
-+    v2_series_resolve_api,
-+    v2_status_api,
-+    v2_undo_api,
-+    v2_unidentified_api,
-+)
 +
-+@app.get("/api/librarian/v2/status")
-+async def librarian_v2_status(request: Request):
-+    return await v2_status_api(request)
 +
-+@app.get("/api/librarian/v2/series")
-+async def librarian_v2_series(request: Request):
-+    return await v2_series_list_api(request)
 +
-+@app.post("/api/librarian/v2/series/resolve")
-+async def librarian_v2_resolve(request: Request):
-+    return await v2_series_resolve_api(request)
 +
-+@app.get("/api/librarian/v2/unidentified")
-+async def librarian_v2_unidentified(request: Request):
-+    return await v2_unidentified_api(request)
 +
-+@app.post("/api/librarian/v2/files")
-+async def librarian_v2_files(request: Request):
-+    return await v2_files_register_api(request)
 +
-+@app.post("/api/librarian/v2/orders")
-+async def librarian_v2_orders_open(request: Request):
-+    return await v2_orders_open_api(request)
 +
-+@app.post("/api/librarian/v2/orders/plan")
-+async def librarian_v2_orders_plan(request: Request):
-+    return await v2_orders_plan_api(request)
 +
-+@app.post("/api/librarian/v2/orders/apply")
-+async def librarian_v2_orders_apply(request: Request):
-+    return await v2_orders_apply_api(request)
 +
-+@app.get("/api/librarian/v2/orders/report")
-+async def librarian_v2_orders_report(request: Request):
-+    return await v2_orders_report_api(request)
 +
-+@app.post("/api/librarian/v2/orders/kill")
-+async def librarian_v2_orders_kill(request: Request):
-+    return await v2_orders_kill_api(request)
 +
-+@app.post("/api/librarian/v2/undo")
-+async def librarian_v2_undo(request: Request):
-+    return await v2_undo_api(request)
 +
-+@app.post("/api/admin/librarian/v2/approve")
-+async def librarian_v2_approve(request: Request, _: bool = Depends(require_auth)):
-+    return await v2_approve_api(request)
 +
  @app.get("/media/manage", response_class=HTMLResponse)
  async def media_management(request: Request, media_type: str = "movie", custom: bool = False, _: bool = Depends(require_auth)):
      return await media_management_page(request, media_type, custom, _)
-@@ -813,6 +1054,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
+@@ -813,6 +874,26 @@ async def tools_bot_admin_apply(payload: dict, _: bool = Depends(require_auth)):
  async def tools_bot_admin_apply_status(_: bool = Depends(require_auth)):
      return await bot_admin_apply_status_api()
  
@@ -330,18 +143,10 @@ index 9ae7925..aa6ae68 100644
  async def tools_manual_session_get(_: bool = Depends(require_auth)):
      return await get_manual_session_api()
 diff --git a/Backend/fastapi/routes/api_routes.py b/Backend/fastapi/routes/api_routes.py
-index e6d9542..ebd2348 100644
+index e6d9542..986a5f7 100644
 --- a/Backend/fastapi/routes/api_routes.py
 +++ b/Backend/fastapi/routes/api_routes.py
-@@ -32,6 +32,7 @@ from Backend.helper.encrypt import decode_string, encode_string
- from Backend.helper.health import run_health_checks
- from Backend.helper.manual_add import resolve_telegram_message, retag_media, stamp_caption_by_ref
- from Backend.helper import own_bots
-+from Backend.helper.hermes_bot import manager_entry as _hermes_manager_entry
- from Backend.helper.pyro import resolve_video_thumb_url
- from Backend.helper.requests_manager import (
-     delete_request,
-@@ -612,6 +613,16 @@ async def get_dead_links_api() -> dict:
+@@ -612,6 +612,16 @@ async def get_dead_links_api() -> dict:
  async def get_stream_analytics_api() -> dict:
      try:
          data = await db.get_stream_analytics(limit=200)
@@ -358,7 +163,7 @@ index e6d9542..ebd2348 100644
          return {"status": "success", "data": data}
      except Exception as e:
          LOGGER.error(f"Stream analytics API error: {e}")
-@@ -1799,6 +1810,36 @@ async def get_settings_api() -> dict:
+@@ -1799,6 +1809,36 @@ async def get_settings_api() -> dict:
      return {"settings": data}
  
  
@@ -395,7 +200,7 @@ index e6d9542..ebd2348 100644
  async def update_settings_api(payload: dict) -> dict:
  
      #----- Empty password string means leave it unchanged
-@@ -1808,7 +1849,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1808,7 +1848,7 @@ async def update_settings_api(payload: dict) -> dict:
          del payload["session_secret"]
  
      #----- Type coercion and validation
@@ -404,7 +209,7 @@ index e6d9542..ebd2348 100644
      for key in bool_keys:
          if key in payload:
              payload[key] = bool(payload[key])
-@@ -1856,6 +1897,85 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1856,6 +1896,50 @@ async def update_settings_api(payload: dict) -> dict:
          except (ValueError, TypeError):
              payload["fanart_shuffle_interval"] = 5
  
@@ -451,61 +256,19 @@ index e6d9542..ebd2348 100644
 +        if isinstance(_v, bool) or not isinstance(_v, int):
 +            raise HTTPException(status_code=400, detail="'dl_expire_days' must be an integer.")
 +        payload["dl_expire_days"] = max(0, min(3650, _v))
-+    if "librarian_enabled" in payload:
-+        payload["librarian_enabled"] = bool(payload["librarian_enabled"])
-+    if "librarian_dry_run" in payload:
-+        payload["librarian_dry_run"] = bool(payload["librarian_dry_run"])
-+    if "librarian_auto_apply_tier_a" in payload:
-+        payload["librarian_auto_apply_tier_a"] = bool(payload["librarian_auto_apply_tier_a"])
-+    if "librarian_auto_apply" in payload:
-+        _v = str(payload["librarian_auto_apply"] or "off").strip().lower()
-+        if _v not in ("off", "safe", "all"):
-+            raise HTTPException(status_code=400, detail="'librarian_auto_apply' must be off, safe or all.")
-+        payload["librarian_auto_apply"] = _v
-+    if "librarian_digest" in payload:
-+        _v = str(payload["librarian_digest"] or "manual").strip().lower()
-+        if _v not in ("manual", "daily", "weekly"):
-+            raise HTTPException(status_code=400, detail="'librarian_digest' must be manual, daily or weekly.")
-+        payload["librarian_digest"] = _v
-+    if "librarian_edit_budget_per_day" in payload:
-+        _v = payload["librarian_edit_budget_per_day"]
-+        if isinstance(_v, bool) or not isinstance(_v, int):
-+            raise HTTPException(status_code=400, detail="'librarian_edit_budget_per_day' must be an integer.")
-+        payload["librarian_edit_budget_per_day"] = max(0, min(10000, _v))
-+    if "librarian_api_token" in payload:
-+        payload["librarian_api_token"] = str(payload["librarian_api_token"] or "").strip()
-+    if "librarian_batch_size" in payload:
-+        _v = payload["librarian_batch_size"]
-+        if isinstance(_v, bool) or not isinstance(_v, int):
-+            raise HTTPException(status_code=400, detail="'librarian_batch_size' must be an integer.")
-+        payload["librarian_batch_size"] = max(1, min(200, _v))
-+    if "librarian_gate_strict_year" in payload:
-+        payload["librarian_gate_strict_year"] = bool(payload["librarian_gate_strict_year"])
-+    if "librarian_specials_policy" in payload:
-+        _v = str(payload["librarian_specials_policy"] or "guard").strip().lower()
-+        if _v not in ("guard", "off"):
-+            raise HTTPException(status_code=400, detail="'librarian_specials_policy' must be guard or off.")
-+        payload["librarian_specials_policy"] = _v
 +
      if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
          raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
  
-@@ -1926,6 +2046,14 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1926,6 +2010,7 @@ async def update_settings_api(payload: dict) -> dict:
                  cleaned.append(c)
          payload["manual_channels"] = cleaned
  
-+    if "librarian_channels" in payload:
-+        cleaned = []
-+        for channel in payload["librarian_channels"]:
-+            c = _validate_channel_id(channel, "librarian channel")
-+            if c:
-+                cleaned.append(c)
-+        payload["librarian_channels"] = cleaned
 +
      if "announcement_channel" in payload and payload["announcement_channel"]:
          payload["announcement_channel"] = _validate_channel_id(
              payload["announcement_channel"], "announcement channel"
-@@ -1936,11 +2064,17 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1936,11 +2021,17 @@ async def update_settings_api(payload: dict) -> dict:
              payload["skip_channel"], "skip channel"
          )
  
@@ -524,7 +287,7 @@ index e6d9542..ebd2348 100644
      if any(field in payload for field in _channel_fields):
          current = SettingsManager.current()
  
-@@ -1956,6 +2090,7 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1956,6 +2047,7 @@ async def update_settings_api(payload: dict) -> dict:
              "ANIME": _norm_ids(payload.get("anime_channels", list(current.anime_channels))),
              "ANNOUNCEMENT": _norm_ids(payload.get("announcement_channel", current.announcement_channel)),
              "SKIP": _norm_ids(payload.get("skip_channel", current.skip_channel)),
@@ -532,27 +295,13 @@ index e6d9542..ebd2348 100644
          }
  
          allowed_overlap = frozenset({"AUTH", "ANIME"})
-@@ -1972,12 +2107,30 @@ async def update_settings_api(payload: dict) -> dict:
+@@ -1972,12 +2064,16 @@ async def update_settings_api(payload: dict) -> dict:
                          detail=f"Channel {', '.join(sorted(clash))} can't be in both {a} and {b} channels — each channel may only belong to one field."
                      )
  
 +    #----- Hermes Bot: when the token changes, verify it with Telegram
 +    #----- (getMe) and cache the resolved identity for the Bot Admin
 +    #----- Manager. An unverifiable token rejects the whole save.
-+    if "hermes_bot_token" in payload:
-+        new_token = str(payload.get("hermes_bot_token") or "").strip()
-+        payload["hermes_bot_token"] = new_token
-+        if new_token != SettingsManager.current().hermes_bot_token:
-+            if not new_token:
-+                payload["hermes_bot"] = {}
-+            else:
-+                identity = await _resolve_bot_identity(new_token)
-+                if identity is None:
-+                    raise HTTPException(
-+                        status_code=400,
-+                        detail="Hermes Bot token could not be verified with Telegram (getMe failed). Check the token and try again.",
-+                    )
-+                payload["hermes_bot"] = identity
 +
      #----- Strip whitespace from string fields
      for key in ("tmdb_api", "base_url", "upstream_repo", "upstream_branch",
@@ -564,7 +313,7 @@ index e6d9542..ebd2348 100644
          if key in payload and isinstance(payload[key], str):
              payload[key] = payload[key].strip()
  
-@@ -2501,6 +2654,60 @@ async def download_logs_api():
+@@ -2501,6 +2597,60 @@ async def download_logs_api():
      return FileResponse(path, filename="log.txt", media_type="text/plain")
  
  
@@ -625,29 +374,19 @@ index e6d9542..ebd2348 100644
  #----- Run the updater then re-exec the app; runs after the HTTP response is flushed
  async def _perform_restart(delay: float = 1.0) -> None:
      await asyncio.sleep(delay)
-@@ -2569,6 +2776,21 @@ async def _managed_bots() -> list[dict]:
+@@ -2569,6 +2719,11 @@ async def _managed_bots() -> list[dict]:
      return bots
  
  
 +async def _all_known_bots() -> list[dict]:
-+    """Pool bots + the Hermes Bot, for Bot Admin scan/apply.
-+
-+    The Hermes Bot is registered in Settings and promoted by user id
-+    only — it is never a streaming client. If its user id ever collided
-+    with a pool bot, the pool entry wins.
-+    """
-+    managed = await _managed_bots()
-+    managed_ids = {b["user_id"] for b in managed}
-+    hermes = _hermes_manager_entry(SettingsManager.current().hermes_bot)
-+    if hermes is not None and hermes["user_id"] not in managed_ids:
-+        return managed + [hermes]
-+    return managed
++    """Pool bots, for Bot Admin scan/apply."""
++    return await _managed_bots()
 +
 +
  def _bot_served_channels() -> list[dict]:
      s = SettingsManager.current()
      order: list[str] = []
-@@ -2595,6 +2817,8 @@ def _bot_served_channels() -> list[dict]:
+@@ -2595,6 +2750,8 @@ def _bot_served_channels() -> list[dict]:
          add(s.announcement_channel, "announce")
      if s.skip_channel:
          add(s.skip_channel, "skip")
@@ -656,7 +395,7 @@ index e6d9542..ebd2348 100644
      return [mapping[k] for k in order]
  
  
-@@ -2686,12 +2910,13 @@ async def bot_admin_scan_api() -> dict:
+@@ -2686,12 +2843,13 @@ async def bot_admin_scan_api() -> dict:
          return {"status": "error", "reason": "no_session",
                  "message": "Connect your Telegram session from the Settings page to manage channel admins."}
  
@@ -672,7 +411,7 @@ index e6d9542..ebd2348 100644
      managed_ids = {b["user_id"] for b in bots}
      out: list[dict] = []
  
-@@ -2736,6 +2961,20 @@ async def bot_admin_scan_api() -> dict:
+@@ -2736,6 +2894,20 @@ async def bot_admin_scan_api() -> dict:
      return {"status": "success", "data": {"bots": bots, "channels": out}}
  
  
@@ -693,7 +432,7 @@ index e6d9542..ebd2348 100644
  async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: bool = True) -> dict:
      label = bot.get("name") or (f"@{bot['username']}" if bot.get("username") else str(bot["user_id"]))
      bid = bot["user_id"]
-@@ -2743,6 +2982,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
+@@ -2743,6 +2915,8 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
      if await _bot_member_status(chat_id, bid) == "admin":
          return {"bot": label, "user_id": bid, "status": "already", "message": "Already an admin."}
  
@@ -702,7 +441,7 @@ index e6d9542..ebd2348 100644
      try:
          await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
          return {"bot": label, "user_id": bid, "status": "added", "message": "Promoted to admin."}
-@@ -2840,9 +3081,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
+@@ -2840,9 +3014,9 @@ async def bot_admin_apply_api(payload: dict | None = None) -> dict:
      if not isinstance(channel_ids, list) or not channel_ids:
          raise HTTPException(status_code=400, detail="Select at least one channel.")
  
@@ -714,7 +453,7 @@ index e6d9542..ebd2348 100644
  
      bot_by_id = {str(b["user_id"]): b for b in bots}
      sel_ids = payload.get("bot_ids")
-@@ -2883,3 +3124,444 @@ async def bot_admin_apply_status_api() -> dict:
+@@ -2883,3 +3057,96 @@ async def bot_admin_apply_status_api() -> dict:
              "error": st["error"],
          },
      }
@@ -780,385 +519,37 @@ index e6d9542..ebd2348 100644
 +
 +
 +
-+#----- Librarian v4 (Hermes curation: locator, packets, proposals, gate,
-+#----- apply). Admin actions run in the background (state is polled by the
-+#----- Librarian page); the bot-facing API is guarded by the dedicated
-+#----- Librarian API token from Settings.
-+async def librarian_action_api(payload: dict) -> dict:
-+    from Backend.helper import librarian
-+
-+    action = str(payload.get("action") or "")
-+    if action == "state":
-+        return {"status": "success", "state": librarian.ACTION_STATE}
-+    if action == "stop":
-+        return librarian.request_stop()
-+    if action in ("sweep", "audit", "locator", "scan"):
-+        if not SettingsManager.current().librarian_enabled:
-+            return {"status": "error",
-+                    "message": "Librarian is disabled — enable it in Settings first."}
-+        channel = payload.get("channel")
-+        if action in ("locator", "scan") and not channel:
-+            return {"status": "error",
-+                    "message": f"The {action} needs a channel to walk."}
-+        return librarian.start_action(action, channel)
-+    if action == "rollback":
-+        return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
-+    if action == "alias_delete":
-+        return await librarian.delete_alias(str(payload.get("alias_id") or ""))
-+    if action == "dismiss":
-+        return await librarian.dismiss_item(str(payload.get("key") or ""))
-+    if action == "approve":
-+        return await librarian.apply_proposal(
-+            str(payload.get("proposal_id") or ""), approver="yan-page")
-+    if action == "reject":
-+        return await librarian.reject_proposal(
-+            str(payload.get("proposal_id") or ""))
-+    if action == "candidate_clear":
-+        return await librarian.clear_candidate(str(payload.get("key") or ""))
-+    if action == "bot_state":
-+        state = str(payload.get("state") or "").strip().lower()
-+        if state not in ("active", "paused", "killed"):
-+            return {"status": "error", "message": "Unknown bot state."}
-+        await SettingsManager.update(db, {"librarian_bot_state": state})
-+        return {"ok": True, "state": state,
-+                "message": f"Media Manager is now {state}."}
-+    if action == "policies":
-+        channel = str(payload.get("channel") or "")
-+        if not channel:
-+            return {"status": "error", "message": "A channel is required."}
-+        auto = str(payload.get("auto") or "inherit")
-+        if auto not in librarian.POLICY_AUTO_LEVELS:
-+            return {"status": "error", "message": "Unknown auto level."}
-+        scopes = {}
-+        raw_scopes = payload.get("scopes") or {}
-+        for s in librarian.POLICY_SCOPES:
-+            value = str(raw_scopes.get(s) or "allow")
-+            if value not in librarian.POLICY_SCOPE_LEVELS:
-+                return {"status": "error",
-+                        "message": f"Unknown level for scope {s}."}
-+            scopes[s] = value
-+        stored = dict(SettingsManager.current().librarian_channel_policies)
-+        stored[channel] = {"auto": auto, "scopes": scopes}
-+        await SettingsManager.update(
-+            db, {"librarian_channel_policies": stored})
-+        return {"ok": True, "message": "Channel policy saved.",
-+                "policy": librarian.resolve_channel_policy(stored, channel)}
-+    if action == "job_run":
-+        from Backend.helper import automations
-+        return automations.run_now(str(payload.get("job") or ""))
-+    if action == "job_config":
-+        from Backend.helper import automations
-+        return await automations.set_config(
-+            str(payload.get("job") or ""),
-+            enabled=payload.get("enabled"),
-+            schedule=payload.get("schedule"))
-+    if action == "modules":
-+        raw = payload.get("modules") or {}
-+        clean = {}
-+        for m in librarian.PAGE_MODULES:
-+            if m["id"] in raw:
-+                clean[m["id"]] = bool(raw[m["id"]])
-+        await SettingsManager.update(db, {"librarian_modules": clean})
-+        return {"ok": True, "modules": librarian.enabled_modules(clean),
-+                "message": "Page sections saved."}
-+    if action == "regen_token":
-+        import secrets
-+
-+        token = secrets.token_urlsafe(32)
-+        await SettingsManager.update(db, {"librarian_api_token": token})
-+        return {"status": "success", "token": token,
-+                "message": "New Librarian API token generated and saved."}
-+    return {"status": "error", "message": f"Unknown action: {action}"}
-+
-+
-+def _librarian_token_ok(request: Request) -> bool:
-+    token = SettingsManager.current().librarian_api_token
-+    return bool(token) and request.headers.get("x-librarian-token") == token
-+
-+
-+async def librarian_bot_status_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian
-+
-+    await librarian.record_bot_activity("status")
-+    settings = SettingsManager.current()
-+    return {
-+        "enabled": settings.librarian_enabled,
-+        "dry_run": settings.librarian_dry_run,
-+        "auto_apply": settings.librarian_auto_apply,
-+        "digest": settings.librarian_digest,
-+        "bot_state": settings.librarian_bot_state,
-+        "counts": await librarian.panel_counts(),
-+        "action_state": librarian.ACTION_STATE,
-+    }
-+
-+
-+async def librarian_bot_packet_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian
-+
-+    channel = request.query_params.get("channel")
-+    if not channel:
-+        raise HTTPException(status_code=400, detail="channel is required.")
-+    raw_limit = request.query_params.get("limit")
-+    try:
-+        limit = int(raw_limit) if raw_limit else None
-+    except ValueError:
-+        limit = None
-+    scope = request.query_params.get("scope") or "waiting"
-+    await librarian.record_bot_activity("packet")
-+    return await librarian.get_packet(channel, limit, scope)
-+
-+
-+async def librarian_bot_proposals_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian
-+
-+    payload = await request.json()
-+    await librarian.record_bot_activity("proposals")
-+    return await librarian.submit_proposal(payload)
-+
-+
-+async def librarian_bot_apply_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian
-+
-+    payload = await request.json()
-+    await librarian.record_bot_activity("apply")
-+    if librarian.bot_state() == "killed":
-+        return {"ok": False,
-+                "message": "The bot is stopped (killed) from the "
-+                           "Librarian page — applies are refused."}
-+    return await librarian.apply_proposal(
-+        str(payload.get("proposal_id") or ""),
-+        approver=str(payload.get("approver") or "yan"))
-+
-+
-+async def librarian_bot_rollback_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian
-+
-+    payload = await request.json()
-+    return await librarian.rollback_proposal(str(payload.get("proposal_id") or ""))
-+
-+
-+async def librarian_bot_search_api(request: Request) -> dict:
-+    """The app's own /set candidate search, for the Media Manager."""
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper.metadata.entry import (
-+        search_any_candidates,
-+        search_movie_candidates,
-+        search_tv_candidates,
-+    )
-+
-+    query = request.query_params.get("q") or ""
-+    media_type = (request.query_params.get("type") or "any").lower()
-+    if media_type == "movie":
-+        results = await search_movie_candidates(query)
-+    elif media_type == "tv":
-+        results = await search_tv_candidates(query)
-+    else:
-+        results = await search_any_candidates(query)
-+    return {"results": results}
-+
-+
-+# --- Librarian, simple (Yan's model): the bot verifies and writes the
-+# caption; these endpoints only apply it. See helper/librarian_simple.py.
-+
-+async def librarian_simple_status_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian_simple
-+    return await librarian_simple.counts(librarian_simple.real_deps())
-+
-+
-+async def librarian_simple_waiting_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian_simple
-+    return await librarian_simple.waiting(
-+        librarian_simple.real_deps(),
-+        channel=request.query_params.get("channel"),
-+        stem=request.query_params.get("stem"),
-+        limit=int(request.query_params.get("limit") or 30))
-+
-+
-+async def librarian_simple_fix_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian_simple
-+    payload = await request.json()
-+    return await librarian_simple.fix(
-+        librarian_simple.real_deps(),
-+        int(payload["chat_id"]), int(payload["msg_id"]),
-+        str(payload.get("new_caption") or ""),
-+        str(payload.get("expected_caption") or ""),
-+        key=payload.get("key"), stem=payload.get("stem"))
-+
-+
-+async def librarian_simple_undo_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian_simple
-+    payload = await request.json()
-+    return await librarian_simple.undo(
-+        librarian_simple.real_deps(),
-+        int(payload["chat_id"]), int(payload["msg_id"]))
-+
-+
-+# --- Librarian v6 toolbox: sight, records, batch, scans, gateway ---
-+
-+def _simple_deps():
-+    from Backend.helper import librarian_simple
-+    return librarian_simple, librarian_simple.real_deps()
-+
-+
-+async def librarian_v6_grouped_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.waiting_grouped(deps)
-+
-+
-+async def librarian_v6_find_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.find(deps, request.query_params.get("q") or "")
-+
-+
-+async def librarian_v6_file_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.file_detail(
-+        deps, int(request.query_params.get("chat") or 0),
-+        int(request.query_params.get("msg") or 0))
-+
-+
-+async def librarian_v6_history_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.history(
-+        deps, stem=request.query_params.get("stem"),
-+        today=request.query_params.get("today") == "1")
-+
-+
-+async def librarian_v6_fix_batch_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    payload = await request.json()
-+    return await ls.fix_batch(deps, payload.get("fixes") or [])
-+
-+
-+async def librarian_v6_record_get_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.series_record_get(
-+        deps, int(request.query_params.get("channel") or 0),
-+        request.query_params.get("stem") or "")
-+
-+
-+async def librarian_v6_record_set_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.series_record_set(deps, await request.json())
-+
-+
-+async def librarian_v6_alias_list_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    ch = request.query_params.get("channel")
-+    return await ls.alias_list(deps, int(ch) if ch else None)
-+
-+
-+async def librarian_v6_alias_forget_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    payload = await request.json()
-+    return await ls.alias_forget(
-+        deps, int(payload["channel"]), str(payload.get("stem") or ""))
-+
-+
-+async def librarian_v6_park_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    payload = await request.json()
-+    return await ls.park(deps, str(payload.get("key") or ""),
-+                         bool(payload.get("parked", True)))
-+
-+
-+async def librarian_v6_mode_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.mode_info(deps)
-+
-+
-+async def librarian_v6_scan_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    payload = await request.json() if request.method == "POST" else {}
-+    ch = (payload or {}).get("channel")
-+    return await ls.scan(deps, int(ch) if ch else None)
-+
-+
-+async def librarian_v6_scan_status_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.scan_status(deps)
-+
-+
-+async def librarian_v6_probe_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    ls, deps = _simple_deps()
-+    return await ls.probe(
-+        deps, int(request.query_params.get("chat") or 0),
-+        int(request.query_params.get("msg") or 0))
-+
-+
-+async def librarian_gw_lookup_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian_gateway
-+    return await librarian_gateway.lookup(
-+        librarian_gateway.real_deps(),
-+        request.query_params.get("q") or "",
-+        request.query_params.get("type") or "")
-+
-+
-+async def librarian_gw_series_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian_gateway
-+    return await librarian_gateway.series(
-+        librarian_gateway.real_deps(),
-+        request.query_params.get("ref") or "")
-+
-+
-+async def librarian_gw_crossid_api(request: Request) -> dict:
-+    if not _librarian_token_ok(request):
-+        raise HTTPException(status_code=401, detail="Invalid Librarian API token.")
-+    from Backend.helper import librarian_gateway
-+    return await librarian_gateway.crossid(
-+        librarian_gateway.real_deps(),
-+        request.query_params.get("ref") or "")
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
 diff --git a/Backend/fastapi/routes/stream_routes.py b/Backend/fastapi/routes/stream_routes.py
 index be9b286..a6f3b85 100644
 --- a/Backend/fastapi/routes/stream_routes.py
@@ -1239,7 +630,7 @@ index 60f3595..e09957c 100644
  
  #----- Configure/install landing page rendered as HTML for a token
 diff --git a/Backend/fastapi/routes/template_routes.py b/Backend/fastapi/routes/template_routes.py
-index c53ee43..556ec71 100644
+index c53ee43..06a4582 100644
 --- a/Backend/fastapi/routes/template_routes.py
 +++ b/Backend/fastapi/routes/template_routes.py
 @@ -41,6 +41,60 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
@@ -1303,7 +694,7 @@ index c53ee43..556ec71 100644
  #----- Login form (redirects to home when already authenticated)
  async def login_page(request: Request):
      if is_authenticated(request):
-@@ -262,11 +316,169 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
+@@ -262,11 +316,25 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
          titles = {}
      settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
  
@@ -1329,150 +720,6 @@ index c53ee43..556ec71 100644
 +        "prewarm_health": prewarm_health,
      })
      return templates.TemplateResponse("settings.html", ctx)
-+
-+
-+
-+#----- Librarian: modular page (registry in helper/librarian.py). The
-+# shell renders the header, the sections chooser, and the inline
-+# modules (status, channels); below-fold modules load as fragments so
-+# a disabled or heavy section costs nothing on page load.
-+async def librarian_page(request: Request, _: bool = Depends(require_auth)):
-+    from Backend.helper import librarian
-+
-+    settings = SettingsManager.current()
-+    ctx = _base_context(request)
-+    ctx["current_user"] = get_current_user(request)
-+    modules = librarian.enabled_modules(settings.librarian_modules)
-+    ctx["lib_modules"] = modules
-+    ctx["lib_module_defs"] = librarian.PAGE_MODULES
-+    ctx["lib_state"] = librarian.ACTION_STATE
-+    ctx["librarian_enabled"] = settings.librarian_enabled
-+    ctx["librarian_dry_run"] = settings.librarian_dry_run
-+    ctx["lib_budget"] = settings.librarian_edit_budget_per_day
-+    counts = await librarian.panel_counts()
-+    ctx["lib_counts"] = counts
-+    if modules.get("channels"):
-+        # Channel rows: id, display name, files waiting. Names come
-+        # from the settings cache (maintained on every Settings
-+        # save) — a page render must never call Telegram.
-+        waiting = counts.get("waiting_by_channel") or {}
-+        fixed_by = counts.get("fixed_by_channel") or {}
-+        located_by = counts.get("located_by_channel") or {}
-+        titles = settings.channel_titles or {}
-+        rows = []
-+        for ch in settings.auth_channels:
-+            stripped = str(ch).replace("-100", "")
-+            w = waiting.get(stripped, 0)
-+            scan = (counts.get("scan_by_channel") or {}).get(stripped, {})
-+            rows.append({"id": str(ch),
-+                         "name": titles.get(str(ch)) or str(ch),
-+                         "waiting": w,
-+                         "fixed": fixed_by.get(stripped, 0),
-+                         "indexed": scan.get("indexed", 0),
-+                         "unindexed": scan.get("unindexed", 0),
-+                         "located_pct": (round(100 * located_by.get(stripped, 0) / w)
-+                                         if w else None)})
-+        ctx["lib_channels"] = rows
-+    return templates.TemplateResponse("librarian.html", ctx)
-+
-+
-+#----- Librarian, simple: one plain page — counts, waiting, recent
-+# fixes with undo. No modules, no fragments, no jargon.
-+
-+async def librarian_simple_page(request: Request,
-+                                _: bool = Depends(require_auth)):
-+    from Backend.helper import librarian_simple
-+    from Backend.helper.settings_manager import SettingsManager
-+
-+    deps = librarian_simple.real_deps()
-+    settings = SettingsManager.current()
-+    counts = await librarian_simple.counts(deps)
-+    waiting = await librarian_simple.waiting(deps, limit=50)
-+    ctx = {"request": request,
-+           "librarian_enabled": settings.librarian_enabled,
-+           "librarian_dry_run": settings.librarian_dry_run,
-+           "budget": settings.librarian_edit_budget_per_day,
-+           "waiting": counts.get("waiting", 0),
-+           "fixed": counts.get("fixed", 0),
-+           "fixed_today": counts.get("fixed_today", 0),
-+           "waiting_files": waiting.get("files", []),
-+           "fixes": await librarian_simple.recent_fixes(deps)}
-+    return templates.TemplateResponse("librarian_simple.html", ctx)
-+
-+
-+async def librarian_simple_undo(request: Request,
-+                                _: bool = Depends(require_auth),
-+                                chat_id: int = Form(...),
-+                                msg_id: int = Form(...)):
-+    from Backend.helper import librarian_simple
-+    await librarian_simple.undo(librarian_simple.real_deps(),
-+                                chat_id, msg_id)
-+    return RedirectResponse("/librarian-simple", status_code=303)
-+
-+
-+async def librarian_fragment(request: Request, name: str,
-+                             _: bool = Depends(require_auth)):
-+    """One below-fold Librarian section, rendered on demand. A module
-+    that is off (or unknown) is a 404 — its data is never computed."""
-+    from fastapi.responses import HTMLResponse
-+
-+    from Backend.helper import librarian
-+
-+    settings = SettingsManager.current()
-+    modules = librarian.enabled_modules(settings.librarian_modules)
-+    if name not in librarian.FRAGMENT_MODULES or not modules.get(name):
-+        return HTMLResponse("Section is off.", status_code=404)
-+    ctx = _base_context(request)
-+    ctx["current_user"] = get_current_user(request)
-+    if name == "proposals":
-+        ctx["lib_proposals"] = await librarian.list_proposals(limit=15)
-+    elif name == "activity":
-+        ctx["lib_fixes"] = await librarian.list_audit(limit=15)
-+    elif name == "flagged":
-+        ctx["lib_flagged"] = await librarian.list_flagged()
-+    elif name == "aliases":
-+        ctx["lib_aliases"] = await librarian.list_aliases()
-+    elif name == "automations":
-+        from Backend.helper import automations
-+        ctx["lib_jobs"] = await automations.jobs_view()
-+        ctx["lib_schedule_labels"] = automations.SCHEDULE_LABELS
-+    elif name == "agent":
-+        import time as _time
-+
-+        activity = await librarian.bot_activity()
-+        last_seen = float(activity.get("last_seen") or 0)
-+        age = _time.time() - last_seen if last_seen else None
-+        if age is None:
-+            presence = "never seen"
-+        elif age < 120:
-+            presence = "online now"
-+        elif age < 3600:
-+            presence = "idle"
-+        else:
-+            presence = "away"
-+        ctx["lib_bot"] = {
-+            "state": settings.librarian_bot_state,
-+            "activity": activity,
-+            "last_seen": last_seen,
-+            "presence": presence,
-+            "counts": await librarian.panel_counts(),
-+            "auto_apply": settings.librarian_auto_apply,
-+            "dry_run": settings.librarian_dry_run,
-+        }
-+        stored = settings.librarian_channel_policies
-+        titles = settings.channel_titles or {}
-+        ctx["lib_policy_rows"] = [
-+            {"id": ch,
-+             "name": titles.get(str(ch)) or str(ch),
-+             "policy": librarian.resolve_channel_policy(stored, ch)}
-+            for ch in settings.auth_channels]
-+        ctx["lib_pending"] = [
-+            p for p in await librarian.list_proposals(limit=15)
-+            if p.get("status") == "pending"]
-+        ctx["lib_fixes"] = await librarian.list_audit(limit=10)
-+    elif name == "preidentified":
-+        ctx["lib_preidentified"] = await librarian.list_preidentified()
-+    return templates.TemplateResponse(f"librarian/_{name}.html", ctx)
 diff --git a/Backend/fastapi/templates/admin_dashboard.html b/Backend/fastapi/templates/admin_dashboard.html
 index 914b18b..3d989fc 100644
 --- a/Backend/fastapi/templates/admin_dashboard.html
@@ -1520,19 +767,18 @@ index 914b18b..3d989fc 100644
                              <span class="font-semibold text-text">${bytesStr}</span>
                              <span>${avg.toFixed(1)}/${peak.toFixed(1)} MB/s</span>
 diff --git a/Backend/fastapi/templates/base.html b/Backend/fastapi/templates/base.html
-index 55027ba..33cea8c 100644
+index 55027ba..31b752a 100644
 --- a/Backend/fastapi/templates/base.html
 +++ b/Backend/fastapi/templates/base.html
-@@ -9,6 +9,8 @@
+@@ -9,6 +9,7 @@
      ('/admin/access', 'Tokens', 'fa-key', '/admin/access'),
      ('/admin/requests', 'Requests', 'fa-inbox', '/admin/requests'),
      ('/admin/tools', 'Tools', 'fa-screwdriver-wrench', '/admin/tools'),
 +    ('/admin/dl-index', 'DL Index', 'fa-link', '/admin/dl-index'),
-+    ('/admin/librarian', 'Librarian', 'fa-book-open', '/admin/librarian'),
      ('/admin/settings', 'Settings', 'fa-gear', '/admin/settings'),
  ] -%}
  {%- set dock_count = 4 -%}
-@@ -532,7 +534,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
+@@ -532,7 +533,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
      </div>
      <p class="label-caps px-1 mb-2">Theme</p>
      <div class="theme-opts mb-3" data-theme-picker></div>
@@ -1540,7 +786,7 @@ index 55027ba..33cea8c 100644
      <a href="/logout" class="menu-row danger"><i class="fa-solid fa-arrow-right-from-bracket"></i>Log out</a>
  </div>
  
-@@ -562,7 +563,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
+@@ -562,7 +562,6 @@ if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value:
          {% for href, label, icon, prefix in nav[dock_count:] %}
          <a href="{{ href }}" class="sheet-link" {% if is_active(prefix) %}aria-current="page"{% endif %}><i class="fa-solid {{ icon }}"></i>{{ label }}</a>
          {% endfor %}
@@ -1563,7 +809,7 @@ index ca3f585..3985380 100644
              parts.push('Bot ' + (Number(stream.client_index) + 1));
          }
 diff --git a/Backend/fastapi/templates/settings.html b/Backend/fastapi/templates/settings.html
-index 62bda08..6bc9a79 100644
+index 62bda08..c6a1003 100644
 --- a/Backend/fastapi/templates/settings.html
 +++ b/Backend/fastapi/templates/settings.html
 @@ -143,26 +143,13 @@
@@ -1597,7 +843,7 @@ index 62bda08..6bc9a79 100644
  
          <hr class="divider">
  
-@@ -693,6 +680,293 @@
+@@ -693,6 +680,209 @@
      {% endif %}
  </div>
  
@@ -1771,90 +1017,6 @@ index 62bda08..6bc9a79 100644
 +    {% endif %}
 +</div>
 +
-+<!-- ── Librarian (Hermes curation) ────────────────────────────────── -->
-+<div class="settings-card">
-+    <div style="display:flex;align-items:flex-start;gap:.75rem;flex-wrap:wrap">
-+        <div style="flex:1 1 260px">
-+            <h2 style="margin:0"><i class="fa-solid fa-book-open"></i> Librarian</h2>
-+            <p style="font-size:0.78rem;color:var(--text-sec);margin:.35rem 0 0">
-+                The Media Manager bot fixes the captions of files the matcher rejected. You approve
-+                each batch in Telegram — or let verified fixes apply on their own (Automation below).
-+                These settings are the bot's permissions. The bot never streams.
-+            </p>
-+        </div>
-+        <a href="/admin/librarian" class="add-btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:.4rem">
-+            <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Librarian panel</a>
-+    </div>
-+    <div class="s-grid" style="margin-top:.9rem">
-+        <div>
-+            <label class="s-label" for="librarian_enabled">Turn on</label>
-+            <label class="toggle-wrap">
-+                <input type="checkbox" class="toggle-input" id="librarian_enabled"
-+                    {% if settings.librarian_enabled %}checked{% endif %}>
-+                <span class="toggle-track"></span>
-+                <span class="toggle-label">Record rejected files &amp; let the bot work on them</span>
-+            </label>
-+        </div>
-+        <div>
-+            <label class="s-label" for="librarian_dry_run">Test mode</label>
-+            <label class="toggle-wrap">
-+                <input type="checkbox" class="toggle-input" id="librarian_dry_run"
-+                    {% if settings.librarian_dry_run %}checked{% endif %}>
-+                <span class="toggle-track"></span>
-+                <span class="toggle-label">Bot prepares fixes but changes nothing (keep ON until you trust it)</span>
-+            </label>
-+        </div>
-+        <div>
-+            <label class="s-label" for="librarian_edit_budget_per_day">Max caption fixes per day</label>
-+            <input type="number" id="librarian_edit_budget_per_day" class="s-input" min="0" max="10000"
-+                value="{{ settings.librarian_edit_budget_per_day if settings.librarian_edit_budget_per_day is not none else 50 }}">
-+            <p class="s-help">Hard daily cap on caption fixes. 0 = fixes paused.</p>
-+        </div>
-+        <div>
-+            <label class="s-label" for="librarian_auto_apply">Automatic fixing</label>
-+            <select id="librarian_auto_apply" class="s-input">
-+                <option value="off" {% if settings.librarian_auto_apply == 'off' %}selected{% endif %}>Off — always ask me first</option>
-+                <option value="safe" {% if settings.librarian_auto_apply == 'safe' %}selected{% endif %}>Safe fixes only — verified plans, no specials</option>
-+                <option value="all" {% if settings.librarian_auto_apply == 'all' %}selected{% endif %}>All verified fixes</option>
-+            </select>
-+            <p class="s-help">Only plans the app itself has verified can auto-fix, and the bot still reports everything it did. Test mode and the daily cap still apply.</p>
-+        </div>
-+    </div>
-+        <label class="s-label" style="margin-top:1rem">Channels the bot may work on
-+            <span style="font-weight:400;text-transform:none;letter-spacing:0">
-+                — leave empty to cover every source channel; add channels to restrict the bot to only those.</span>
-+        </label>
-+        <div class="multi-list-items" id="librarian_channels_items">
-+            {% for ch in settings.librarian_channels %}
-+            {% set t = (settings.channel_titles or {}).get(ch|string, ch|string) %}
-+            <div class="multi-item">
-+                <span class="channel-chip" data-list="librarian_channels" data-id="{{ ch }}" title="{{ ch }}">{{ t }}</span>
-+                <button class="remove-btn" onclick="removeItem(this)" title="Remove">
-+                    <i class="fa-solid fa-xmark"></i>
-+                </button>
-+            </div>
-+            {% endfor %}
-+        </div>
-+        <div class="add-row">
-+            <input type="text" id="librarian_channels_new" class="s-input"
-+                placeholder="-100xxxxxxxxxx (channels only)"
-+                onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
-+            <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
-+        </div>
-+        <div class="s-grid" style="margin-top:1rem">
-+            <div>
-+                <label class="s-label" for="librarian_api_token">Bot access key</label>
-+                <div style="display:flex;gap:.5rem">
-+                    <input type="password" id="librarian_api_token" class="s-input" style="font-family:ui-monospace,monospace"
-+                        value="{{ settings.librarian_api_token or '' }}" placeholder="Not generated yet" autocomplete="off">
-+                    <button type="button" class="add-btn" onclick="toggleLibrarianToken(this)">Show</button>
-+                    <button type="button" class="add-btn" onclick="regenLibrarianToken()">Regenerate</button>
-+                </div>
-+                <p class="s-help">Lets the Media Manager bot use the Librarian API (batches, plans, fixes). No streaming or admin access. If you regenerate it, the bot's saved copy stops working until it is updated too.</p>
-+            </div>
-+        </div>
-+</div>
-+
 +<!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
 +<div class="settings-card">
 +    <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
@@ -1891,41 +1053,7 @@ index 62bda08..6bc9a79 100644
  <style>
  .sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
  .sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-@@ -1239,6 +1513,24 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
-         </div>
-     </div>
- 
-+    <!-- ── Hermes Bot ──────────────────────────────────────────────────── -->
-+    <div class="settings-card">
-+        <h2><i class="fa-brands fa-telegram"></i> Hermes Bot</h2>
-+        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
-+            Your Hermes Media Manager bot. It is <strong>never</strong> used for streaming — the token
-+            only identifies the bot so the Bot Admin Manager (Tools page) can promote it as admin in
-+            your channels, where it manages media captions. Saving verifies the token with Telegram.
-+            {% if settings.hermes_bot and settings.hermes_bot.username %}
-+            <br>Connected as <strong>@{{ settings.hermes_bot.username }}</strong> (ID {{ settings.hermes_bot.user_id }}).
-+            {% endif %}
-+        </p>
-+        <div class="add-row">
-+            <input type="text" id="hermes_bot_token" class="s-input" spellcheck="false"
-+                value="{{ settings.hermes_bot_token or '' }}"
-+                placeholder="Hermes bot token (1234567890:ABCdef…)">
-+        </div>
-+    </div>
-+
-     <!-- ── Backup & Restore ───────────────────────────────────────────── -->
-     <div class="settings-card">
-         <h2><i class="fa-solid fa-box-archive"></i> Backup &amp; Restore</h2>
-@@ -1569,7 +1861,7 @@ function addItem(listKey) {
-     const value = newInput.value.trim();
-     if (!value) return;
- 
--    const channelLists = ['auth_channels', 'global_search_channels', 'manual_channels'];
-+    const channelLists = ['auth_channels', 'global_search_channels', 'manual_channels', 'librarian_channels'];
-     if (channelLists.includes(listKey) && !isValidChannelId(value)) {
-         alert('Only channel IDs in -100xxxxxxxxxx format are accepted (channels only).');
-         return;
-@@ -1682,6 +1974,60 @@ function toggleWebdavPwdVisibility() {
+@@ -1682,6 +1872,37 @@ function toggleWebdavPwdVisibility() {
      }
  }
  
@@ -1960,50 +1088,10 @@ index 62bda08..6bc9a79 100644
 +}
 +document.addEventListener('DOMContentLoaded', () => { applyBufferProfile(); toggleBufferFields(); });
 +
-+function toggleLibrarianToken(btn) {
-+    const el = document.getElementById('librarian_api_token');
-+    const show = el.type === 'password';
-+    el.type = show ? 'text' : 'password';
-+    btn.textContent = show ? 'Hide' : 'Show';
-+}
-+
-+async function regenLibrarianToken() {
-+    try {
-+        const res = await fetch('/api/admin/librarian/action', {
-+            method: 'POST', headers: { 'Content-Type': 'application/json' },
-+            body: JSON.stringify({ action: 'regen_token' }),
-+        });
-+        const data = await res.json();
-+        if (data.status === 'success' && data.token) {
-+            document.getElementById('librarian_api_token').value = data.token;
-+            showToast('New Librarian API token generated and saved.', 'success', 'Librarian');
-+        } else {
-+            showToast(data.message || 'Could not generate a token.', 'error', 'Librarian');
-+        }
-+    } catch (e) { showToast('Request failed: ' + e, 'error', 'Librarian'); }
-+}
-+
  async function saveSettings() {
      const btn   = document.getElementById('save-btn');
      const label = document.getElementById('save-label');
-@@ -1690,6 +2036,7 @@ async function saveSettings() {
-         ...collectList('auth_channels'),
-         ...collectList('global_search_channels'),
-         ...collectList('manual_channels'),
-+        ...collectList('librarian_channels'),
-     ];
-     const acEl = document.getElementById('announcement_channel');
-     const scEl = document.getElementById('skip_channel');
-@@ -1759,14 +2106,40 @@ async function saveSettings() {
-         webdav_password:               document.getElementById('webdav_password').value,
-         multi_tokens:                  collectList('multi_tokens'),
-         helper_tokens:                 collectList('helper_tokens'),
-+        hermes_bot_token:              document.getElementById('hermes_bot_token').value.trim(),
-         extra_databases:               collectList('extra_databases'),
-         global_search:                 document.getElementById('global_search').checked,
-         global_search_channels:        collectList('global_search_channels'),
-         manual_channels:               collectList('manual_channels'),
-+        librarian_channels:            collectList('librarian_channels'),
+@@ -1766,7 +1987,26 @@ async function saveSettings() {
          announce_new_content:          document.getElementById('announce_new_content').checked,
          announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
          skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
@@ -2027,15 +1115,10 @@ index 62bda08..6bc9a79 100644
 +        prewarm_daily_budget_mb:       parseInt(document.getElementById('prewarm_daily_budget_mb').value, 10) || 0,
 +        prewarm_only_charging:         document.getElementById('prewarm_only_charging').checked,
 +        flood_alert_enabled:           document.getElementById('flood_alert_enabled').checked,
-+        librarian_enabled:             document.getElementById('librarian_enabled').checked,
-+        librarian_dry_run:             document.getElementById('librarian_dry_run').checked,
-+        librarian_auto_apply:          document.getElementById('librarian_auto_apply').value,
-+        librarian_edit_budget_per_day: parseInt(document.getElementById('librarian_edit_budget_per_day').value, 10) || 0,
-+        librarian_api_token:           document.getElementById('librarian_api_token').value.trim(),
      };
      const dsEl = document.getElementById('default_streaming');
      if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
-@@ -1902,6 +2275,30 @@ function renderSettings(s) {
+@@ -1902,6 +2142,25 @@ function renderSettings(s) {
      document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
      document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
      document.getElementById('fanart_low_res_poster').checked = (s.fanart_low_res_poster ?? true);
@@ -2056,26 +1139,12 @@ index 62bda08..6bc9a79 100644
 +    document.getElementById('prewarm_daily_budget_mb').value = (s.prewarm_daily_budget_mb ?? 2048);
 +    document.getElementById('prewarm_only_charging').checked = !!s.prewarm_only_charging;
 +    document.getElementById('flood_alert_enabled').checked = !!s.flood_alert_enabled;
-+    document.getElementById('librarian_enabled').checked = !!s.librarian_enabled;
-+    document.getElementById('librarian_dry_run').checked = (s.librarian_dry_run ?? true);
-+    document.getElementById('librarian_auto_apply').value = (s.librarian_auto_apply ?? (s.librarian_auto_apply_tier_a ? 'safe' : 'off'));
-+    document.getElementById('librarian_edit_budget_per_day').value = (s.librarian_edit_budget_per_day ?? 50);
-+    document.getElementById('librarian_api_token').value = s.librarian_api_token || '';
 +    toggleBufferFields();
 +    applyBufferProfile();
      togglePosterProvider();
      toggleFanartShuffle();
      document.getElementById('upstream_repo').value = s.upstream_repo || '';
-@@ -1913,6 +2310,8 @@ function renderSettings(s) {
-     document.getElementById('cf_stream_url').value = s.cf_stream_url || '';
-     document.getElementById('cf_stream_secret').value = s.cf_stream_secret || '';
-     document.getElementById('cf_stream_mode').value = s.cf_stream_mode || 'off';
-+    const hb = document.getElementById('hermes_bot_token');
-+    if (hb) hb.value = s.hermes_bot_token || '';
-     const wu = document.getElementById('webdav_user');
-     if (wu) wu.value = s.webdav_user || '';
-     const wp = document.getElementById('webdav_password');
-@@ -1945,6 +2344,16 @@ function renderSettings(s) {
+@@ -1945,6 +2204,16 @@ function renderSettings(s) {
          const scBtn = document.getElementById('skip_channel_clear');
          if (scBtn) scBtn.style.display = scid ? '' : 'none';
      }
@@ -2092,7 +1161,7 @@ index 62bda08..6bc9a79 100644
      toggleSkipDeleteField();
  
      rebuildDatabaseList(s.database_list || []);
-@@ -2021,7 +2430,6 @@ const STAT_FIELDS = [
+@@ -2021,7 +2290,6 @@ const STAT_FIELDS = [
      ['streams', 'Streams'], ['db_size', 'DB Size'],
      ['auth_channels', 'AUTH Channels'], ['version', 'Version'],
  ];
@@ -2100,7 +1169,7 @@ index 62bda08..6bc9a79 100644
  
  /* Spin the clicked refresh button's icon while an async action runs */
  function spinIcon(btn, on) {
-@@ -2047,32 +2455,6 @@ async function loadDbStats(btn) {
+@@ -2047,32 +2315,6 @@ async function loadDbStats(btn) {
      }
  }
  
@@ -2133,7 +1202,7 @@ index 62bda08..6bc9a79 100644
  async function restartApp() {
      if (!confirm('Restart the app now? It will pull the latest code and be unreachable for a few seconds.')) return;
  
-@@ -2089,7 +2471,6 @@ async function restartApp() {
+@@ -2089,7 +2331,6 @@ async function restartApp() {
      }
  
      // Web app goes down during restart — poll health until start_time changes, then reload.
@@ -2141,7 +1210,7 @@ index 62bda08..6bc9a79 100644
      const overlay = document.getElementById('restart-overlay');
      overlay.hidden = false;
      document.documentElement.classList.add('rs-lock');
-@@ -2137,7 +2518,6 @@ window.addEventListener('DOMContentLoaded', () => {
+@@ -2137,7 +2378,6 @@ window.addEventListener('DOMContentLoaded', () => {
      toggleDuplicateProtection();
      toggleMediaflowFields();
      loadDbStats();
@@ -2408,36 +1477,30 @@ index 49c2d40..a274d73 100644
                  LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
              return
 diff --git a/Backend/helper/settings_manager.py b/Backend/helper/settings_manager.py
-index 2b7712c..1436880 100644
+index 2b7712c..193e271 100644
 --- a/Backend/helper/settings_manager.py
 +++ b/Backend/helper/settings_manager.py
-@@ -5,6 +5,10 @@ from typing import Any, Dict, List
+@@ -5,6 +5,9 @@ from typing import Any, Dict, List
  
  import Backend.pyrofork.bot as botmod
  from Backend.config import Telegram
-+from Backend.helper.hermes_bot import sanitize_identity as _sanitize_hermes_identity
 +from Backend.helper.stream_buffer import RANGES as _BUFFER_RANGES
 +from Backend.helper.prewarm import PROFILES as _PREWARM_PROFILES
 +from Backend.helper.prewarm import RANGES as _PREWARM_RANGES
  from Backend.helper.passwords import hash_password
  from Backend.logger import LOGGER
  
-@@ -48,6 +52,14 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -48,6 +51,9 @@ _DEFAULTS: Dict[str, Any] = {
      "announce_new_content": False,
      "announcement_channel": "",
      "skip_channel": "",
 +    #----- DM Link pool channel (Backend/pyrofork/plugins/dl_link.py)
 +    "dl_channel_id": "",
 +    "dl_expire_days": 0,
-+    #----- Hermes Bot (Media Manager): token + resolved identity.
-+    #----- The token is verified via getMe on save and NEVER used to
-+    #----- build a streaming client — the bot is librarian-only.
-+    "hermes_bot_token": "",
-+    "hermes_bot": {},
      "delete_on_metadata_fail": False,
      "better_poster_enabled": False,
      "better_poster": "",
-@@ -63,6 +75,46 @@ _DEFAULTS: Dict[str, Any] = {
+@@ -63,6 +69,24 @@ _DEFAULTS: Dict[str, Any] = {
      "fanart_shuffle": False,
      "fanart_shuffle_interval": 5,
      "fanart_low_res_poster": True,
@@ -2459,50 +1522,18 @@ index 2b7712c..1436880 100644
 +    "prewarm_trigger_pct": 70,
 +    "prewarm_daily_budget_mb": 2048,
 +    "prewarm_only_charging": False,
-+    "librarian_enabled": False,
-+    "librarian_dry_run": True,
-+    "librarian_auto_apply_tier_a": False,
-+    "librarian_auto_apply": "",
-+    "librarian_modules": {},
-+    "librarian_channel_policies": {},
-+    "librarian_bot_state": "active",
-+    "librarian_digest": "manual",
-+    "librarian_edit_budget_per_day": 50,
-+    "librarian_channels": [],
-+    "librarian_api_token": "",
-+    "librarian_batch_size": 60,
-+    "librarian_apply_workers": 4,
-+    "librarian_gate_strict_year": False,
-+    "librarian_specials_policy": "guard",
-+    "librarian_v2_enabled": False,
-+    "librarian_v2_db_path": "",
-+    "librarian_v2_dry_run": True,
-+    "librarian_v2_daily_budget": 5000,
-+    "librarian_v2_auto_floor": 0.95,
-+    "librarian_v2_approval_floor": 0.80,
-+    "librarian_v2_specials_policy": "guard",
  }
  
  
-@@ -158,6 +210,17 @@ class Settings:
+@@ -158,6 +182,7 @@ class Settings:
      def announce_new_content(self) -> bool:
          return bool(self._d.get("announce_new_content", False))
  
-+    @property
-+    def hermes_bot_token(self) -> str:
-+        return str(self._d.get("hermes_bot_token") or "").strip()
-+
-+    @property
-+    def hermes_bot(self) -> Dict[str, Any] | None:
-+        """Resolved Hermes Bot identity {user_id, username, name}, or
-+        None when no Hermes Bot is registered. The Bot Admin Manager
-+        promotes this bot by user id; it is never a streaming client."""
-+        return _sanitize_hermes_identity(self._d.get("hermes_bot"))
 +
      @property
      def delete_on_metadata_fail(self) -> bool:
          return bool(self._d.get("delete_on_metadata_fail", False))
-@@ -170,6 +233,31 @@ class Settings:
+@@ -170,6 +195,31 @@ class Settings:
      def skip_channel(self) -> str:
          return str(self._d.get("skip_channel") or "").strip()
  
@@ -2534,7 +1565,7 @@ index 2b7712c..1436880 100644
      #----- Strings
      @property
      def tmdb_api(self) -> str:
-@@ -305,6 +393,240 @@ class Settings:
+@@ -305,6 +355,104 @@ class Settings:
          except (ValueError, TypeError):
              return 5
  
@@ -2635,147 +1666,11 @@ index 2b7712c..1436880 100644
 +    def prewarm_only_charging(self) -> bool:
 +        return bool(self._d.get("prewarm_only_charging", False))
 +
-+    #----- Librarian (Hermes curation — docs/librarian/DESIGN.md).
-+    #----- Read live on every use, so changes apply without a restart.
-+    #----- librarian_channels empty means every auth channel is in
-+    #----- scope; a non-empty list restricts curation to those.
-+    @property
-+    def librarian_enabled(self) -> bool:
-+        return bool(self._d.get("librarian_enabled", False))
-+
-+    @property
-+    def librarian_dry_run(self) -> bool:
-+        return bool(self._d.get("librarian_dry_run", True))
-+
-+    @property
-+    def librarian_auto_apply_tier_a(self) -> bool:
-+        return bool(self._d.get("librarian_auto_apply_tier_a", False))
-+
-+    @property
-+    def librarian_auto_apply(self) -> str:
-+        """The automation ladder (v5): off | safe | all. This setting IS
-+        the bot's permission to apply fixes without asking in Telegram.
-+        The stored default is "" (unset) on purpose: an explicit 'off'
-+        must beat the legacy migration — the old tier-a toggle was
-+        cosmetic, and an owner who had it ON gets 'safe', the
-+        behaviour it always promised."""
-+        value = str(self._d.get("librarian_auto_apply") or "").strip().lower()
-+        if value in ("off", "safe", "all"):
-+            return value
-+        return "safe" if self._d.get("librarian_auto_apply_tier_a") else "off"
-+
-+    @property
-+    def librarian_modules(self) -> dict:
-+        """Which Librarian-page sections Yan has chosen (module id ->
-+        bool). Merged over the registry defaults by the page handler."""
-+        raw = self._d.get("librarian_modules") or {}
-+        return raw if isinstance(raw, dict) else {}
-+
-+    @property
-+    def librarian_channel_policies(self) -> dict:
-+        """Per-channel permission matrix for the Media Manager:
-+        {channel_id: {"auto": inherit|off|safe|all, "scopes":
-+        {"waiting"|"indexed"|"unindexed": allow|ask|deny}}}."""
-+        raw = self._d.get("librarian_channel_policies") or {}
-+        return raw if isinstance(raw, dict) else {}
-+
-+    @property
-+    def librarian_bot_state(self) -> str:
-+        """The Hermes agent panel's master control for the Media
-+        Manager: active | paused (no new work) | killed (no bot API
-+        work at all until Yan restarts it)."""
-+        value = str(self._d.get("librarian_bot_state") or "active").strip().lower()
-+        return value if value in ("active", "paused", "killed") else "active"
-+
-+    @property
-+    def librarian_digest(self) -> str:
-+        value = str(self._d.get("librarian_digest") or "manual").strip().lower()
-+        return value if value in ("manual", "daily", "weekly") else "manual"
-+
-+    @property
-+    def librarian_edit_budget_per_day(self) -> int:
-+        value = self._d.get("librarian_edit_budget_per_day", 50)
-+        if isinstance(value, bool) or not isinstance(value, int):
-+            return 50
-+        return max(0, min(10000, value))
-+
-+    @property
-+    def librarian_channels(self) -> list:
-+        value = self._d.get("librarian_channels")
-+        return list(value) if isinstance(value, list) else []
-+
-+    @property
-+    def librarian_api_token(self) -> str:
-+        return str(self._d.get("librarian_api_token") or "").strip()
-+
-+    @property
-+    def librarian_batch_size(self) -> int:
-+        value = self._d.get("librarian_batch_size", 60)
-+        if isinstance(value, bool) or not isinstance(value, int):
-+            return 60
-+        return max(1, min(200, value))
-+
-+    @property
-+    def librarian_apply_workers(self) -> int:
-+        value = self._d.get("librarian_apply_workers", 4)
-+        if isinstance(value, bool) or not isinstance(value, int):
-+            return 4
-+        return max(1, min(16, value))
-+
-+    @property
-+    def librarian_gate_strict_year(self) -> bool:
-+        return bool(self._d.get("librarian_gate_strict_year", False))
-+
-+    @property
-+    def librarian_specials_policy(self) -> str:
-+        value = str(self._d.get("librarian_specials_policy") or "guard").strip().lower()
-+        return value if value in ("guard", "off") else "guard"
-+
-+    #----- Librarian v2 (Work Orders — docs/librarian-v2/SPEC.md).
-+    @property
-+    def librarian_v2_enabled(self) -> bool:
-+        return bool(self._d.get("librarian_v2_enabled", False))
-+
-+    @property
-+    def librarian_v2_db_path(self) -> str:
-+        return str(self._d.get("librarian_v2_db_path") or
-+                   "librarian_v2.sqlite3")
-+
-+    @property
-+    def librarian_v2_dry_run(self) -> bool:
-+        return bool(self._d.get("librarian_v2_dry_run", True))
-+
-+    @property
-+    def librarian_v2_daily_budget(self) -> int:
-+        try:
-+            return int(self._d.get("librarian_v2_daily_budget", 5000))
-+        except (TypeError, ValueError):
-+            return 5000
-+
-+    @property
-+    def librarian_v2_auto_floor(self) -> float:
-+        try:
-+            return float(self._d.get("librarian_v2_auto_floor", 0.95))
-+        except (TypeError, ValueError):
-+            return 0.95
-+
-+    @property
-+    def librarian_v2_approval_floor(self) -> float:
-+        try:
-+            return float(self._d.get("librarian_v2_approval_floor", 0.80))
-+        except (TypeError, ValueError):
-+            return 0.80
-+
-+    @property
-+    def librarian_v2_specials_policy(self) -> str:
-+        value = str(self._d.get("librarian_v2_specials_policy") or
-+                    "guard").strip().lower()
-+        return value if value in ("guard", "off") else "guard"
 +
      #----- Lists
      @property
      def auth_channels(self) -> List[str]:
-@@ -380,7 +702,7 @@ class SettingsManager:
+@@ -380,7 +528,7 @@ class SettingsManager:
                  c = str(c).strip()
                  if c:
                      ids.add(c)
@@ -2784,7 +1679,7 @@ index 2b7712c..1436880 100644
              v = str(data.get(key) or "").strip()
              if v:
                  ids.add(v)
-@@ -527,4 +849,23 @@ class SettingsManager:
+@@ -527,4 +675,23 @@ class SettingsManager:
          if old.get("global_search") != new.get("global_search") and "global_search" not in results:
              results["global_search"] = "enabled" if new.get("global_search") else "disabled"
  
@@ -2809,7 +1704,7 @@ index 2b7712c..1436880 100644
 +
          return results
 diff --git a/Backend/helper/skip_channel.py b/Backend/helper/skip_channel.py
-index aed6a5c..08d538a 100644
+index aed6a5c..62beba1 100644
 --- a/Backend/helper/skip_channel.py
 +++ b/Backend/helper/skip_channel.py
 @@ -19,7 +19,7 @@ def is_skip_channel(message: Message) -> bool:
@@ -2821,18 +1716,6 @@ index aed6a5c..08d538a 100644
      settings = SettingsManager.current()
      skip = settings.skip_channel
      if not skip:
-@@ -46,3 +46,11 @@ async def route_to_skip_channel(client: Client, message: Message) -> None:
-             await delete_message(message.chat.id, message.id)
-         except Exception as e:
-             LOGGER.warning(f"[SkipChannel] Could not delete original message {message.id}: {e}")
-+
-+    # Librarian Phase 1: record the rejection in the ledger (best-effort;
-+    # record_from_message never raises and no-ops while disabled).
-+    try:
-+        from Backend.helper.librarian import record_from_message
-+        await record_from_message(message, origin)
-+    except Exception:
-+        pass
 diff --git a/Backend/pyrofork/clients.py b/Backend/pyrofork/clients.py
 index 4ae9cb1..0303daf 100644
 --- a/Backend/pyrofork/clients.py
