@@ -850,6 +850,183 @@
     {% endif %}
 </div>
 
+    <!-- ── Librarian ─────────────────────────────────────────────────── -->
+    <div class="settings-card" id="librarian-card">
+        <h2><i class="fa-solid fa-book-open"></i> Librarian</h2>
+        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
+            The Media Manager bot works the pile of files the matcher could not identify.
+            These switches are its permissions. The pairing token below is how the bot
+            proves itself to the app — it is never part of this form's saved settings.
+        </p>
+        {% set lib_token_set = settings.librarian_api_token_hash_set if settings.librarian_api_token_hash_set is defined else (settings.librarian_api_token_hash is defined and settings.librarian_api_token_hash) %}
+        <div class="space-y-4">
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="librarian_enabled"
+                    {% if settings.librarian_enabled %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">
+                    <strong>Enable Librarian</strong>
+                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                        Master switch for the bot API and the Librarian page
+                    </span>
+                </span>
+            </label>
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="librarian_capture_enabled"
+                    {% if settings.librarian_capture_enabled %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">
+                    <strong>Capture rejections</strong>
+                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                        Record every matcher rejection in the waiting pile. Capture only —
+                        it is not limited by the channel allowlist below.
+                    </span>
+                </span>
+            </label>
+            <div>
+                <label class="s-label" for="librarian_mode">Mode</label>
+                <select id="librarian_mode" class="s-input">
+                    <option value="off" {% if settings.librarian_mode == 'off' %}selected{% endif %}>Off — Yan-requested work only</option>
+                    <option value="ask" {% if settings.librarian_mode == 'ask' %}selected{% endif %}>Ask — research and present, apply on confirmation</option>
+                    <option value="auto" {% if settings.librarian_mode == 'auto' %}selected{% endif %}>Auto — record + alias gated autonomy</option>
+                </select>
+            </div>
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="librarian_test_mode"
+                    {% if settings.librarian_test_mode %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">
+                    <strong>Test mode</strong>
+                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                        Overrides everything: dry runs only, no Telegram writes
+                    </span>
+                </span>
+            </label>
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="librarian_writes_enabled"
+                    {% if settings.librarian_writes_enabled %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">
+                    <strong>Enable writes</strong>
+                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                        Arming switch for Telegram mutations (also needs test mode off, budget, and an allowlisted channel)
+                    </span>
+                </span>
+            </label>
+            <div>
+                <label class="s-label" for="librarian_edit_budget_per_day">Edit budget per day</label>
+                <input type="number" id="librarian_edit_budget_per_day" class="s-input" min="0" step="1"
+                    value="{{ settings.librarian_edit_budget_per_day }}">
+            </div>
+        </div>
+
+        <hr class="divider">
+
+        <label class="s-label">LIBRARIAN CHANNELS
+            <span style="font-weight:400;text-transform:none;letter-spacing:0">
+                — the allowlist of channels the bot may work and write in</span>
+        </label>
+        <div class="multi-list-items" id="librarian_channels_items">
+            {% for ch in settings.librarian_channels %}
+            {% set t = (settings.channel_titles or {}).get(ch|string, ch|string) %}
+            <div class="multi-item">
+                <span class="channel-chip" data-list="librarian_channels" data-id="{{ ch }}" title="{{ ch }}">{{ t }}</span>
+                <button class="remove-btn" onclick="removeItem(this)" title="Remove">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="add-row">
+            <input type="text" id="librarian_channels_new" class="s-input"
+                placeholder="-100xxxxxxxxxx (channels only)"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
+            <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
+        </div>
+
+        <hr class="divider">
+
+        <label class="s-label">CHANNEL TYPES
+            <span style="font-weight:400;text-transform:none;letter-spacing:0">
+                — each channel's stored media type, the ground truth the gateway and bot consume.
+                A channel with no stored type is <strong>unknown</strong>; rows offered below for
+                allowlisted channels without a type are only saved once you pick a type.</span>
+        </label>
+        {% set lib_ctypes = settings.librarian_channel_types or {} %}
+        {% set lib_type_vocab = ['movie', 'tv', 'anime', 'donghua', 'cartoon', 'drama', 'ova', 'special', 'unknown'] %}
+        <div id="librarian_channel_types_rows">
+            {% for ch, tp in lib_ctypes.items() %}
+            <div class="lct-row" data-stored="true" style="display:flex;gap:0.5rem;margin-bottom:0.4rem">
+                <input type="text" class="s-input lct-channel" value="{{ ch }}" placeholder="-100xxxxxxxxxx" style="flex:1">
+                <select class="s-input lct-type" style="flex:0 0 9rem">
+                    {% for t in lib_type_vocab %}<option value="{{ t }}" {% if tp == t %}selected{% endif %}>{{ t }}</option>{% endfor %}
+                </select>
+                <button type="button" class="remove-btn" onclick="removeLibrarianChannelTypeRow(this)" title="Remove">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            {% endfor %}
+            {% for ch in settings.librarian_channels %}
+            {% if (ch|string) not in lib_ctypes %}
+            <div class="lct-row" data-stored="false" style="display:flex;gap:0.5rem;margin-bottom:0.4rem">
+                <input type="text" class="s-input lct-channel" value="{{ ch }}" placeholder="-100xxxxxxxxxx" style="flex:1">
+                <select class="s-input lct-type" style="flex:0 0 9rem">
+                    {% for t in lib_type_vocab %}<option value="{{ t }}" {% if t == 'unknown' %}selected{% endif %}>{{ t }}</option>{% endfor %}
+                </select>
+                <button type="button" class="remove-btn" onclick="removeLibrarianChannelTypeRow(this)" title="Remove">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        <button type="button" class="add-btn" onclick="addLibrarianChannelTypeRow()">+ Add Channel Type</button>
+
+        <hr class="divider">
+
+        <label class="s-label">Pairing Token</label>
+        <p style="font-size:0.85rem;color:var(--text-sec);margin-bottom:0.75rem">
+            Pairing token: <strong id="librarian-token-status">{% if lib_token_set %}Set{% else %}Not set{% endif %}</strong>
+            <span style="display:block;font-size:0.78rem;margin-top:0.25rem">
+                The token lets the Media Manager bot use the Librarian API. Generating a new
+                token replaces the old one immediately — the old token stops working.
+            </span>
+        </p>
+        <button type="button" class="add-btn" id="librarian-token-generate" onclick="generateLibrarianToken()">{% if lib_token_set %}Rotate token{% else %}Generate token{% endif %}</button>
+        <div id="librarian-token-once-wrap" style="display:none;margin-top:0.85rem">
+            <label class="s-label" for="librarian-token-once">New pairing token — shown once</label>
+            <div class="add-row">
+                <input type="text" id="librarian-token-once" class="s-input" readonly value="" autocomplete="off" spellcheck="false">
+                <button type="button" class="add-btn" onclick="copyLibrarianToken()">Copy</button>
+            </div>
+            <p id="librarian-token-warn" style="font-size:0.8rem;color:var(--warn);margin-top:0.5rem"></p>
+        </div>
+        <p id="librarian-token-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
+
+        <hr class="divider">
+
+        <label class="s-label">Writer Bot</label>
+        {% set lib_writer_fp = settings.librarian_writer_token_fingerprint if settings.librarian_writer_token_fingerprint is defined else '' %}
+        {% set lib_writer_name = settings.librarian_writer_bot_username if settings.librarian_writer_bot_username is defined else '' %}
+        {% set lib_writer_set = lib_writer_fp or lib_writer_name %}
+        <p style="font-size:0.85rem;color:var(--text-sec);margin-bottom:0.75rem">
+            <span id="librarian-writer-status">{% if lib_writer_set %}Writer bot: @{{ lib_writer_name }} (…{{ lib_writer_fp }}){% else %}Writer bot: Not set{% endif %}</span>
+            <span style="display:block;font-size:0.78rem;margin-top:0.25rem">
+                The Media Manager bot's own BotFather token — the writer identity the
+                fix engine sends edits as. It is set only through the button below,
+                never through this page's settings save, and it is never shown back.
+                Replacing the token here does not revoke the old one — only BotFather /revoke does.
+            </span>
+        </p>
+        <div class="add-row">
+            <input type="password" id="librarian-writer-token" class="s-input"
+                placeholder="Media Manager bot token" autocomplete="off" spellcheck="false">
+            <button type="button" class="add-btn" id="librarian-writer-set" onclick="setLibrarianWriterToken()">Set writer token</button>
+            <button type="button" class="add-btn" id="librarian-writer-clear" onclick="clearLibrarianWriterToken()">Clear</button>
+        </div>
+        <p id="librarian-writer-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
+    </div>
+
 <!-- ── DL Channel (DM Link pool) ──────────────────────────────────── -->
 <div class="settings-card">
     <h2><i class="fa-solid fa-layer-group"></i> DL Channel — DM Link Pool</h2>
@@ -1480,183 +1657,6 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
         <div id="contributors" class="contrib-grid" aria-live="polite">
             <div class="contrib-skel"></div><div class="contrib-skel"></div><div class="contrib-skel"></div>
         </div>
-    </div>
-
-    <!-- ── Librarian ─────────────────────────────────────────────────── -->
-    <div class="settings-card" id="librarian-card">
-        <h2><i class="fa-solid fa-book-open"></i> Librarian</h2>
-        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
-            The Media Manager bot works the pile of files the matcher could not identify.
-            These switches are its permissions. The pairing token below is how the bot
-            proves itself to the app — it is never part of this form's saved settings.
-        </p>
-        {% set lib_token_set = settings.librarian_api_token_hash_set if settings.librarian_api_token_hash_set is defined else (settings.librarian_api_token_hash is defined and settings.librarian_api_token_hash) %}
-        <div class="space-y-4">
-            <label class="toggle-wrap">
-                <input type="checkbox" class="toggle-input" id="librarian_enabled"
-                    {% if settings.librarian_enabled %}checked{% endif %}>
-                <span class="toggle-track"></span>
-                <span class="toggle-label">
-                    <strong>Enable Librarian</strong>
-                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
-                        Master switch for the bot API and the Librarian page
-                    </span>
-                </span>
-            </label>
-            <label class="toggle-wrap">
-                <input type="checkbox" class="toggle-input" id="librarian_capture_enabled"
-                    {% if settings.librarian_capture_enabled %}checked{% endif %}>
-                <span class="toggle-track"></span>
-                <span class="toggle-label">
-                    <strong>Capture rejections</strong>
-                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
-                        Record every matcher rejection in the waiting pile. Capture only —
-                        it is not limited by the channel allowlist below.
-                    </span>
-                </span>
-            </label>
-            <div>
-                <label class="s-label" for="librarian_mode">Mode</label>
-                <select id="librarian_mode" class="s-input">
-                    <option value="off" {% if settings.librarian_mode == 'off' %}selected{% endif %}>Off — Yan-requested work only</option>
-                    <option value="ask" {% if settings.librarian_mode == 'ask' %}selected{% endif %}>Ask — research and present, apply on confirmation</option>
-                    <option value="auto" {% if settings.librarian_mode == 'auto' %}selected{% endif %}>Auto — record + alias gated autonomy</option>
-                </select>
-            </div>
-            <label class="toggle-wrap">
-                <input type="checkbox" class="toggle-input" id="librarian_test_mode"
-                    {% if settings.librarian_test_mode %}checked{% endif %}>
-                <span class="toggle-track"></span>
-                <span class="toggle-label">
-                    <strong>Test mode</strong>
-                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
-                        Overrides everything: dry runs only, no Telegram writes
-                    </span>
-                </span>
-            </label>
-            <label class="toggle-wrap">
-                <input type="checkbox" class="toggle-input" id="librarian_writes_enabled"
-                    {% if settings.librarian_writes_enabled %}checked{% endif %}>
-                <span class="toggle-track"></span>
-                <span class="toggle-label">
-                    <strong>Enable writes</strong>
-                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
-                        Arming switch for Telegram mutations (also needs test mode off, budget, and an allowlisted channel)
-                    </span>
-                </span>
-            </label>
-            <div>
-                <label class="s-label" for="librarian_edit_budget_per_day">Edit budget per day</label>
-                <input type="number" id="librarian_edit_budget_per_day" class="s-input" min="0" step="1"
-                    value="{{ settings.librarian_edit_budget_per_day }}">
-            </div>
-        </div>
-
-        <hr class="divider">
-
-        <label class="s-label">LIBRARIAN CHANNELS
-            <span style="font-weight:400;text-transform:none;letter-spacing:0">
-                — the allowlist of channels the bot may work and write in</span>
-        </label>
-        <div class="multi-list-items" id="librarian_channels_items">
-            {% for ch in settings.librarian_channels %}
-            {% set t = (settings.channel_titles or {}).get(ch|string, ch|string) %}
-            <div class="multi-item">
-                <span class="channel-chip" data-list="librarian_channels" data-id="{{ ch }}" title="{{ ch }}">{{ t }}</span>
-                <button class="remove-btn" onclick="removeItem(this)" title="Remove">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-            {% endfor %}
-        </div>
-        <div class="add-row">
-            <input type="text" id="librarian_channels_new" class="s-input"
-                placeholder="-100xxxxxxxxxx (channels only)"
-                onkeydown="if(event.key==='Enter'){event.preventDefault();addItem('librarian_channels')}">
-            <button class="add-btn" onclick="addItem('librarian_channels')">+ Add Channel</button>
-        </div>
-
-        <hr class="divider">
-
-        <label class="s-label">CHANNEL TYPES
-            <span style="font-weight:400;text-transform:none;letter-spacing:0">
-                — each channel's stored media type, the ground truth the gateway and bot consume.
-                A channel with no stored type is <strong>unknown</strong>; rows offered below for
-                allowlisted channels without a type are only saved once you pick a type.</span>
-        </label>
-        {% set lib_ctypes = settings.librarian_channel_types or {} %}
-        {% set lib_type_vocab = ['movie', 'tv', 'anime', 'donghua', 'cartoon', 'drama', 'ova', 'special', 'unknown'] %}
-        <div id="librarian_channel_types_rows">
-            {% for ch, tp in lib_ctypes.items() %}
-            <div class="lct-row" data-stored="true" style="display:flex;gap:0.5rem;margin-bottom:0.4rem">
-                <input type="text" class="s-input lct-channel" value="{{ ch }}" placeholder="-100xxxxxxxxxx" style="flex:1">
-                <select class="s-input lct-type" style="flex:0 0 9rem">
-                    {% for t in lib_type_vocab %}<option value="{{ t }}" {% if tp == t %}selected{% endif %}>{{ t }}</option>{% endfor %}
-                </select>
-                <button type="button" class="remove-btn" onclick="removeLibrarianChannelTypeRow(this)" title="Remove">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-            {% endfor %}
-            {% for ch in settings.librarian_channels %}
-            {% if (ch|string) not in lib_ctypes %}
-            <div class="lct-row" data-stored="false" style="display:flex;gap:0.5rem;margin-bottom:0.4rem">
-                <input type="text" class="s-input lct-channel" value="{{ ch }}" placeholder="-100xxxxxxxxxx" style="flex:1">
-                <select class="s-input lct-type" style="flex:0 0 9rem">
-                    {% for t in lib_type_vocab %}<option value="{{ t }}" {% if t == 'unknown' %}selected{% endif %}>{{ t }}</option>{% endfor %}
-                </select>
-                <button type="button" class="remove-btn" onclick="removeLibrarianChannelTypeRow(this)" title="Remove">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-            {% endif %}
-            {% endfor %}
-        </div>
-        <button type="button" class="add-btn" onclick="addLibrarianChannelTypeRow()">+ Add Channel Type</button>
-
-        <hr class="divider">
-
-        <label class="s-label">Pairing Token</label>
-        <p style="font-size:0.85rem;color:var(--text-sec);margin-bottom:0.75rem">
-            Pairing token: <strong id="librarian-token-status">{% if lib_token_set %}Set{% else %}Not set{% endif %}</strong>
-            <span style="display:block;font-size:0.78rem;margin-top:0.25rem">
-                The token lets the Media Manager bot use the Librarian API. Generating a new
-                token replaces the old one immediately — the old token stops working.
-            </span>
-        </p>
-        <button type="button" class="add-btn" id="librarian-token-generate" onclick="generateLibrarianToken()">{% if lib_token_set %}Rotate token{% else %}Generate token{% endif %}</button>
-        <div id="librarian-token-once-wrap" style="display:none;margin-top:0.85rem">
-            <label class="s-label" for="librarian-token-once">New pairing token — shown once</label>
-            <div class="add-row">
-                <input type="text" id="librarian-token-once" class="s-input" readonly value="" autocomplete="off" spellcheck="false">
-                <button type="button" class="add-btn" onclick="copyLibrarianToken()">Copy</button>
-            </div>
-            <p id="librarian-token-warn" style="font-size:0.8rem;color:var(--warn);margin-top:0.5rem"></p>
-        </div>
-        <p id="librarian-token-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
-
-        <hr class="divider">
-
-        <label class="s-label">Writer Bot</label>
-        {% set lib_writer_fp = settings.librarian_writer_token_fingerprint if settings.librarian_writer_token_fingerprint is defined else '' %}
-        {% set lib_writer_name = settings.librarian_writer_bot_username if settings.librarian_writer_bot_username is defined else '' %}
-        {% set lib_writer_set = lib_writer_fp or lib_writer_name %}
-        <p style="font-size:0.85rem;color:var(--text-sec);margin-bottom:0.75rem">
-            <span id="librarian-writer-status">{% if lib_writer_set %}Writer bot: @{{ lib_writer_name }} (…{{ lib_writer_fp }}){% else %}Writer bot: Not set{% endif %}</span>
-            <span style="display:block;font-size:0.78rem;margin-top:0.25rem">
-                The Media Manager bot's own BotFather token — the writer identity the
-                fix engine sends edits as. It is set only through the button below,
-                never through this page's settings save, and it is never shown back.
-                Replacing the token here does not revoke the old one — only BotFather /revoke does.
-            </span>
-        </p>
-        <div class="add-row">
-            <input type="password" id="librarian-writer-token" class="s-input"
-                placeholder="Media Manager bot token" autocomplete="off" spellcheck="false">
-            <button type="button" class="add-btn" id="librarian-writer-set" onclick="setLibrarianWriterToken()">Set writer token</button>
-            <button type="button" class="add-btn" id="librarian-writer-clear" onclick="clearLibrarianWriterToken()">Clear</button>
-        </div>
-        <p id="librarian-writer-msg" style="font-size:0.8rem;margin-top:0.6rem;display:none"></p>
     </div>
 
 </div><!-- /settings-root -->
