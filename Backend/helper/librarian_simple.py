@@ -153,7 +153,17 @@ def real_deps() -> Deps:
         client = botmod.Userbot or botmod.StreamBot
         sent = await client.copy_message(
             chat_id, chat_id, msg_id, caption=caption)
-        return sent.id
+        new_id = getattr(sent, "id", None)
+        if new_id:
+            return new_id
+        # Some client builds return None for a copy; confirm by
+        # finding the channel's newest post carrying the caption.
+        for _ in range(10):
+            async for m in client.get_chat_history(chat_id, limit=1):
+                if (m.caption or "") == caption:
+                    return m.id
+            await asyncio.sleep(1.0)
+        raise RuntimeError("copy sent but its message id is unknown")
 
     async def delete_message(chat_id, msg_id):
         from Backend.pyrofork import bot as botmod
