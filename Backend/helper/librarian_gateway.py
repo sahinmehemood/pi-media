@@ -25,7 +25,7 @@ JIKAN_URL = "https://api.jikan.moe/v4"
 CACHE_TTL = {"lookup": 24 * 3600, "series": 7 * 24 * 3600,
              "crossid": 7 * 24 * 3600}
 # Bump when a payload shape changes — old-shape entries are ignored.
-CACHE_V = "v2"
+CACHE_V = "v3"  # v3: crossid kitsu shape fixed (mappings only)
 
 _ANILIST_QUERY = """
 query ($search: String) {
