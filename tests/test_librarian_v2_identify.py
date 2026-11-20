@@ -168,6 +168,24 @@ def test_search_cache_avoids_repeat_calls():
     assert len([c for c in prov.calls if c[0] == "search"]) == n
 
 
+def test_dual_names_all_become_aliases():
+    # One show, two unrelated names (the donghua problem): the provider
+    # record carries both; after one verification, either name resolves
+    # by alias with zero provider calls.
+    store, prov, ident = _setup()
+    cand = _cand("tmdb", "555", "The Outcast", 2016, "tt5712554")
+    cand["also_known_as"] = ["Hitori no Shita", "Yi Ren Zhi Xia"]
+    prov.by_id[("tmdb", "555")] = cand
+    res = ident.verify_proposal({"provider": "tmdb", "provider_id": "555"},
+                                kind="donghua", now=T0)
+    assert res.status == "identified"
+    prov.calls.clear()
+    for name in ("hitori no shita", "yi ren zhi xia", "the outcast"):
+        r = ident.resolve(name, kind="donghua", now=T0)
+        assert r.method == "alias" and r.series_id == res.series_id, name
+    assert prov.calls == []
+
+
 def test_outage_is_never_negative_cached():
     store, prov, ident = _setup()
     prov.down.update({"tmdb", "tvdb", "cinemeta"})

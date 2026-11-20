@@ -315,6 +315,12 @@ class Identifier:
             cand.get("title") or "", kind=kind, year=cand.get("year"),
             provider=cand.get("provider"), provider_id=cand.get("provider_id"),
             imdb_id=cand.get("imdb_id"), status=status, now=now)
+        # Dual-named titles (romaji vs western vs native): teach EVERY
+        # name variant the provider knows as an alias, so a file using
+        # any of them resolves instantly next time.
+        for alt in cand.get("also_known_as") or []:
+            if alt and normalise(alt) != normalise(cand.get("title")):
+                self.store.add_alias(sid, normalise(alt), kind)
         self.ensure_episodes(sid, now)
         return sid
 
