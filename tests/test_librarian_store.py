@@ -938,8 +938,14 @@ def test_release_budget_reservation_releases_prepared_counted():
 def test_release_budget_reservation_no_write_other_states():
     # Any post-write state (editing or beyond) with a counted
     # reservation: the reservation stands — no write, False.
+    # refused_missing_post is pinned explicitly (Security S5-2
+    # follow-up): it is the terminal state of the §7.3 not_found
+    # branch — the one branch that NEVER releases — so the §7.3
+    # deviation (the fail-safe over-count stands) is visible in
+    # the suite, not only implied by the guard's state filter.
     for state in ("editing", "confirming", "done", "edit_failed",
-                  "refused_precondition"):
+                  "refused_precondition", "reindexing", "reposting",
+                  "deleting_original", "refused_missing_post"):
         _reset()
         _seed_fix(state=state, budget_counted=True)
 
