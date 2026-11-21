@@ -43,6 +43,20 @@ against the real module it stands in for:
   raise-on-failure) is under test, not just the gateway-side fakes.
 - The REAL AniList client is loaded by file path against the same
   fake ``httpx`` transport for its unit tests.
+- The REAL TMDB provider (``tmdb.py``) is loaded by file path
+  against a fake ``themoviedb`` client whose ``search().tv()`` /
+  ``search().movies()`` return recorded-shape stand-ins for
+  themoviedb's ``TVs`` / ``Movies`` collections (see
+  ``_TmdbResultCollection`` below — the library is not importable
+  in the test environment, so the shape was recorded from the
+  themoviedb 1.0.2 / 2.0.2 wheels: a dataclass holding the items
+  in ``.results``, iterable/indexable/sized/bool-tested through
+  that list, but NOT itself a ``list``). The gateway's own TMDB
+  fake keeps returning plain lists — that IS the real
+  ``raw_search`` contract once the provider coerces the collection
+  at its boundary; the collection shape is exercised against the
+  real provider, including through the gateway leg with the real
+  provider wired into ``sys.modules``.
 - ``Backend.helper.metadata.common.year_from_str`` — copied from
   common.py (first 4-digit run); ``cached_call`` mirrors
   common.py's (store dict, key, ns, producer) semantics;
@@ -850,6 +864,26 @@ def _install_stubs():
     common.parse_year_range = lambda start=None, end=None: (0, 0)
     common.score_candidate_aliases = lambda *a, **k: 0.0
     common.strip_html = lambda text: text or ""
+    # Extra names the REAL tmdb.py imports from common (verified
+    # against its import block; only the surface raw_search needs
+    # is behaviour-bearing — the rest exist so the import succeeds).
+    common.ALT_TITLE_LOOKUPS = 3
+    common.ALT_TITLES_CACHE = {}
+    common.EPISODE_CACHE = {}
+    common.TMDB_DETAILS_CACHE = {}
+    common.TMDB_SEARCH_CACHE = {}
+    common.TMDB_THRESHOLD = 0.6
+    common.format_runtime = lambda value: value or 0
+    common.format_tmdb_image = lambda path, size="w500": path or ""
+    common.score_candidate = lambda *a, **k: 0.0
+
+    themoviedb_stub = types.ModuleType("themoviedb")
+
+    class _AioTMDbStub:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    themoviedb_stub.aioTMDb = _AioTMDbStub
 
     parse = types.ModuleType("Backend.helper.metadata.parse")
     parse.parse_media_name = _parse_media_name
@@ -868,6 +902,7 @@ def _install_stubs():
         "pymongo.errors": errors,
         "httpx": httpx_stub,
         "rapidfuzz": rapidfuzz,
+        "themoviedb": themoviedb_stub,
         "Backend": backend,
         "Backend.config": config,
         "Backend.logger": logger_mod,
@@ -900,9 +935,12 @@ anilist_client = load_module("anilist_under_test", "Backend/helper/metadata/prov
 tvdb_real = load_module("tvdb_under_test", "Backend/helper/metadata/providers/tvdb.py")
 kitsu_real = load_module("kitsu_under_test", "Backend/helper/metadata/providers/kitsu.py")
 cinemeta_real = load_module("cinemeta_under_test", "Backend/helper/metadata/providers/cinemeta.py")
+tmdb_real = load_module("tmdb_under_test", "Backend/helper/metadata/providers/tmdb.py")
 
 _ORIG_TTLS = dict(gateway.CACHE_TTL_S)
 _ORIG_TIMEOUT = gateway.LEG_TIMEOUT_S
+_ORIG_TMDB_GET_CLIENT = tmdb_real.get_tmdb_client
+_ORIG_TMDB_DETAILS = tmdb_real.details
 
 
 def _reset():
@@ -919,6 +957,10 @@ def _reset():
     tvdb_real._token = None
     tvdb_real._token_expires = 0.0
     kitsu_real.KITSU_CACHE.clear() if hasattr(kitsu_real, "KITSU_CACHE") else None
+    tmdb_real.get_tmdb_client = _ORIG_TMDB_GET_CLIENT
+    tmdb_real.details = _ORIG_TMDB_DETAILS
+    tmdb_real.TMDB_DETAILS_CACHE.clear() if hasattr(tmdb_real, "TMDB_DETAILS_CACHE") else None
+    tmdb_real.TMDB_SEARCH_CACHE.clear() if hasattr(tmdb_real, "TMDB_SEARCH_CACHE") else None
 
 
 def _cache_docs():
@@ -1253,6 +1295,212 @@ def test_anilist_client_media_by_id():
         assert await anilist_client.media_by_id(424242) is None
 
     run(go())
+
+
+# ------------------------------------------------------------------
+# TMDB provider tests — the REAL raw_search over a fake themoviedb
+# client returning v2 collection objects (regression: the gateway's
+# TMDB leg reported `down` on EVERY lookup because raw_search
+# returned themoviedb's TVs/Movies collection — not a list — and
+# the gateway's isinstance(items, list) defence raised _LegDown.
+# The 454-test suite never caught it because the gateway fake's
+# raw_search returned plain lists: a more generous fake than
+# production. These tests pin the production shape.)
+# ------------------------------------------------------------------
+
+class _TmdbResultCollection:
+    """Recorded-shape stand-in for themoviedb's ``ResultWithPage``
+    (the base of ``TVs`` / ``Movies``), recorded from the
+    themoviedb 1.0.2 (uv.lock pin) and 2.0.2 wheels
+    (``themoviedb/schemas/_result.py``, ``schemas/tv.py``,
+    ``schemas/movies.py``): a dataclass holding the page's items
+    in ``.results`` plus ``page`` / ``total_pages`` /
+    ``total_results``; ``__iter__`` / ``__getitem__`` / ``__len__``
+    / ``__bool__`` all delegate to ``.results``. Crucially it is
+    NOT a ``list`` and does not subclass one — that single fact is
+    the defect under test. (The real library is not importable in
+    this environment, so the actual ``TVs`` class cannot be used
+    here; this stand-in reproduces exactly the access pattern the
+    provider and gateway code exercise.)"""
+
+    def __init__(self, results=None, page=1, total_pages=1,
+                 total_results=None):
+        self.results = results
+        self.page = page
+        self.total_pages = total_pages
+        self.total_results = (
+            len(results) if total_results is None and results is not None
+            else total_results)
+
+    def __bool__(self):
+        return bool(self.results)
+
+    def __iter__(self):
+        if self.results is None:
+            return iter(())
+        return iter(self.results)
+
+    def __getitem__(self, index):
+        if self.results is None:
+            raise IndexError("Result is empty")
+        return self.results[index]
+
+    def __len__(self):
+        if self.results is None:
+            return 0
+        return len(self.results)
+
+
+class _FakeTVs(_TmdbResultCollection):
+    """themoviedb ``TVs`` (search/tv payload)."""
+
+
+class _FakeMovies(_TmdbResultCollection):
+    """themoviedb ``Movies`` (search/movie payload)."""
+
+
+def _tmdb_partial_ns(row, media_type):
+    """A PartialTV / PartialMovie stand-in: attribute objects whose
+    date fields are real ``datetime.date`` objects (as themoviedb's
+    dataclasses carry), not the gateway fake's year-only namespace."""
+    ns = types.SimpleNamespace(id=row["id"],
+                               overview=row.get("overview", ""),
+                               poster_path=row.get("poster_path"))
+    if media_type == "movie":
+        ns.title = row.get("title", "")
+        ns.original_title = row.get("original_title", "")
+        ns.release_date = (date.fromisoformat(row["release_date"])
+                           if row.get("release_date") else None)
+    else:
+        ns.name = row.get("name", "")
+        ns.original_name = row.get("original_name", "")
+        ns.first_air_date = (date.fromisoformat(row["first_air_date"])
+                             if row.get("first_air_date") else None)
+    return ns
+
+
+class _FakeTmdbSearchResource:
+    """``aioTMDb.search()`` stand-in: tv()/movies() return the
+    collection objects, never lists — the production shape."""
+
+    async def tv(self, query, **kwargs):
+        fixture = _TMDB_SEARCH.get(("tv", query))
+        items = ([_tmdb_partial_ns(r, "tv") for r in _fixture(fixture)["results"]]
+                 if fixture else [])
+        return _FakeTVs(results=items)
+
+    async def movies(self, query, **kwargs):
+        fixture = _TMDB_SEARCH.get(("movie", query))
+        items = ([_tmdb_partial_ns(r, "movie") for r in _fixture(fixture)["results"]]
+                 if fixture else [])
+        return _FakeMovies(results=items)
+
+
+class _FakeTmdbClient:
+    def search(self):
+        return _FakeTmdbSearchResource()
+
+
+def _use_fake_tmdb_client():
+    tmdb_real.get_tmdb_client = lambda: _FakeTmdbClient()
+
+
+async def _real_tmdb_details(media_type, item_id):
+    fixture = _TMDB_DETAILS.get((media_type, item_id))
+    return _tmdb_details_ns(fixture) if fixture else None
+
+
+def test_tmdb_raw_search_coerces_tv_collection_to_list():
+    _reset()
+    # Pin the stand-in's production shape first: if this ever
+    # becomes a list, the regression tests below stop meaning
+    # anything.
+    assert not isinstance(_FakeTVs(results=[]), list)
+    _use_fake_tmdb_client()
+
+    async def go():
+        results = await tmdb_real.raw_search("Harbour Lights", "tv", None)
+        assert isinstance(results, list), type(results)
+        assert [r.id for r in results] == [1001], results
+        assert results[0].name == "Harbour Lights"
+        # A well-formed zero-result search is an empty LIST, not an
+        # empty collection (the gateway leg must read it `empty`,
+        # never `down`).
+        empty = await tmdb_real.raw_search("No Such Title", "tv", None)
+        assert isinstance(empty, list) and empty == [], empty
+
+    run(go())
+
+
+def test_tmdb_raw_search_coerces_movie_collection_to_list():
+    _reset()
+    assert not isinstance(_FakeMovies(results=[]), list)
+    _use_fake_tmdb_client()
+
+    async def go():
+        # With a year (the movies(query, year=year) call shape) and
+        # without one — both go through the same coercion.
+        for year in (2021, None):
+            results = await tmdb_real.raw_search("The Last Ferry", "movie", year)
+            assert isinstance(results, list), (year, type(results))
+            assert [r.id for r in results] == [3001], results
+            assert results[0].title == "The Last Ferry"
+        empty = await tmdb_real.raw_search("No Such Title", "movie", None)
+        assert isinstance(empty, list) and empty == [], empty
+
+    run(go())
+
+
+def _lookup_with_real_tmdb(name, media_type):
+    """Run gateway.lookup with the REAL tmdb provider wired in
+    (fake themoviedb client returning collection objects; the
+    provider's details() is the fixture namespace, as in the
+    gateway fake — the search path under test stays fully real)."""
+    key = "Backend.helper.metadata.providers.tmdb"
+    original = sys.modules[key]
+    _use_fake_tmdb_client()
+    tmdb_real.details = _real_tmdb_details
+    sys.modules[key] = tmdb_real
+    holder = {}
+
+    async def go():
+        holder["result"] = await gateway.lookup(name, media_type)
+
+    try:
+        run(go())  # _loader.run discards the coroutine's return value
+    finally:
+        sys.modules[key] = original
+    return holder["result"]
+
+
+def test_tmdb_leg_ok_with_real_provider_tv_collection():
+    _reset()
+
+    result = _lookup_with_real_tmdb("Harbour Lights", "tv")
+    # Before the provider fix this leg was `down` on every lookup
+    # (raw_search returned a TVs collection, gateway raised
+    # _LegDown on the non-list payload).
+    assert result["legs"]["tmdb"]["state"] == "ok", result["legs"]
+    assert "tmdb" not in result["providers_down"]
+    assert result["providers_down"] == [], result["legs"]
+    main = _cluster_with(result, "tmdb", 1001)
+    assert main is not None
+    assert main["ids"] == {"tmdb": 1001, "tvdb": 2001, "imdb": "tt1000001"}, main
+    assert main["year"] == 2019
+
+
+def test_tmdb_leg_ok_with_real_provider_movie_collection():
+    _reset()
+
+    result = _lookup_with_real_tmdb("The Last Ferry", "movie")
+    assert result["legs"]["tmdb"]["state"] == "ok", result["legs"]
+    assert "tmdb" not in result["providers_down"]
+    assert result["providers_down"] == [], result["legs"]
+    main = _cluster_with(result, "tmdb", 3001)
+    assert main is not None
+    assert main["ids"] == {"tmdb": 3001, "tvdb": 4001, "imdb": "tt3000001",
+                           "kitsu": 5003, "anilist": 6003, "mal": 7003}, main
+    assert main["year"] == 2021
 
 
 # ------------------------------------------------------------------
