@@ -2128,7 +2128,7 @@ index 699bdbd..d2c202d 100644
      for img in images or []:
          if str(img.get("coverType", "")).lower() == cover_type.lower() and img.get("url"):
 diff --git a/Backend/helper/metadata/providers/tmdb.py b/Backend/helper/metadata/providers/tmdb.py
-index fe3ea72..cf355a7 100644
+index fe3ea72..11ac033 100644
 --- a/Backend/helper/metadata/providers/tmdb.py
 +++ b/Backend/helper/metadata/providers/tmdb.py
 @@ -45,7 +45,10 @@ def get_tmdb_client() -> aioTMDb:
@@ -2143,6 +2143,43 @@ index fe3ea72..cf355a7 100644
          _tmdb_client_key = current_key
      return _tmdb_client
  
+@@ -91,6 +94,25 @@ def tmdb_title_year(item, media_type: str) -> tuple:
+     return getattr(item, "name", "") or "", getattr(date, "year", 0) if date else 0
+ 
+ 
++def _search_results_list(results) -> list:
++    """Normalise a themoviedb search payload to a plain list.
++
++    themoviedb's search endpoints do NOT return a list: they return
++    a ``TVs`` / ``Movies`` collection object (a dataclass holding
++    the page's items in ``.results``; iterable, indexable, sized
++    and bool-tested through that list, but not itself a ``list``).
++    Consumers contract on a list — the Librarian gateway's TMDB leg
++    classifies any non-list payload as a down leg — so the coercion
++    lives here, at the provider boundary, where every consumer of
++    ``raw_search`` gets it. ``list()`` covers both shapes: a plain
++    list is copied, a collection iterates its ``.results`` (an
++    empty / None-results collection iterates empty).
++    """
++    if results is None:
++        return []
++    return list(results)
++
++
+ async def raw_search(title: str, media_type: str, year: Optional[int]):
+     client = get_tmdb_client()
+     async with API_SEMAPHORE:
+@@ -102,8 +124,8 @@ async def raw_search(title: str, media_type: str, year: Optional[int]):
+             )
+             if not results and year:
+                 results = await client.search().movies(query=title)
+-            return results
+-        return await client.search().tv(query=title)
++            return _search_results_list(results)
++        return _search_results_list(await client.search().tv(query=title))
+ 
+ 
+ async def _tmdb_alternative_titles(media_type: str, tmdb_id) -> list:
 diff --git a/Backend/helper/metadata/providers/tvdb.py b/Backend/helper/metadata/providers/tvdb.py
 index 94d06f9..4fb0ba2 100644
 --- a/Backend/helper/metadata/providers/tvdb.py
