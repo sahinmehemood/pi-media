@@ -1947,6 +1947,139 @@ def test_series_cache_ttl_expiry():
 
 
 # ------------------------------------------------------------------
+# BSON tz-naive cache regression (gate bug, transcript §T(j)):
+# MongoDB/BSON stores datetimes as UTC milliseconds and PyMongo
+# decodes them tz-NAIVE, even when the written value was tz-aware
+# (verified against pymongo's bson: an aware datetime encodes and
+# decodes back with tzinfo=None, truncated to milliseconds). The
+# suite's FakeCollection hands datetimes back untouched
+# (copy.deepcopy preserves tzinfo), so every pre-existing cache
+# test exercised the read path with AWARE expires_at values — a
+# more generous fake than production — and missed that
+# _cache_read compared the stored value against the aware
+# _utcnow() outside its try block: TypeError ("can't compare
+# offset-naive and offset-aware datetimes") -> HTTP 500 on every
+# provider_cache hit. The double below BSON-roundtrips every doc
+# on write and on read (stdlib-only, mirroring bson.encode /
+# bson.decode semantics), so the stored doc reaches the read path
+# in exactly production's shape. A double that hands back aware
+# datetimes would NOT satisfy these tests: each asserts the
+# stored expires_at really is tz-naive before reading.
+# ------------------------------------------------------------------
+
+def _bson_roundtrip(value):
+    """Mirror bson.encode -> bson.decode for one value: datetimes
+    come back tz-naive UTC truncated to milliseconds (BSON stores
+    int64 milliseconds since the epoch); everything else is
+    deep-copied."""
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.replace(microsecond=(value.microsecond // 1000) * 1000)
+    if isinstance(value, dict):
+        return {k: _bson_roundtrip(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_bson_roundtrip(v) for v in value]
+    return copy.deepcopy(value)
+
+
+class BsonFakeCollection(FakeCollection):
+    """FakeCollection that BSON-roundtrips every doc on write and
+    on read, mimicking PyMongo/Motor against real MongoDB."""
+
+    async def update_one(self, filt, update, upsert=False):
+        return await super().update_one(
+            _bson_roundtrip(filt), _bson_roundtrip(update), upsert=upsert)
+
+    async def find_one(self, filt):
+        doc = await super().find_one(filt)
+        return _bson_roundtrip(doc) if doc is not None else None
+
+
+def _install_bson_cache():
+    """Swap the provider_cache collection for the BSON-roundtripping
+    double and return it."""
+    coll = BsonFakeCollection("provider_cache")
+    fake_db.dbs["tracking"].collections["provider_cache"] = coll
+    return coll
+
+
+def test_cache_read_bson_roundtripped_unexpired_is_hit():
+    _reset()
+
+    async def go():
+        coll = _install_bson_cache()
+        payload = {"ids": {"tvdb": 2001}}
+        key = gateway._cache_key("crossid", {"ref": "tvdb:2001"})
+        await coll.update_one(
+            {"key": key},
+            {"$set": {"key": key, "payload": payload,
+                      "expires_at": datetime.now(timezone.utc)
+                      + timedelta(hours=1)}},
+            upsert=True)
+        # Production shape proof: what Mongo holds (and returns)
+        # is tz-naive, even though the write was tz-aware.
+        stored = _cache_docs()[0]["expires_at"]
+        assert stored.tzinfo is None, stored
+        hit = await gateway._cache_read(key)
+        assert hit == payload, hit
+
+    run(go())
+
+
+def test_cache_read_bson_roundtripped_expired_is_miss():
+    _reset()
+
+    async def go():
+        coll = _install_bson_cache()
+        payload = {"ids": {"tvdb": 2001}}
+        key = gateway._cache_key("crossid", {"ref": "tvdb:2001"})
+        await coll.update_one(
+            {"key": key},
+            {"$set": {"key": key, "payload": payload,
+                      "expires_at": datetime.now(timezone.utc)
+                      - timedelta(seconds=1)}},
+            upsert=True)
+        stored = _cache_docs()[0]["expires_at"]
+        assert stored.tzinfo is None, stored
+        assert await gateway._cache_read(key) is None
+
+    run(go())
+
+
+def test_lookup_bson_cache_hit_and_expiry():
+    _reset()
+
+    async def go():
+        coll = _install_bson_cache()
+        first = await gateway.lookup("Harbour Lights", "tv")
+        # The gateway's own write went through the BSON double:
+        # the stored expiry is tz-naive, as in production.
+        docs = _cache_docs()
+        assert len(docs) == 1, docs
+        assert docs[0]["expires_at"].tzinfo is None, docs[0]["expires_at"]
+        calls_before = SCRIPT.count("tvdb", "search_candidates")
+        assert calls_before > 0
+        # Unexpired BSON-roundtripped entry: a HIT — no exception,
+        # cached value returned, no provider call.
+        second = await gateway.lookup("Harbour Lights", "tv")
+        assert second == first
+        assert SCRIPT.count("tvdb", "search_candidates") == calls_before
+        # Expired BSON-roundtripped entry: a MISS — providers are
+        # re-queried instead of serving (or crashing on) the row.
+        key = docs[0]["key"]
+        await coll.update_one(
+            {"key": key},
+            {"$set": {"expires_at": datetime.now(timezone.utc)
+                      - timedelta(seconds=1)}})
+        assert _cache_docs()[0]["expires_at"].tzinfo is None
+        await gateway.lookup("Harbour Lights", "tv")
+        assert SCRIPT.count("tvdb", "search_candidates") > calls_before
+
+    run(go())
+
+
+# ------------------------------------------------------------------
 # AniZip projection regression (DESIGN §13 named test)
 # ------------------------------------------------------------------
 

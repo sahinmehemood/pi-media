@@ -180,7 +180,15 @@ async def _cache_read(key: str):
     if not doc:
         return None
     expires_at = doc.get("expires_at")
-    if expires_at is None or expires_at <= _utcnow():
+    if expires_at is None:
+        return None
+    if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+        # MongoDB/BSON returns datetimes tz-naive (stored as UTC):
+        # a naive stored value is UTC by definition, so normalise
+        # it before comparing against the aware _utcnow() —
+        # comparing them raw raises TypeError on every cache hit.
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= _utcnow():
         return None
     return doc.get("payload")
 
